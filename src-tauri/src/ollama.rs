@@ -1,0 +1,253 @@
+use std::sync::Mutex;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
+
+// ── Wire types ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireMessage {
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<WireToolCall>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireToolCall {
+    pub function: WireToolFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireToolFunction {
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolSchema {
+    pub r#type: String,
+    pub function: ToolFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+// ── Events emitted to the frontend ───────────────────────────────────────────
+
+#[derive(Clone, Serialize)]
+pub struct TokenEvent {
+    pub delta: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ToolCallEvent {
+    pub name: String,
+    pub args: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ToolResultEvent {
+    pub name: String,
+    pub result: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DoneEvent {
+    pub error: Option<String>,
+}
+
+// ── Ollama REST API ───────────────────────────────────────────────────────────
+
+pub async fn list_models(host: &str) -> anyhow::Result<Vec<String>> {
+    #[derive(Deserialize)]
+    struct TagsResponse {
+        models: Vec<ModelEntry>,
+    }
+    #[derive(Deserialize)]
+    struct ModelEntry {
+        name: String,
+    }
+
+    let url = format!("{}/api/tags", host);
+    let resp: TagsResponse = reqwest::get(&url).await?.json().await?;
+    Ok(resp.models.into_iter().map(|m| m.name).collect())
+}
+
+// ── Streaming chat ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct ChatRequest<'a> {
+    model: &'a str,
+    messages: &'a [WireMessage],
+    stream: bool,
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    tools: &'a [ToolSchema],
+}
+
+#[derive(Deserialize)]
+struct ChatChunk {
+    message: Option<ChunkMessage>,
+    done: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct ChunkMessage {
+    content: Option<String>,
+    tool_calls: Option<Vec<WireToolCall>>,
+}
+
+/// Stream one LLM turn. Returns (full_text, tool_calls).
+async fn stream_chat(
+    host: &str,
+    model: &str,
+    messages: &[WireMessage],
+    tools: &[ToolSchema],
+    app: &AppHandle,
+) -> anyhow::Result<(String, Vec<WireToolCall>)> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/chat", host);
+
+    let body = ChatRequest { model, messages, stream: true, tools };
+    let resp = client.post(&url).json(&body).send().await?;
+
+    let mut full_text = String::new();
+    let mut tool_calls: Vec<WireToolCall> = Vec::new();
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk?;
+        // Ollama sends one JSON object per line
+        for line in std::str::from_utf8(&bytes)?.lines() {
+            let line = line.trim();
+            if line.is_empty() { continue; }
+            let parsed: ChatChunk = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(msg) = parsed.message {
+                if let Some(delta) = msg.content {
+                    if !delta.is_empty() {
+                        full_text.push_str(&delta);
+                        let _ = app.emit("agent-token", TokenEvent { delta });
+                    }
+                }
+                if let Some(tcs) = msg.tool_calls {
+                    tool_calls.extend(tcs);
+                }
+            }
+        }
+    }
+
+    Ok((full_text, tool_calls))
+}
+
+// ── Agent loop ────────────────────────────────────────────────────────────────
+
+const MAX_STEPS: usize = 10;
+
+pub async fn agent_loop(
+    host: &str,
+    model: &str,
+    system_prompt: &str,
+    tools: &[ToolSchema],
+    conversation: &Mutex<Vec<WireMessage>>,
+    app: &AppHandle,
+) -> anyhow::Result<()> {
+    for _step in 0..MAX_STEPS {
+        // Build wire messages: system + history
+        let wire = {
+            let conv = conversation.lock().unwrap();
+            let mut w = vec![WireMessage {
+                role: "system".into(),
+                content: Some(system_prompt.into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            }];
+            w.extend(conv.clone());
+            w
+        };
+
+        let (full_text, tool_calls) = match stream_chat(host, model, &wire, tools, app).await {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
+                return Err(e);
+            }
+        };
+
+        // Append assistant message to history
+        {
+            let mut conv = conversation.lock().unwrap();
+            conv.push(WireMessage {
+                role: "assistant".into(),
+                content: if full_text.is_empty() { None } else { Some(full_text) },
+                tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls.clone()) },
+                tool_call_id: None,
+                name: None,
+            });
+        }
+
+        if tool_calls.is_empty() {
+            // No tool calls — we're done
+            let _ = app.emit("agent-done", DoneEvent { error: None });
+            return Ok(());
+        }
+
+        // Dispatch each tool call
+        for call in &tool_calls {
+            let name = &call.function.name;
+            let args = &call.function.arguments;
+            let pretty_args = serde_json::to_string_pretty(args).unwrap_or_default();
+
+            let _ = app.emit("agent-tool-call", ToolCallEvent {
+                name: name.clone(),
+                args: pretty_args,
+            });
+
+            let result = crate::tools::dispatch(name, args).await;
+
+            // Cap large responses
+            let result = if result.len() > 6000 {
+                format!(
+                    "{}\n…[truncated: {} chars total]",
+                    &result[..6000],
+                    result.len()
+                )
+            } else {
+                result
+            };
+
+            let _ = app.emit("agent-tool-result", ToolResultEvent {
+                name: name.clone(),
+                result: result.clone(),
+            });
+
+            // Append tool result to history
+            let mut conv = conversation.lock().unwrap();
+            conv.push(WireMessage {
+                role: "tool".into(),
+                content: Some(result),
+                tool_calls: None,
+                tool_call_id: None,
+                name: Some(name.clone()),
+            });
+        }
+    }
+
+    // Hit max steps
+    let _ = app.emit("agent-done", DoneEvent {
+        error: Some("Stopped: reached maximum steps without a final answer.".into()),
+    });
+    Ok(())
+}
