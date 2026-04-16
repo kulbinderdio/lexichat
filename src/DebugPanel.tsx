@@ -11,6 +11,7 @@ interface DebugStep {
   toolCalls: { name: string; args: string }[];
   toolResults: { name: string; result: string }[];
   tokens: string;
+  thinking: string;
 }
 
 interface DebugRun {
@@ -72,6 +73,28 @@ function StepRow({ step, isLast }: { step: DebugStep; isLast: boolean }) {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Thinking */}
+          {step.thinking && (
+            <details style={{ fontSize: 11 }}>
+              <summary style={{
+                cursor: "pointer", userSelect: "none", opacity: 0.55,
+                padding: "2px 0", listStyle: "none", display: "flex", alignItems: "center", gap: 4,
+              }}>
+                <span style={{ fontSize: 9 }}>▶</span>
+                <span>💭 Thinking ({step.thinking.length} chars)</span>
+              </summary>
+              <div style={{
+                background: "var(--dbg-text-bg)", borderRadius: 4, padding: "6px 8px",
+                fontSize: 11, fontFamily: "monospace", whiteSpace: "pre-wrap",
+                wordBreak: "break-word", maxHeight: 200, overflowY: "auto",
+                opacity: 0.6, fontStyle: "italic", marginTop: 4,
+                borderLeft: "2px solid var(--dbg-border)",
+              }}>
+                {step.thinking}
+              </div>
+            </details>
           )}
 
           {/* LLM output */}
@@ -193,7 +216,7 @@ export function DebugPanel({ visible }: Props) {
             id: runId, steps: [{
               index: 0,
               schemaNames: payload.schema_names,
-              toolCalls: [], toolResults: [], tokens: "",
+              toolCalls: [], toolResults: [], tokens: "", thinking: "",
             }], done: false,
           }]);
         } else {
@@ -204,12 +227,29 @@ export function DebugPanel({ visible }: Props) {
             run.steps = [...run.steps, {
               index: payload.step,
               schemaNames: payload.schema_names,
-              toolCalls: [], toolResults: [], tokens: "",
+              toolCalls: [], toolResults: [], tokens: "", thinking: "",
             }];
             runs[runs.length - 1] = run;
             return runs;
           });
         }
+      }));
+
+      // Thinking tokens
+      unsubs.push(await listen<{ delta: string }>("agent-thinking", ({ payload }) => {
+        setRuns(prev => {
+          if (prev.length === 0) return prev;
+          const runs = [...prev];
+          const run = { ...runs[runs.length - 1] };
+          if (run.steps.length === 0) return prev;
+          const steps = [...run.steps];
+          const last = { ...steps[steps.length - 1] };
+          last.thinking = (last.thinking || "") + payload.delta;
+          steps[steps.length - 1] = last;
+          run.steps = steps;
+          runs[runs.length - 1] = run;
+          return runs;
+        });
       }));
 
       // Streaming tokens

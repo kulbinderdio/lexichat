@@ -56,6 +56,11 @@ pub struct TokenEvent {
 }
 
 #[derive(Clone, Serialize)]
+pub struct ThinkingEvent {
+    pub delta: String,
+}
+
+#[derive(Clone, Serialize)]
 pub struct ToolCallEvent {
     pub name: String,
     pub args: String,
@@ -130,6 +135,7 @@ struct ChatChunk {
 #[derive(Deserialize)]
 struct ChunkMessage {
     content: Option<String>,
+    thinking: Option<String>,
     tool_calls: Option<Vec<WireToolCall>>,
 }
 
@@ -182,6 +188,11 @@ async fn stream_chat(
                 Err(_) => continue,
             };
             if let Some(msg) = parsed.message {
+                if let Some(delta) = msg.thinking {
+                    if !delta.is_empty() {
+                        let _ = app.emit("agent-thinking", ThinkingEvent { delta });
+                    }
+                }
                 if let Some(delta) = msg.content {
                     if !delta.is_empty() {
                         full_text.push_str(&delta);
