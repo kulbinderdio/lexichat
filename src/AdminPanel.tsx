@@ -1126,6 +1126,8 @@ function ServerTab({ settings, onChange }: { settings: AppSettings; onChange: (s
   const testConnection = async () => {
     setTestState("testing");
     try {
+      // Push the current (possibly unsaved) host to Rust before testing
+      await invoke("set_ollama_host", { host: settings.host });
       await invoke<string[]>("get_models");
       setTestState("ok");
     } catch (e) { setTestState(String(e)); }
