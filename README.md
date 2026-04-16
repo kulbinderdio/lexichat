@@ -44,7 +44,38 @@ The Vite dev server runs on port 1420. Changes to `src/` hot-reload instantly; c
 
 ---
 
-## Building a distributable
+## GitHub Actions — Building a Release
+
+The CI/CD workflow builds installers for all platforms automatically. To trigger it:
+
+```bash
+# 1. Tag the commit you want to release
+git tag v0.2.0
+
+# 2. Push the tag — this kicks off the build
+git push origin v0.2.0
+```
+
+GitHub Actions will run 4 parallel jobs (macOS, Windows, Linux x86-64, Linux ARM64). When all finish (typically 15–25 minutes), a **draft release** appears at:
+
+**https://github.com/kulbinderdio/lexichat/releases**
+
+Review the draft, edit the release notes if needed, then click **Publish release** to make it public.
+
+You can also trigger a build manually without a tag from the **Actions** tab → **Build & Release** → **Run workflow**.
+
+### Build outputs per platform
+
+| Platform | Files attached to release |
+|----------|--------------------------|
+| macOS | `LexiChat_*_universal.dmg` (Intel + Apple Silicon) |
+| Windows | `LexiChat_*_x64-setup.exe`, `LexiChat_*_x64_en-US.msi` |
+| Linux x86-64 | `lexichat_*_amd64.deb`, `LexiChat_*_amd64.AppImage` |
+| Linux ARM64 | `lexichat_*_arm64.deb`, `LexiChat_*_aarch64.AppImage` |
+
+---
+
+## Building locally
 
 ### macOS (universal binary — runs on both Intel and Apple Silicon)
 ```bash
