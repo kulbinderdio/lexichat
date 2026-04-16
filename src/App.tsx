@@ -78,7 +78,7 @@ const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
       info: {
         title: "Wikipedia",
         version: "1.0.0",
-        description: "Wikipedia article summaries and search. Use searchWikipedia first to find article titles, then getArticleSummary to read them.",
+        description: "Wikipedia search, article summaries, historical events, and featured content. Use searchWikipedia or searchWikipediaFullText to find articles, then getArticleSummary to read them.",
       },
       servers: [{ url: "https://en.wikipedia.org" }],
       paths: {
@@ -97,6 +97,19 @@ const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
             responses: { "200": { description: "Search results as [query, titles[], descriptions[], urls[]]" } },
           },
         },
+        "/w/rest.php/v1/search/page": {
+          get: {
+            operationId: "searchWikipediaFullText",
+            summary: "Full-text search Wikipedia with snippets",
+            description: "Searches the full text of Wikipedia articles and returns matching pages with relevant text snippets. Prefer this over searchWikipedia when you need context about why an article matches, or when searchWikipedia returns no results.",
+            parameters: [
+              { name: "q",      in: "query", required: true,  description: "Search query", schema: { type: "string" } },
+              { name: "limit",  in: "query", required: false, description: "Max results to return (default 10, max 100)", schema: { type: "integer" } },
+              { name: "offset", in: "query", required: false, description: "Number of results to skip for pagination", schema: { type: "integer" } },
+            ],
+            responses: { "200": { description: "Array of matching pages with title, description, and a highlighted text snippet" } },
+          },
+        },
         "/api/rest_v1/page/summary/{title}": {
           get: {
             operationId: "getArticleSummary",
@@ -107,6 +120,32 @@ const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
               { name: "redirect", in: "query", required: false, description: "Set to 'true' to follow redirects (recommended)", schema: { type: "string" } },
             ],
             responses: { "200": { description: "Article summary with extract, description, and thumbnail" } },
+          },
+        },
+        "/api/rest_v1/feed/onthisday/{type}/{month}/{day}": {
+          get: {
+            operationId: "getOnThisDay",
+            summary: "Get historical events for a date",
+            description: "Returns historical events, births, deaths, holidays, or all of the above for a given month and day. Useful for answering 'what happened on this day in history' questions.",
+            parameters: [
+              { name: "type",  in: "path", required: true, description: "Type of events: 'selected' (curated highlights), 'births', 'deaths', 'events', 'holidays', or 'all'", schema: { type: "string" } },
+              { name: "month", in: "path", required: true, description: "Two-digit month e.g. '03' for March", schema: { type: "string" } },
+              { name: "day",   in: "path", required: true, description: "Two-digit day e.g. '14'", schema: { type: "string" } },
+            ],
+            responses: { "200": { description: "List of historical events/births/deaths with year, text, and related article links" } },
+          },
+        },
+        "/api/rest_v1/feed/featured/{year}/{month}/{day}": {
+          get: {
+            operationId: "getWikipediaFeaturedContent",
+            summary: "Get Wikipedia featured content for a date",
+            description: "Returns the featured article, most-read articles, featured image, and in-the-news stories for a given date. Use today's date for current content.",
+            parameters: [
+              { name: "year",  in: "path", required: true, description: "Four-digit year e.g. '2025'", schema: { type: "string" } },
+              { name: "month", in: "path", required: true, description: "Two-digit month e.g. '04'", schema: { type: "string" } },
+              { name: "day",   in: "path", required: true, description: "Two-digit day e.g. '16'", schema: { type: "string" } },
+            ],
+            responses: { "200": { description: "Featured article summary, most-read article list, featured image, and news stories" } },
           },
         },
       },
