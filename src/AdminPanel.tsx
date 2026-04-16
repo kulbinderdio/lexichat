@@ -39,7 +39,11 @@ export interface StoredOpenAPISpec {
   base_url: string;
   spec_json: string;
   auth?: AuthConfig;
+  enabled?: boolean;
 }
+
+// IDs of built-in specs that ship with the app (user can disable but not delete)
+export const BUILTIN_OPENAPI_SPEC_IDS = new Set(["builtin-wikipedia"]);
 
 export interface Profile {
   id: string;
@@ -763,24 +767,51 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
           <div className="admin-empty">No OpenAPI specs registered. Add one to call external APIs.</div>
         )}
 
-        {specs.map(spec => (
-          <section key={spec.id} className="admin-section">
+        {stored.map(storedSpec => {
+          const isBuiltin = BUILTIN_OPENAPI_SPEC_IDS.has(storedSpec.id);
+          const isEnabled = storedSpec.enabled !== false;
+          const rustSpec = specs.find(s => s.id === storedSpec.id);
+
+          const toggleEnabled = () =>
+            onChange(stored.map(s => s.id === storedSpec.id ? { ...s, enabled: !isEnabled } : s));
+
+          return (
+          <section key={storedSpec.id} className="admin-section" style={{ opacity: isEnabled ? 1 : 0.55 }}>
             <div className="admin-row">
-              <button className="icon-btn" onClick={() => toggleExpand(spec.id)} style={{ fontSize: 9 }}>
-                {expanded.has(spec.id) ? "▼" : "▶"}
-              </button>
+              {(isEnabled || isBuiltin) && (
+                <button className="icon-btn" onClick={() => toggleExpand(storedSpec.id)} style={{ fontSize: 9 }}>
+                  {expanded.has(storedSpec.id) ? "▼" : "▶"}
+                </button>
+              )}
               <div style={{ flex: 1 }}>
-                <div className="admin-row-title">{spec.title}</div>
-                <div className="admin-row-sub">{spec.base_url} · {spec.tool_count} tools</div>
+                <div className="admin-row-title">
+                  {storedSpec.title}
+                  {isBuiltin && (
+                    <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.45, fontWeight: 400 }}>built-in</span>
+                  )}
+                </div>
+                <div className="admin-row-sub">
+                  {storedSpec.base_url}
+                  {rustSpec ? ` · ${rustSpec.tool_count} tools` : isEnabled ? " · loading…" : " · disabled"}
+                </div>
               </div>
-              <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
-                onClick={() => editingId === spec.id ? resetForm() : startEdit(spec.id)}>
-                {editingId === spec.id ? "Cancel" : "Edit"}
-              </button>
-              <button className="icon-btn danger" onClick={() => remove(spec.id)}>✕</button>
+              {isBuiltin ? (
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, cursor: "pointer" }}>
+                  <input type="checkbox" checked={isEnabled} onChange={toggleEnabled} />
+                  {isEnabled ? "On" : "Off"}
+                </label>
+              ) : (
+                <>
+                  <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
+                    onClick={() => editingId === storedSpec.id ? resetForm() : startEdit(storedSpec.id)}>
+                    {editingId === storedSpec.id ? "Cancel" : "Edit"}
+                  </button>
+                  <button className="icon-btn danger" onClick={() => remove(storedSpec.id)}>✕</button>
+                </>
+              )}
             </div>
 
-            {editingId === spec.id && (
+            {editingId === storedSpec.id && (
               <div style={{ padding: "8px 16px 12px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
                 <div className="field">
                   <label>OpenAPI JSON Spec</label>
@@ -807,9 +838,9 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
               </div>
             )}
 
-            {!editingId && expanded.has(spec.id) && (
+            {!editingId && isEnabled && expanded.has(storedSpec.id) && rustSpec && (
               <div style={{ paddingLeft: 28 }}>
-                {spec.tools.map(t => (
+                {rustSpec.tools.map(t => (
                   <div key={t.name} className="admin-row" style={{ paddingTop: 4, paddingBottom: 4 }}>
                     <span style={{ fontSize: 10, fontWeight: 700, color: methodColor(t.method),
                       background: methodColor(t.method) + "22", padding: "1px 5px", borderRadius: 3, minWidth: 42, textAlign: "center", flexShrink: 0 }}>
@@ -824,7 +855,8 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
               </div>
             )}
           </section>
-        ))}
+          );
+        })}
 
         {showAdd && (
           <section className="admin-section" style={{ padding: "12px 16px" }}>

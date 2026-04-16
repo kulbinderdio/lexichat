@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Settings, RotateCcw, Bug, Paperclip, Info } from "lucide-react";
 import lexiLogo from "./assets/lexi.png";
-import { AdminPanel, AppSettings, Profile } from "./AdminPanel";
+import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec } from "./AdminPanel";
 import { open } from "@tauri-apps/plugin-dialog";
 import { DebugPanel } from "./DebugPanel";
 import "./App.css";
@@ -65,6 +65,57 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "compose_email", description: "Build a base64url-encoded RFC 2822 email string for the Gmail API. Call this first, then pass the result as the 'raw' field to gmail_sendmessage.", parameters: { type: "object", properties: { to: { type: "string", description: "Recipient email address(es), comma-separated." }, from: { type: "string", description: "Sender email address (optional)." }, subject: { type: "string", description: "Email subject line." }, body: { type: "string", description: "Plain text email body." }, reply_to_message_id: { type: "string", description: "Message-ID to reply to, for threading (optional)." } }, required: ["to","subject","body"] } } },
 ];
 
+// ── Built-in OpenAPI specs ────────────────────────────────────────────────────
+
+const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
+  {
+    id: "builtin-wikipedia",
+    title: "Wikipedia",
+    base_url: "https://en.wikipedia.org",
+    enabled: true,
+    spec_json: JSON.stringify({
+      openapi: "3.0.3",
+      info: {
+        title: "Wikipedia",
+        version: "1.0.0",
+        description: "Wikipedia article summaries and search. Use searchWikipedia first to find article titles, then getArticleSummary to read them.",
+      },
+      servers: [{ url: "https://en.wikipedia.org" }],
+      paths: {
+        "/w/api.php": {
+          get: {
+            operationId: "searchWikipedia",
+            summary: "Search Wikipedia for article titles",
+            description: "Returns a list of matching article titles and short descriptions. Use this to find the exact title before calling getArticleSummary.",
+            parameters: [
+              { name: "action",    in: "query", required: true,  description: "Must be 'opensearch'", schema: { type: "string" } },
+              { name: "search",    in: "query", required: true,  description: "Search query e.g. 'Albert Einstein', 'black holes'", schema: { type: "string" } },
+              { name: "limit",     in: "query", required: false, description: "Number of results to return (default 5, max 20)", schema: { type: "integer" } },
+              { name: "format",    in: "query", required: false, description: "Must be 'json'", schema: { type: "string" } },
+              { name: "namespace", in: "query", required: false, description: "0 for main articles (default)", schema: { type: "integer" } },
+            ],
+            responses: { "200": { description: "Search results as [query, titles[], descriptions[], urls[]]" } },
+          },
+        },
+        "/api/rest_v1/page/summary/{title}": {
+          get: {
+            operationId: "getArticleSummary",
+            summary: "Get a Wikipedia article summary",
+            description: "Returns the introduction of a Wikipedia article as plain text. Includes description, thumbnail URL, and page URL.",
+            parameters: [
+              { name: "title",    in: "path",  required: true,  description: "Exact Wikipedia article title (use searchWikipedia to find it), e.g. 'Python_(programming_language)'", schema: { type: "string" } },
+              { name: "redirect", in: "query", required: false, description: "Set to 'true' to follow redirects (recommended)", schema: { type: "string" } },
+            ],
+            responses: { "200": { description: "Article summary with extract, description, and thumbnail" } },
+          },
+        },
+      },
+    }),
+  },
+];
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
 const DEFAULT_SETTINGS: AppSettings = {
   host: "http://localhost:11434",
   maxTools: 30,
@@ -80,8 +131,15 @@ const DEFAULT_SETTINGS: AppSettings = {
 export function loadSettings(): AppSettings {
   try {
     const s = localStorage.getItem("lexi_settings");
-    return s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : DEFAULT_SETTINGS;
-  } catch { return DEFAULT_SETTINGS; }
+    const loaded: AppSettings = s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : { ...DEFAULT_SETTINGS };
+    // Inject any built-in OpenAPI specs not yet present (preserves user's enabled/disabled state)
+    for (const builtin of BUILTIN_OPENAPI_SPECS) {
+      if (!loaded.openapiSpecs.find((sp: StoredOpenAPISpec) => sp.id === builtin.id)) {
+        loaded.openapiSpecs = [builtin, ...loaded.openapiSpecs];
+      }
+    }
+    return loaded;
+  } catch { return { ...DEFAULT_SETTINGS, openapiSpecs: [...BUILTIN_OPENAPI_SPECS] }; }
 }
 
 export function saveSettings(s: AppSettings) {
@@ -535,8 +593,11 @@ export default function App() {
     const ctx = s.profiles.find(p => p.id === s.activeProfileId) ?? s;
     const mcp     = (ctx as { mcpServers?: unknown }).mcpServers;
     const openapi = (ctx as { openapiSpecs?: unknown }).openapiSpecs;
-    await invoke("set_mcp_servers",   { servers: Array.isArray(mcp)     ? mcp     : [] }).catch(() => {});
-    await invoke("set_openapi_specs", { specs:   Array.isArray(openapi) ? openapi : [] }).catch(() => {});
+    const enabledOpenapi = Array.isArray(openapi)
+      ? (openapi as StoredOpenAPISpec[]).filter(s => s.enabled !== false)
+      : [];
+    await invoke("set_mcp_servers",   { servers: Array.isArray(mcp) ? mcp : [] }).catch(() => {});
+    await invoke("set_openapi_specs", { specs: enabledOpenapi }).catch(() => {});
   };
 
   // Sync on first mount
