@@ -1,7 +1,10 @@
 use std::sync::Mutex;
+use std::collections::HashMap;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
+use crate::openapi::RegisteredSpec;
+use crate::mcp::MCPConnection;
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
@@ -16,6 +19,9 @@ pub struct WireMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Base64-encoded images for vision models (Ollama `images` field)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +69,26 @@ pub struct ToolResultEvent {
 
 #[derive(Clone, Serialize)]
 pub struct DoneEvent {
+    pub error: Option<String>,
+}
+
+// Debug events
+#[derive(Clone, Serialize)]
+pub struct DebugStepEvent {
+    pub step: usize,
+    pub schema_names: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DebugStepDoneEvent {
+    pub step: usize,
+    pub llm_text: String,
+    pub duration_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct DebugRunDoneEvent {
+    pub total_ms: u64,
     pub error: Option<String>,
 }
 
@@ -114,11 +140,25 @@ async fn stream_chat(
     tools: &[ToolSchema],
     app: &AppHandle,
 ) -> anyhow::Result<(String, Vec<WireToolCall>)> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()?;
     let url = format!("{}/api/chat", host);
 
     let body = ChatRequest { model, messages, stream: true, tools };
     let resp = client.post(&url).json(&body).send().await?;
+
+    // Surface HTTP errors immediately — Ollama returns JSON {"error":"..."} on 4xx/5xx
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        // Try to extract Ollama's error message
+        let msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["error"].as_str().map(String::from))
+            .unwrap_or_else(|| format!("HTTP {status}: {body}"));
+        return Err(anyhow::anyhow!(msg));
+    }
 
     let mut full_text = String::new();
     let mut tool_calls: Vec<WireToolCall> = Vec::new();
@@ -130,6 +170,12 @@ async fn stream_chat(
         for line in std::str::from_utf8(&bytes)?.lines() {
             let line = line.trim();
             if line.is_empty() { continue; }
+            // Check for inline error (can appear mid-stream on some Ollama versions)
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(err) = v["error"].as_str() {
+                    return Err(anyhow::anyhow!("{err}"));
+                }
+            }
             let parsed: ChatChunk = match serde_json::from_str(line) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -161,9 +207,18 @@ pub async fn agent_loop(
     system_prompt: &str,
     tools: &[ToolSchema],
     conversation: &Mutex<Vec<WireMessage>>,
+    openapi_specs: Vec<RegisteredSpec>,
+    mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
+    allowed_dirs: Vec<String>,
     app: &AppHandle,
 ) -> anyhow::Result<()> {
-    for _step in 0..MAX_STEPS {
+    let run_start = std::time::Instant::now();
+    let mut nudged = false;
+    for step in 0..MAX_STEPS {
+        let step_start = std::time::Instant::now();
+        let schema_names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
+        let _ = app.emit("debug-step-start", DebugStepEvent { step, schema_names });
+
         // Build wire messages: system + history
         let wire = {
             let conv = conversation.lock().unwrap();
@@ -173,6 +228,7 @@ pub async fn agent_loop(
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
+                images: None,
             }];
             w.extend(conv.clone());
             w
@@ -182,25 +238,56 @@ pub async fn agent_loop(
             Ok(v) => v,
             Err(e) => {
                 let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
+                let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                    total_ms: run_start.elapsed().as_millis() as u64,
+                    error: Some(e.to_string()),
+                });
                 return Err(e);
             }
         };
+
+        let step_ms = step_start.elapsed().as_millis() as u64;
+        let _ = app.emit("debug-step-done", DebugStepDoneEvent {
+            step,
+            llm_text: full_text.clone(),
+            duration_ms: step_ms,
+        });
 
         // Append assistant message to history
         {
             let mut conv = conversation.lock().unwrap();
             conv.push(WireMessage {
                 role: "assistant".into(),
-                content: if full_text.is_empty() { None } else { Some(full_text) },
+                content: if full_text.is_empty() { None } else { Some(full_text.clone()) },
                 tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls.clone()) },
                 tool_call_id: None,
                 name: None,
+                images: None,
             });
         }
 
         if tool_calls.is_empty() {
-            // No tool calls — we're done
+            // Model returned nothing. Nudge once regardless of step so the user always
+            // gets a response (step 0 = model gave no reply at all; step > 0 = silent
+            // finish after tool results).
+            if full_text.is_empty() && !nudged {
+                nudged = true;
+                let mut conv = conversation.lock().unwrap();
+                conv.push(WireMessage {
+                    role: "user".into(),
+                    content: Some("Please respond to my previous request.".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                    images: None,
+                });
+                continue;
+            }
             let _ = app.emit("agent-done", DoneEvent { error: None });
+            let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                total_ms: run_start.elapsed().as_millis() as u64,
+                error: None,
+            });
             return Ok(());
         }
 
@@ -215,15 +302,12 @@ pub async fn agent_loop(
                 args: pretty_args,
             });
 
-            let result = crate::tools::dispatch(name, args).await;
+            // Route: builtin → openapi → mcp
+            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs).await;
 
             // Cap large responses
             let result = if result.len() > 6000 {
-                format!(
-                    "{}\n…[truncated: {} chars total]",
-                    &result[..6000],
-                    result.len()
-                )
+                format!("{}\n…[truncated: {} chars total]", &result[..6000], result.len())
             } else {
                 result
             };
@@ -233,7 +317,6 @@ pub async fn agent_loop(
                 result: result.clone(),
             });
 
-            // Append tool result to history
             let mut conv = conversation.lock().unwrap();
             conv.push(WireMessage {
                 role: "tool".into(),
@@ -241,13 +324,53 @@ pub async fn agent_loop(
                 tool_calls: None,
                 tool_call_id: None,
                 name: Some(name.clone()),
+                images: None,
             });
         }
     }
 
     // Hit max steps
-    let _ = app.emit("agent-done", DoneEvent {
-        error: Some("Stopped: reached maximum steps without a final answer.".into()),
+    let msg = "Stopped: reached maximum steps without a final answer.".to_string();
+    let _ = app.emit("agent-done", DoneEvent { error: Some(msg.clone()) });
+    let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+        total_ms: run_start.elapsed().as_millis() as u64,
+        error: Some(msg),
     });
     Ok(())
+}
+
+/// Route a tool call to the right executor.
+async fn dispatch_tool(
+    name: &str,
+    args: &serde_json::Value,
+    openapi_specs: &[RegisteredSpec],
+    mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
+    allowed_dirs: &[String],
+) -> String {
+    // 1. Try built-in tools first
+    let builtin_names = ["read_file","write_file","list_files","search_files",
+        "search_in_files","get_file_info","list_directory_tree","create_directory",
+        "move_file","delete_file","find_old_files","web_search","compose_email"];
+    if builtin_names.contains(&name) {
+        return crate::tools::dispatch_builtin(name, args, allowed_dirs).await;
+    }
+
+    // 2. Try OpenAPI tools
+    for spec in openapi_specs.iter() {
+        if let Some(tool) = spec.tools.iter().find(|t| t.name == name) {
+            return crate::openapi::execute(spec, tool, args).await;
+        }
+    }
+
+    // 3. Try MCP tools
+    {
+        let mut connections = mcp_connections.lock().await;
+        for conn in connections.values_mut() {
+            if conn.tools.iter().any(|t| t.name == name) {
+                return conn.call_tool(name, args).await;
+            }
+        }
+    }
+
+    format!("Unknown tool: {name}")
 }

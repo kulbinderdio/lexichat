@@ -25,3 +25,7 @@ dist-ssr
 
 # Tauri / Rust
 src-tauri/target/
+
+# Local scratch
+temp/
+*.json.bak
