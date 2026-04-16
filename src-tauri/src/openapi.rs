@@ -200,6 +200,7 @@ pub async fn execute(spec: &RegisteredSpec, tool: &APITool, args: &Value) -> Str
     };
 
     let mut req = spec.auth.apply_async(&client, base_req).await;
+    req = req.header("User-Agent", concat!("LexiChat/", env!("CARGO_PKG_VERSION"), " (https://github.com/kulbinderdio/lexichat)"));
     req = req.header("Content-Type", "application/json");
     req = req.header("Accept", "application/json");
 
