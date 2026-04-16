@@ -29,11 +29,12 @@ fn check_path(path: &str, allowed_dirs: &[String]) -> Result<(), String> {
         return Ok(());
     }
     // Try to canonicalize (resolves symlinks, "..", etc.)
+    // On Windows canonicalize() adds a \\?\ prefix — we must canonicalize
+    // both sides so the comparison is apples-to-apples.
     let canonical = std::fs::canonicalize(path)
         .unwrap_or_else(|_| {
             // File may not exist yet (e.g. write_file). Walk parent chain.
             let p = std::path::Path::new(path);
-            // Find the deepest existing ancestor
             let mut cur = p;
             loop {
                 if cur.exists() {
@@ -45,8 +46,16 @@ fn check_path(path: &str, allowed_dirs: &[String]) -> Result<(), String> {
                 }
             }
         });
-    let canonical_str = canonical.to_string_lossy();
-    if allowed_dirs.iter().any(|dir| canonical_str.starts_with(dir.as_str())) {
+
+    let is_allowed = allowed_dirs.iter().any(|dir| {
+        // Canonicalize the allowed dir too so \\?\ prefixes match on Windows
+        let canonical_dir = std::fs::canonicalize(dir)
+            .unwrap_or_else(|_| std::path::PathBuf::from(dir));
+        // Path::starts_with does component-level matching (avoids /foo/bar matching /foo/barbaz)
+        canonical.starts_with(&canonical_dir)
+    });
+
+    if is_allowed {
         Ok(())
     } else {
         Err(format!(
