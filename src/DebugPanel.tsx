@@ -194,12 +194,19 @@ function RunRow({ run }: { run: DebugRun }) {
 
 interface Props {
   visible: boolean;
+  clearKey?: number;
 }
 
-export function DebugPanel({ visible }: Props) {
+export function DebugPanel({ visible, clearKey }: Props) {
   const [runs, setRuns] = useState<DebugRun[]>([]);
   const runCounter = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (clearKey === undefined) return;
+    setRuns([]);
+    runCounter.current = 0;
+  }, [clearKey]);
 
   useEffect(() => {
     if (!visible) return;

@@ -522,9 +522,12 @@ export default function App() {
     e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
   };
 
+  const [debugClearKey, setDebugClearKey] = useState(0);
+
   const handleReset = async () => {
     await invoke("reset_conversation");
     setMessages([]);
+    setDebugClearKey(k => k + 1);
   };
 
   // Sync Rust's runtime MCP/OpenAPI state to whichever context is now active
@@ -706,7 +709,7 @@ export default function App() {
       </div>{/* end chat column */}
 
       {/* Debug panel sidebar */}
-      <DebugPanel visible={showDebug} />
+      <DebugPanel visible={showDebug} clearKey={debugClearKey} />
 
       </div>{/* end main content row */}
 
