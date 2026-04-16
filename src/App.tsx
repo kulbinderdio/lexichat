@@ -128,16 +128,26 @@ const DEFAULT_SETTINGS: AppSettings = {
   activeProfileId: null,
 };
 
+function injectBuiltinSpecs(specs: StoredOpenAPISpec[]): StoredOpenAPISpec[] {
+  let result = specs;
+  for (const builtin of BUILTIN_OPENAPI_SPECS) {
+    if (!result.find(sp => sp.id === builtin.id)) {
+      result = [builtin, ...result];
+    }
+  }
+  return result;
+}
+
 export function loadSettings(): AppSettings {
   try {
     const s = localStorage.getItem("lexi_settings");
     const loaded: AppSettings = s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : { ...DEFAULT_SETTINGS };
-    // Inject any built-in OpenAPI specs not yet present (preserves user's enabled/disabled state)
-    for (const builtin of BUILTIN_OPENAPI_SPECS) {
-      if (!loaded.openapiSpecs.find((sp: StoredOpenAPISpec) => sp.id === builtin.id)) {
-        loaded.openapiSpecs = [builtin, ...loaded.openapiSpecs];
-      }
-    }
+    // Inject built-in specs at global level and into every profile
+    loaded.openapiSpecs = injectBuiltinSpecs(loaded.openapiSpecs);
+    loaded.profiles = loaded.profiles.map(p => ({
+      ...p,
+      openapiSpecs: injectBuiltinSpecs(p.openapiSpecs ?? []),
+    }));
     return loaded;
   } catch { return { ...DEFAULT_SETTINGS, openapiSpecs: [...BUILTIN_OPENAPI_SPECS] }; }
 }
