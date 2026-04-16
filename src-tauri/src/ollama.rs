@@ -123,6 +123,7 @@ struct ChatRequest<'a> {
 #[derive(Deserialize)]
 struct ChatChunk {
     message: Option<ChunkMessage>,
+    #[allow(dead_code)]
     done: Option<bool>,
 }
 

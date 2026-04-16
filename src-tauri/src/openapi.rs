@@ -67,7 +67,7 @@ pub fn tool_prefix(name: &str) -> String {
 }
 
 /// Parse an OpenAPI 3.0 JSON spec into a list of API tools.
-pub fn parse_spec(title: &str, base_url: &str, spec_json: &str) -> Result<Vec<APITool>, String> {
+pub fn parse_spec(title: &str, _base_url: &str, spec_json: &str) -> Result<Vec<APITool>, String> {
     let spec: Value = serde_json::from_str(spec_json).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let paths = spec["paths"].as_object().ok_or("No 'paths' in spec")?;
