@@ -170,8 +170,15 @@ const DEFAULT_SETTINGS: AppSettings = {
 function injectBuiltinSpecs(specs: StoredOpenAPISpec[]): StoredOpenAPISpec[] {
   let result = specs;
   for (const builtin of BUILTIN_OPENAPI_SPECS) {
-    if (!result.find(sp => sp.id === builtin.id)) {
+    const existing = result.find(sp => sp.id === builtin.id);
+    if (!existing) {
       result = [builtin, ...result];
+    } else {
+      // Always refresh spec_json from the latest builtin definition,
+      // but preserve the user's enabled/disabled choice.
+      result = result.map(sp =>
+        sp.id === builtin.id ? { ...builtin, enabled: sp.enabled } : sp
+      );
     }
   }
   return result;
