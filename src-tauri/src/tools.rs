@@ -658,6 +658,22 @@ async fn web_search(args: &Value) -> String {
     }
 }
 
+/// Decode a DuckDuckGo redirect href into a real destination URL.
+/// DDG wraps all outbound links as: //duckduckgo.com/l/?uddg=<url-encoded-url>&...
+fn decode_ddg_href(href: &str) -> String {
+    if let Some(pos) = href.find("uddg=") {
+        let encoded = &href[pos + 5..];
+        let end = encoded.find('&').unwrap_or(encoded.len());
+        if let Ok(decoded) = urlencoding::decode(&encoded[..end]) {
+            let s = decoded.into_owned();
+            if s.starts_with("http") { return s; }
+        }
+    }
+    // Already a plain URL
+    if href.starts_with("http") { return href.to_string(); }
+    String::new()
+}
+
 /// Extract (title, snippet, url) tuples from DuckDuckGo HTML results page.
 fn extract_ddg_results(html: &str) -> Vec<(String, String, String)> {
     let mut results = Vec::new();
@@ -705,7 +721,9 @@ fn extract_ddg_results(html: &str) -> Vec<(String, String, String)> {
 
         let title = title.trim().to_string();
         if title.is_empty() { continue; }
-        results.push((title, snippet.trim().to_string(), href));
+        let url = decode_ddg_href(&href);
+        if url.is_empty() { continue; }
+        results.push((title, snippet.trim().to_string(), url));
     }
     results
 }
