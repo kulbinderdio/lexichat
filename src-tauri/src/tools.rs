@@ -721,8 +721,9 @@ fn extract_ddg_results(html: &str) -> Vec<(String, String, String)> {
 
         let title = title.trim().to_string();
         if title.is_empty() { continue; }
+        // Decode DDG redirect → real URL; fall back to raw href if decoding fails
         let url = decode_ddg_href(&href);
-        if url.is_empty() { continue; }
+        let url = if url.is_empty() { href } else { url };
         results.push((title, snippet.trim().to_string(), url));
     }
     results
