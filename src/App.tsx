@@ -7,6 +7,7 @@ import { Settings, RotateCcw, Bug, Paperclip, Info } from "lucide-react";
 import lexiLogo from "./assets/lexi.png";
 import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec } from "./AdminPanel";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { DebugPanel } from "./DebugPanel";
 import "./App.css";
 
@@ -433,6 +434,62 @@ function FileBrowserResult({
   );
 }
 
+// ── URL list (interactive tool result) ───────────────────────────────────────
+
+const URL_REGEX = /https?:\/\/[^\s"'\]>),}]+/g;
+
+function extractUrls(text: string): string[] {
+  const matches = text.match(URL_REGEX) ?? [];
+  // Deduplicate while preserving order
+  return [...new Set(matches)];
+}
+
+function urlLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    // Show host + first path segment as a readable label
+    const parts = u.pathname.split("/").filter(Boolean);
+    return parts.length ? `${u.hostname} / ${decodeURIComponent(parts[0])}` : u.hostname;
+  } catch { return url; }
+}
+
+function UrlListResult({ name, result }: { name: string; result: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const urls = extractUrls(result);
+
+  return (
+    <div className="msg-tool-result">
+      <div className="tool-result-inner" onClick={() => setExpanded(e => !e)} style={{ cursor: "pointer" }}>
+        <span className="tool-result-check">✓</span>
+        <span className="tool-result-name">{name}</span>
+        <span className="tool-result-dot">·</span>
+        <span className="tool-result-preview">{urls.length} link{urls.length !== 1 ? "s" : ""}</span>
+        <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{expanded ? "▲" : "▼"}</span>
+      </div>
+      {expanded && (
+        <div className="file-browser">
+          {urls.map((url, i) => (
+            <div key={i} className="file-browser-row">
+              <span className="file-browser-icon">🔗</span>
+              <span className="file-browser-name" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>
+                {urlLabel(url)}
+              </span>
+              <div className="file-browser-actions">
+                <button
+                  className="file-action-chip"
+                  onClick={e => { e.stopPropagation(); openUrl(url); }}
+                >
+                  Open
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ToolResultRow({
   name, result, args, onSend, onAttach,
 }: {
@@ -442,6 +499,10 @@ function ToolResultRow({
 }) {
   if (FILE_LISTING_TOOLS.has(name)) {
     return <FileBrowserResult name={name} result={result} args={args} onSend={onSend} onAttach={onAttach} />;
+  }
+  const urls = extractUrls(result);
+  if (urls.length > 0) {
+    return <UrlListResult name={name} result={result} />;
   }
   const preview = result.length > 120 ? result.slice(0, 120) + "…" : result;
   return (
