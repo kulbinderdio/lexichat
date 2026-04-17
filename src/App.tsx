@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { Settings, RotateCcw, Bug, Paperclip, Info } from "lucide-react";
 import lexiLogo from "./assets/lexi.png";
 import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec } from "./AdminPanel";
+import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { DebugPanel } from "./DebugPanel";
@@ -626,11 +627,18 @@ export default function App() {
     text = text.trim();
     if ((!text && attachedFiles.length === 0) || isRunning || !selectedModel) return;
 
-    // Profile overrides global settings
+    // Profile overrides global settings; chatParams toggles can further restrict
     const effectiveEnabledTools = activeProfile?.enabledTools ?? settings.enabledTools;
-    const enabledTools = ALL_BUILTIN_TOOLS.filter(
-      t => effectiveEnabledTools[t.function.name] !== false
-    );
+    const webSearchTools = new Set(["web_search"]);
+    const fileTools = new Set(["read_file","write_file","list_files","search_files",
+      "search_in_files","get_file_info","list_directory_tree","create_directory",
+      "move_file","delete_file","find_old_files"]);
+    const enabledTools = ALL_BUILTIN_TOOLS.filter(t => {
+      if (effectiveEnabledTools[t.function.name] === false) return false;
+      if (webSearchTools.has(t.function.name) && !chatParams.webSearch) return false;
+      if (fileTools.has(t.function.name) && !chatParams.fileAccess) return false;
+      return true;
+    });
 
     // Split attachments into images (sent via Ollama images field) and other files (appended as paths)
     const imagePaths = attachedFiles.filter(isImage);
@@ -668,9 +676,12 @@ export default function App() {
         ? `\nExternal service tools available — call these ONLY when the user explicitly names that service: ${externalParts.join(" ")}`
         : "";
 
+      const resolved = resolveParams(chatParams);
+      const effectiveBase = resolved.systemPromptOverride ?? basePrompt;
+
       const systemPrompt = allowedDirs.length > 0
-        ? `${basePrompt}${externalSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. When the user asks about files or folders without specifying a path, immediately use list_files on these directories — do not ask for clarification. Always use full absolute paths.`
-        : `${basePrompt}${externalSuffix}`;
+        ? `${effectiveBase}${externalSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. When the user asks about files or folders without specifying a path, immediately use list_files on these directories — do not ask for clarification. Always use full absolute paths.`
+        : `${effectiveBase}${externalSuffix}`;
 
       await invoke("send_message", {
         args: {
@@ -679,6 +690,15 @@ export default function App() {
           system_prompt: systemPrompt,
           tools: enabledTools,
           image_paths: imagePaths,
+          temperature: resolved.temperature,
+          top_p: resolved.topP ?? null,
+          top_k: resolved.topK ?? null,
+          repeat_penalty: resolved.repeatPenalty ?? null,
+          seed: resolved.seed ?? null,
+          num_ctx: resolved.numCtx,
+          num_predict: resolved.numPredict,
+          stop: resolved.stop ?? null,
+          keep_alive: resolved.keepAlive ?? null,
         }
       });
     } catch (err) {
@@ -699,10 +719,16 @@ export default function App() {
 
   const [debugClearKey, setDebugClearKey] = useState(0);
 
+  // Chat-specific generation params — reset to profile/global defaults on new chat
+  const defaultChatParams = (): ChatParams =>
+    activeProfile?.chatParams ?? settings.chatParams ?? DEFAULT_CHAT_PARAMS;
+  const [chatParams, setChatParams] = useState<ChatParams>(defaultChatParams);
+
   const handleReset = async () => {
     await invoke("reset_conversation");
     setMessages([]);
     setDebugClearKey(k => k + 1);
+    setChatParams(defaultChatParams());
   };
 
   // Sync Rust's runtime MCP/OpenAPI state to whichever context is now active
@@ -733,6 +759,7 @@ export default function App() {
     const updated = { ...settings, activeProfileId: id || null };
     await handleSaveSettings(updated);
     if (profile?.model && settings.models.includes(profile.model)) setSelectedModel(profile.model);
+    setChatParams(profile?.chatParams ?? updated.chatParams ?? DEFAULT_CHAT_PARAMS);
     await syncServers(updated);
     await handleReset();
   };
@@ -859,6 +886,7 @@ export default function App() {
             <button className="attach-btn" onClick={handleAttach} disabled={isRunning} title="Attach file">
               <Paperclip size={14} />
             </button>
+            <ChatParamsButton params={chatParams} onChange={setChatParams} disabled={isRunning} />
             <select
               className="model-select"
               value={selectedModel}

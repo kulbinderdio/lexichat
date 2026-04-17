@@ -89,6 +89,25 @@ pub struct SendMessageArgs {
     pub tools: Vec<ollama::ToolSchema>,
     #[serde(default)]
     pub image_paths: Vec<String>,
+    // LLM generation options (all optional)
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<i32>,
+    #[serde(default)]
+    pub repeat_penalty: Option<f64>,
+    #[serde(default)]
+    pub seed: Option<i64>,
+    #[serde(default)]
+    pub num_ctx: Option<i32>,
+    #[serde(default)]
+    pub num_predict: Option<i32>,
+    #[serde(default)]
+    pub stop: Option<Vec<String>>,
+    #[serde(default)]
+    pub keep_alive: Option<String>,
 }
 
 #[tauri::command]
@@ -147,11 +166,31 @@ async fn send_message(
     let specs_snapshot: Vec<openapi::RegisteredSpec> = state.openapi_specs.lock().unwrap().clone();
     let allowed_dirs_snapshot: Vec<String> = state.allowed_dirs.lock().unwrap().clone();
 
+    let options = if args.temperature.is_some() || args.top_p.is_some() || args.top_k.is_some()
+        || args.repeat_penalty.is_some() || args.seed.is_some()
+        || args.num_ctx.is_some() || args.num_predict.is_some() || args.stop.is_some()
+    {
+        Some(ollama::ChatOptions {
+            temperature: args.temperature,
+            top_p: args.top_p,
+            top_k: args.top_k,
+            repeat_penalty: args.repeat_penalty,
+            seed: args.seed,
+            num_ctx: args.num_ctx,
+            num_predict: args.num_predict,
+            stop: args.stop.clone(),
+        })
+    } else {
+        None
+    };
+
     ollama::agent_loop(
         &host,
         &args.model,
         &args.system_prompt,
         &all_tools,
+        options,
+        args.keep_alive.clone(),
         &state.conversation,
         specs_snapshot,
         &state.mcp_connections,

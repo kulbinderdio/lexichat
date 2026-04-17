@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { ChatParams, DEFAULT_CHAT_PARAMS, ChatParamsDefaults } from "./ChatParamsPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ export interface Profile {
   mcpServers: StoredMCPServer[];
   openapiSpecs: StoredOpenAPISpec[];
   maxTools: number;
+  chatParams?: ChatParams;
 }
 
 export interface AppSettings {
@@ -66,6 +68,7 @@ export interface AppSettings {
   openapiSpecs: StoredOpenAPISpec[];
   profiles: Profile[];
   activeProfileId: string | null;
+  chatParams?: ChatParams;
 }
 
 interface SpecInfo {
@@ -443,6 +446,23 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
                 <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, minWidth: 28, textAlign: "center" }}>{d.maxTools}</span>
                 <button className="stepper-btn" onClick={() => setDraft({ ...d, maxTools: Math.min(100, d.maxTools + 5) })}>+</button>
               </div>
+            </div>
+
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label>Chat Defaults</label>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8 }}>
+                New chats in this profile start with these settings (can still be changed per chat).
+              </div>
+              <ChatParamsDefaults
+                params={d.chatParams ?? DEFAULT_CHAT_PARAMS}
+                onChange={cp => setDraft({ ...d, chatParams: cp })}
+              />
+              {d.chatParams && (
+                <button className="link-btn" style={{ marginTop: 4 }}
+                  onClick={() => setDraft({ ...d, chatParams: undefined })}>
+                  Reset to global defaults
+                </button>
+              )}
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>

@@ -97,6 +97,28 @@ pub struct DebugRunDoneEvent {
     pub error: Option<String>,
 }
 
+// ── Chat parameter options ────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChatOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_ctx: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_predict: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
+}
+
 // ── Ollama REST API ───────────────────────────────────────────────────────────
 
 pub async fn list_models(host: &str) -> anyhow::Result<Vec<String>> {
@@ -123,6 +145,10 @@ struct ChatRequest<'a> {
     stream: bool,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     tools: &'a [ToolSchema],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<&'a ChatOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +171,8 @@ async fn stream_chat(
     model: &str,
     messages: &[WireMessage],
     tools: &[ToolSchema],
+    options: Option<&ChatOptions>,
+    keep_alive: Option<&str>,
     app: &AppHandle,
 ) -> anyhow::Result<(String, Vec<WireToolCall>)> {
     let client = reqwest::Client::builder()
@@ -152,7 +180,7 @@ async fn stream_chat(
         .build()?;
     let url = format!("{}/api/chat", host);
 
-    let body = ChatRequest { model, messages, stream: true, tools };
+    let body = ChatRequest { model, messages, stream: true, tools, options, keep_alive };
     let resp = client.post(&url).json(&body).send().await?;
 
     // Surface HTTP errors immediately — Ollama returns JSON {"error":"..."} on 4xx/5xx
@@ -218,6 +246,8 @@ pub async fn agent_loop(
     model: &str,
     system_prompt: &str,
     tools: &[ToolSchema],
+    options: Option<ChatOptions>,
+    keep_alive: Option<String>,
     conversation: &Mutex<Vec<WireMessage>>,
     openapi_specs: Vec<RegisteredSpec>,
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
@@ -246,7 +276,7 @@ pub async fn agent_loop(
             w
         };
 
-        let (full_text, tool_calls) = match stream_chat(host, model, &wire, tools, app).await {
+        let (full_text, tool_calls) = match stream_chat(host, model, &wire, tools, options.as_ref(), keep_alive.as_deref(), app).await {
             Ok(v) => v,
             Err(e) => {
                 let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
