@@ -8,8 +8,6 @@ export interface ChatParams {
   style: "precise" | "balanced" | "creative";
   responseLength: "short" | "medium" | "long" | "auto";
   contextSize: "short" | "long";
-  webSearch: boolean;
-  fileAccess: boolean;
   // Advanced overrides (undefined = use preset value)
   temperature?: number;
   topP?: number;
@@ -27,8 +25,6 @@ export const DEFAULT_CHAT_PARAMS: ChatParams = {
   style: "balanced",
   responseLength: "auto",
   contextSize: "short",
-  webSearch: true,
-  fileAccess: true,
 };
 
 export function resolveParams(p: ChatParams): {
@@ -70,8 +66,7 @@ export function hasAdvancedOverrides(p: ChatParams): boolean {
 export function hasCustomParams(p: ChatParams): boolean {
   const d = DEFAULT_CHAT_PARAMS;
   return p.style !== d.style || p.responseLength !== d.responseLength ||
-    p.contextSize !== d.contextSize || !p.webSearch || !p.fileAccess ||
-    hasAdvancedOverrides(p);
+    p.contextSize !== d.contextSize || hasAdvancedOverrides(p);
 }
 
 // ── Shared primitives ─────────────────────────────────────────────────────────
@@ -99,26 +94,6 @@ function ChipRow<T extends string>({
           }}>{opt.label}</button>
         ))}
       </div>
-    </div>
-  );
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-      <span style={{ fontSize: 12, color: "var(--text)" }}>{label}</span>
-      <button onClick={() => onChange(!checked)} style={{
-        width: 38, height: 22, borderRadius: 11,
-        background: checked ? "var(--accent)" : "var(--surface3)",
-        border: checked ? "1px solid var(--accent)" : "1px solid var(--border)",
-        position: "relative", cursor: "pointer", transition: "all 0.2s", flexShrink: 0,
-      }}>
-        <span style={{
-          position: "absolute", top: 2, left: checked ? 17 : 2,
-          width: 16, height: 16, borderRadius: "50%", background: "#fff",
-          transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
-        }} />
-      </button>
     </div>
   );
 }
@@ -376,10 +351,7 @@ function SimpleParamsPopover({ params, onChange, onClose, onAdvanced, anchor }: 
 
       <div style={{ borderTop: "1px solid var(--border-light)", margin: "2px 0 12px" }} />
 
-      <Toggle label="Web Search" checked={params.webSearch} onChange={v => set("webSearch", v)} />
-      <Toggle label="File Access" checked={params.fileAccess} onChange={v => set("fileAccess", v)} />
-
-      <div style={{ borderTop: "1px solid var(--border-light)", marginTop: 6, paddingTop: 10, display: "flex", justifyContent: "flex-end" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <button className="link-btn" onClick={onAdvanced}
           style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}>
           {hasAdvancedOverrides(params) && <span style={{ color: "#f59e0b", fontSize: 8 }}>●</span>}
@@ -479,8 +451,6 @@ export function ChatParamsDefaults({ params, onChange }: {
         ]}
         onChange={v => set("contextSize", v)}
       />
-      <Toggle label="Web Search on by default" checked={params.webSearch} onChange={v => set("webSearch", v)} />
-      <Toggle label="File Access on by default" checked={params.fileAccess} onChange={v => set("fileAccess", v)} />
     </div>
   );
 }

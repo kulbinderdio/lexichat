@@ -629,16 +629,9 @@ export default function App() {
 
     // Profile overrides global settings; chatParams toggles can further restrict
     const effectiveEnabledTools = activeProfile?.enabledTools ?? settings.enabledTools;
-    const webSearchTools = new Set(["web_search"]);
-    const fileTools = new Set(["read_file","write_file","list_files","search_files",
-      "search_in_files","get_file_info","list_directory_tree","create_directory",
-      "move_file","delete_file","find_old_files"]);
-    const enabledTools = ALL_BUILTIN_TOOLS.filter(t => {
-      if (effectiveEnabledTools[t.function.name] === false) return false;
-      if (webSearchTools.has(t.function.name) && !chatParams.webSearch) return false;
-      if (fileTools.has(t.function.name) && !chatParams.fileAccess) return false;
-      return true;
-    });
+    const enabledTools = ALL_BUILTIN_TOOLS.filter(
+      t => effectiveEnabledTools[t.function.name] !== false
+    );
 
     // Split attachments into images (sent via Ollama images field) and other files (appended as paths)
     const imagePaths = attachedFiles.filter(isImage);
