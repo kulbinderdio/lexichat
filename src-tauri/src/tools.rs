@@ -684,12 +684,17 @@ fn extract_ddg_results(html: &str) -> Vec<(String, String, String)> {
         let Some(title_idx) = html[pos..].find("class=\"result__a\"") else { break };
         let block_start = pos + title_idx;
 
-        // Extract href from the title anchor
+        // Extract href from the title anchor — find the full <a> tag so attribute
+        // order doesn't matter (DDG sometimes puts href after class=).
         let href = {
-            // Search backwards a bit for href=
-            let search_back = if block_start > 200 { block_start - 200 } else { 0 };
-            let chunk = &html[search_back..block_start + 50];
-            extract_attr(chunk, "href").unwrap_or_default()
+            // Walk back to find '<' that opened this tag
+            let tag_open = html[..block_start].rfind('<').unwrap_or(0);
+            // Walk forward to find '>' that closes this tag
+            let tag_close = html[block_start..].find('>')
+                .map(|o| block_start + o + 1)
+                .unwrap_or((block_start + 500).min(html.len()));
+            let full_tag = &html[tag_open..tag_close];
+            extract_attr(full_tag, "href").unwrap_or_default()
         };
 
         // Extract title text
@@ -717,13 +722,34 @@ fn extract_ddg_results(html: &str) -> Vec<(String, String, String)> {
             }
         };
 
+        // Try result__url first — DDG puts the real destination URL here as the href,
+        // avoiding the need to decode the redirect wrapper on the title link.
+        let window_end = (block_start + 3000).min(html.len());
+        let real_url: String = html[block_start..window_end]
+            .find("class=\"result__url\"")
+            .map(|off| {
+                let search_start = block_start + off;
+                let tag_end = html[search_start..].find('>')
+                    .map(|o| search_start + o + 1)
+                    .unwrap_or((search_start + 400).min(html.len()));
+                extract_attr(&html[search_start..tag_end], "href").unwrap_or_default()
+            })
+            .unwrap_or_default();
+
         pos = block_start + 1;
 
         let title = title.trim().to_string();
         if title.is_empty() { continue; }
-        // Decode DDG redirect → real URL; fall back to raw href if decoding fails
-        let url = decode_ddg_href(&href);
-        let url = if url.is_empty() { href } else { url };
+
+        // Prefer real_url (result__url href), then decoded DDG redirect, then raw href
+        let url = if !real_url.is_empty() && real_url.starts_with("http") {
+            real_url
+        } else {
+            let decoded = decode_ddg_href(&href);
+            if decoded.is_empty() { href } else { decoded }
+        };
+
+        if url.is_empty() { pos = block_start + 1; continue; }
         results.push((title, snippet.trim().to_string(), url));
     }
     results
