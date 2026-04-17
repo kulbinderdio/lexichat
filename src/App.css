@@ -807,20 +807,6 @@ html, body, #root { height: 100%; overflow: hidden; }
 .profile-select:focus { outline: none; border-color: var(--accent); }
 .profile-select option { background: var(--surface); }
 
-/* ── Chat params popover ────────────────────────────────────────────────────── */
-.chat-params-popover {
-  position: absolute;
-  bottom: calc(100% + 10px);
-  left: 0;
-  z-index: 300;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 16px;
-  width: 300px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.2);
-}
-
 /* ── Generic modal backdrop (used by AdvancedParamsDialog) ──────────────────── */
 .modal-backdrop {
   position: fixed; inset: 0;

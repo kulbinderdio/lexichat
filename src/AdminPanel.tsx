@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChatParams, DEFAULT_CHAT_PARAMS, ChatParamsDefaults } from "./ChatParamsPanel";
+import { ChatParams, DEFAULT_CHAT_PARAMS, ChatParamsDefaults, AdvancedParamsContent } from "./ChatParamsPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "profiles" | "tools" | "models" | "openapi" | "mcp" | "sandbox" | "server";
+type Tab = "profiles" | "tools" | "models" | "openapi" | "mcp" | "sandbox" | "server" | "defaults";
 
 const BUILTIN_TOOLS = [
   { name: "list_files",          label: "List Files",           icon: "📁" },
@@ -1210,6 +1210,41 @@ function ServerTab({ settings, onChange }: { settings: AppSettings; onChange: (s
   );
 }
 
+// ── Defaults tab ─────────────────────────────────────────────────────────────
+
+function DefaultsTab({ settings, onChange }: { settings: AppSettings; onChange: (s: AppSettings) => void }) {
+  const params = settings.chatParams ?? DEFAULT_CHAT_PARAMS;
+  const setParams = (p: ChatParams) => onChange({ ...settings, chatParams: p });
+
+  return (
+    <div className="admin-scroll" style={{ padding: "16px 20px" }}>
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Global Chat Defaults</div>
+      <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 16, lineHeight: 1.5 }}>
+        New chats use these settings. Profiles can override them, and you can always change them per-chat using the sliders icon in the input bar.
+      </div>
+
+      <section style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Presets</div>
+        <ChatParamsDefaults params={params} onChange={setParams} />
+      </section>
+
+      <div style={{ height: 1, background: "var(--border)", marginBottom: 20 }} />
+
+      <section>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>Advanced</div>
+        <AdvancedParamsContent draft={params} onChange={setParams} />
+      </section>
+
+      {settings.chatParams && (
+        <button className="link-btn" style={{ marginTop: 16 }}
+          onClick={() => onChange({ ...settings, chatParams: undefined })}>
+          Reset all to factory defaults
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Admin Panel modal ─────────────────────────────────────────────────────────
 
 export function AdminPanel({ settings, onSave, onClose }: Props) {
@@ -1244,6 +1279,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
     { id: "mcp",      icon: "🔌",  label: "MCP" },
     { id: "sandbox",  icon: "🔒",  label: "Sandbox" },
     { id: "server",   icon: "⚙️",  label: "Server" },
+    { id: "defaults", icon: "🎛",  label: "Defaults" },
   ];
 
   return (
@@ -1275,6 +1311,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
           {tab === "mcp"     && <MCPTab stored={ctxMCP} onChange={setCtxMCP} />}
           {tab === "sandbox" && <SandboxTab />}
           {tab === "server"  && <ServerTab  settings={draft} onChange={setDraft} />}
+          {tab === "defaults" && <DefaultsTab settings={draft} onChange={setDraft} />}
         </div>
       </div>
     </div>
