@@ -608,11 +608,19 @@ async fn web_search(args: &Value) -> String {
             if let Some(a) = json["Answer"].as_str() {
                 if !a.is_empty() { parts.push(format!("Answer: {a}")); }
             }
+            if let Some(url) = json["AbstractURL"].as_str() {
+                if !url.is_empty() { parts.push(format!("Source: {url}")); }
+            }
             if let Some(related) = json["RelatedTopics"].as_array() {
                 let topics: Vec<_> = related.iter().take(3)
-                    .filter_map(|t| t["Text"].as_str().map(String::from))
+                    .filter_map(|t| {
+                        let text = t["Text"].as_str()?;
+                        let url  = t["FirstURL"].as_str().unwrap_or("");
+                        if url.is_empty() { Some(text.to_string()) }
+                        else { Some(format!("{text}\n   {url}")) }
+                    })
                     .collect();
-                if !topics.is_empty() { parts.push(format!("Related:\n{}", topics.join("\n"))); }
+                if !topics.is_empty() { parts.push(format!("Related:\n{}", topics.join("\n\n"))); }
             }
             if !parts.is_empty() {
                 return parts.join("\n\n");
