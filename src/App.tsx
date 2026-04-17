@@ -673,7 +673,7 @@ export default function App() {
       const effectiveBase = resolved.systemPromptOverride ?? basePrompt;
 
       const systemPrompt = allowedDirs.length > 0
-        ? `${effectiveBase}${externalSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. When the user asks about files or folders without specifying a path, immediately use list_files on these directories — do not ask for clarification. Always use full absolute paths.`
+        ? `${effectiveBase}${externalSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
         : `${effectiveBase}${externalSuffix}`;
 
       await invoke("send_message", {
