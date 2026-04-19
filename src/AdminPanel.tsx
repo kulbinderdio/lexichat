@@ -62,6 +62,8 @@ export interface Profile {
   maxTools: number;
   chatParams?: ChatParams;
   contextVars?: ContextVar[];
+  host?: string;
+  allowedDirs?: string[];
 }
 
 export interface AppSettings {
@@ -76,6 +78,7 @@ export interface AppSettings {
   profiles: Profile[];
   activeProfileId: string | null;
   chatParams?: ChatParams;
+  allowedDirs?: string[];
 }
 
 interface SpecInfo {
@@ -1216,29 +1219,22 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
 
 // ── Sandbox tab ───────────────────────────────────────────────────────────────
 
-function SandboxTab() {
-  const [dirs, setDirs] = useState<string[]>([]);
+function SandboxTab({ dirs, onChange }: { dirs: string[]; onChange: (dirs: string[]) => void }) {
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    invoke<string[]>("get_allowed_dirs").then(setDirs).catch(() => {});
-  }, []);
 
   const addFolder = async () => {
     setLoading(true);
     try {
       const selected = await open({ directory: true, multiple: false, title: "Select a folder to allow" });
-      if (typeof selected === "string" && selected) {
-        const updated = await invoke<string[]>("add_allowed_dir", { path: selected });
-        setDirs(updated);
+      if (typeof selected === "string" && selected && !dirs.includes(selected)) {
+        onChange([...dirs, selected]);
       }
     } catch { }
     setLoading(false);
   };
 
-  const removeDir = async (path: string) => {
-    const updated = await invoke<string[]>("remove_allowed_dir", { path });
-    setDirs(updated);
+  const removeDir = (path: string) => {
+    onChange(dirs.filter(d => d !== path));
   };
 
   return (
@@ -1275,16 +1271,22 @@ function SandboxTab() {
 
 // ── Server tab ────────────────────────────────────────────────────────────────
 
-function ServerTab({ settings, onChange }: { settings: AppSettings; onChange: (s: AppSettings) => void }) {
+function ServerTab({ settings, onChange, activeProfile, onProfileChange }: {
+  settings: AppSettings;
+  onChange: (s: AppSettings) => void;
+  activeProfile: Profile | null;
+  onProfileChange: (p: Profile) => void;
+}) {
   const [testState, setTestState] = useState<"idle" | "testing" | "ok" | string>("idle");
   const gpuOn  = settings.numGPULayers !== null;
   const gpuVal = settings.numGPULayers ?? 999;
 
+  const effectiveHost = activeProfile?.host || settings.host;
+
   const testConnection = async () => {
     setTestState("testing");
     try {
-      // Push the current (possibly unsaved) host to Rust before testing
-      await invoke("set_ollama_host", { host: settings.host });
+      await invoke("set_ollama_host", { host: effectiveHost });
       await invoke<string[]>("get_models");
       setTestState("ok");
     } catch (e) { setTestState(String(e)); }
@@ -1295,7 +1297,7 @@ function ServerTab({ settings, onChange }: { settings: AppSettings; onChange: (s
       <div className="server-section">
         <h3 className="server-heading">Ollama Server</h3>
         <div className="field">
-          <label>Server URL</label>
+          <label>Default Server URL</label>
           <div style={{ display: "flex", gap: 8 }}>
             <input className="admin-input" style={{ flex: 1, fontFamily: "monospace" }}
               value={settings.host} onChange={e => onChange({ ...settings, host: e.target.value })}
@@ -1303,6 +1305,20 @@ function ServerTab({ settings, onChange }: { settings: AppSettings; onChange: (s
             <button className="btn" onClick={() => onChange({ ...settings, host: "http://localhost:11434" })}>Reset</button>
           </div>
         </div>
+        {activeProfile && (
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>Profile Override — <strong>{activeProfile.name}</strong></label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input className="admin-input" style={{ flex: 1, fontFamily: "monospace" }}
+                value={activeProfile.host ?? ""}
+                onChange={e => onProfileChange({ ...activeProfile, host: e.target.value || undefined })}
+                placeholder={`Inherits: ${settings.host}`} />
+              {activeProfile.host && (
+                <button className="btn" onClick={() => onProfileChange({ ...activeProfile, host: undefined })}>Clear</button>
+              )}
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
           <button className="btn primary" onClick={testConnection} disabled={testState === "testing"}>
             Test Connection
@@ -1313,7 +1329,7 @@ function ServerTab({ settings, onChange }: { settings: AppSettings; onChange: (s
             <span style={{ fontSize: 12, color: "#f87171" }}>✕ {testState}</span>
           )}
         </div>
-        <p className="server-note">The URL of your Ollama instance. Change this to connect to a remote server.</p>
+        <p className="server-note">Default URL for all profiles. Set a profile override to use a different Ollama instance per profile.</p>
       </div>
 
       <div className="admin-divider" />
@@ -1388,10 +1404,11 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("tools");
   const [draft, setDraft] = useState<AppSettings>({ ...settings, models: [...settings.models] });
 
-  // The active profile (if any) or global settings is the "context" for MCP/OpenAPI tabs
+  // The active profile (if any) or global settings is the "context" for MCP/OpenAPI/Sandbox/Server tabs
   const activeProfile = draft.profiles.find(p => p.id === draft.activeProfileId) ?? null;
   const ctxMCP     = (activeProfile ? activeProfile.mcpServers   : draft.mcpServers)   ?? [];
   const ctxOpenAPI = (activeProfile ? activeProfile.openapiSpecs : draft.openapiSpecs) ?? [];
+  const ctxDirs    = (activeProfile ? activeProfile.allowedDirs  : draft.allowedDirs)  ?? [];
 
   const setCtxMCP = (servers: StoredMCPServer[]) => {
     if (activeProfile) {
@@ -1406,6 +1423,16 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
     } else {
       setDraft(d => ({ ...d, openapiSpecs: specs }));
     }
+  };
+  const setCtxDirs = (dirs: string[]) => {
+    if (activeProfile) {
+      setDraft(d => ({ ...d, profiles: d.profiles.map(p => p.id === activeProfile.id ? { ...p, allowedDirs: dirs } : p) }));
+    } else {
+      setDraft(d => ({ ...d, allowedDirs: dirs }));
+    }
+  };
+  const setActiveProfile = (p: Profile) => {
+    setDraft(d => ({ ...d, profiles: d.profiles.map(existing => existing.id === p.id ? p : existing) }));
   };
 
   const tabs: { id: Tab; icon: string; label: string }[] = [
@@ -1435,7 +1462,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
           ))}
         </div>
         <div className="admin-divider" />
-        {activeProfile && ["mcp","openapi","tools"].includes(tab) && (
+        {activeProfile && ["mcp","openapi","tools","sandbox","server"].includes(tab) && (
           <div style={{ padding: "4px 16px", background: "var(--purple-bg)", borderBottom: "1px solid var(--purple-border)", fontSize: 11, color: "var(--purple)", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
             <span>🤖</span> Profile: <strong>{activeProfile.name}</strong>
           </div>
@@ -1446,8 +1473,8 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
           {tab === "models"  && <ModelsTab  settings={draft} onChange={setDraft} />}
           {tab === "openapi" && <OpenAPITab stored={ctxOpenAPI} onChange={setCtxOpenAPI} />}
           {tab === "mcp"     && <MCPTab stored={ctxMCP} onChange={setCtxMCP} />}
-          {tab === "sandbox" && <SandboxTab />}
-          {tab === "server"  && <ServerTab  settings={draft} onChange={setDraft} />}
+          {tab === "sandbox" && <SandboxTab dirs={ctxDirs} onChange={setCtxDirs} />}
+          {tab === "server"  && <ServerTab  settings={draft} onChange={setDraft} activeProfile={activeProfile} onProfileChange={setActiveProfile} />}
           {tab === "defaults" && <DefaultsTab settings={draft} onChange={setDraft} />}
         </div>
       </div>

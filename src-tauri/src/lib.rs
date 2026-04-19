@@ -242,6 +242,12 @@ fn persist_allowed_dirs(state: &State<'_, AppState>) {
     }
 }
 
+#[tauri::command]
+fn set_allowed_dirs(dirs: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+    *state.allowed_dirs.lock().unwrap() = dirs;
+    Ok(())
+}
+
 // ── Built-in tool schemas ─────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -731,6 +737,7 @@ pub fn run() {
             get_allowed_dirs,
             add_allowed_dir,
             remove_allowed_dir,
+            set_allowed_dirs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -169,6 +169,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   openapiSpecs: [],
   profiles: [],
   activeProfileId: null,
+  allowedDirs: undefined,
 };
 
 function injectBuiltinSpecs(specs: StoredOpenAPISpec[]): StoredOpenAPISpec[] {
@@ -550,10 +551,12 @@ export default function App() {
   const activeProfile: Profile | null =
     settings.profiles.find(p => p.id === settings.activeProfileId) ?? null;
 
-  // Fetch models and sync host on mount and when settings.host changes
+  const effectiveHost = activeProfile?.host || settings.host;
+
+  // Fetch models and sync host on mount and when effective host changes
   const fetchModels = useCallback(async () => {
     try {
-      await invoke("set_ollama_host", { host: settings.host });
+      await invoke("set_ollama_host", { host: effectiveHost });
       const list = await invoke<string[]>("get_models");
       setSettings(prev => {
         const merged = [...list, ...prev.models.filter(m => !list.includes(m))];
@@ -563,9 +566,9 @@ export default function App() {
       });
       setSelectedModel(m => m && list.includes(m) ? m : (list[0] ?? ""));
     } catch { /* Ollama not running */ }
-  }, [settings.host]);
+  }, [effectiveHost]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { fetchModels(); }, [settings.host]);
+  useEffect(() => { fetchModels(); }, [effectiveHost]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -744,25 +747,46 @@ export default function App() {
     setChatParams(defaultChatParams());
   };
 
-  // Sync Rust's runtime MCP/OpenAPI state to whichever context is now active
+  // Sync Rust's runtime state to whichever profile/global context is now active
   const syncServers = async (s: AppSettings) => {
-    const ctx = s.profiles.find(p => p.id === s.activeProfileId) ?? s;
-    const mcp     = (ctx as { mcpServers?: unknown }).mcpServers;
-    const openapi = (ctx as { openapiSpecs?: unknown }).openapiSpecs;
-    const enabledOpenapi = Array.isArray(openapi)
-      ? (openapi as StoredOpenAPISpec[]).filter(s => s.enabled !== false)
-      : [];
-    await invoke("set_mcp_servers",   { servers: Array.isArray(mcp) ? mcp : [] }).catch(() => {});
+    const profile = s.profiles.find(p => p.id === s.activeProfileId) ?? null;
+    const ctx     = profile ?? s;
+    const mcp     = ctx.mcpServers ?? [];
+    const openapi = ctx.openapiSpecs ?? [];
+    const host    = profile?.host || s.host;
+    const dirs    = profile?.allowedDirs ?? s.allowedDirs ?? [];
+    const enabledOpenapi = openapi.filter(sp => sp.enabled !== false);
+    await invoke("set_mcp_servers",   { servers: mcp }).catch(() => {});
     await invoke("set_openapi_specs", { specs: enabledOpenapi }).catch(() => {});
+    await invoke("set_ollama_host",   { host }).catch(() => {});
+    await invoke("set_allowed_dirs",  { dirs }).catch(() => {});
   };
 
-  // Sync on first mount
-  useEffect(() => { syncServers(settings); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // On first mount: migrate persisted allowed_dirs from Rust if not yet in frontend settings
+  useEffect(() => {
+    const doInit = async () => {
+      let s = settings;
+      if (s.allowedDirs === undefined) {
+        const persisted = await invoke<string[]>("get_allowed_dirs").catch(() => [] as string[]);
+        if (persisted.length > 0) {
+          s = { ...s, allowedDirs: persisted };
+          saveSettings(s);
+          setSettings(s);
+        } else {
+          s = { ...s, allowedDirs: [] };
+          saveSettings(s);
+          setSettings(s);
+        }
+      }
+      await syncServers(s);
+    };
+    doInit();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSaveSettings = async (newSettings: AppSettings) => {
     saveSettings(newSettings);
     setSettings(newSettings);
-    await invoke("set_ollama_host", { host: newSettings.host });
+    await syncServers(newSettings);
     const ap = newSettings.profiles.find(p => p.id === newSettings.activeProfileId);
     if (ap?.model && newSettings.models.includes(ap.model)) setSelectedModel(ap.model);
   };
