@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Configuration — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Configure LexiChat: profiles, system prompts, chat parameters, file access, and advanced model settings."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .prose-code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="getting-started.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Getting Started</a>
+      <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="tools.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Tools</a>
+      <a href="integrations.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Integrations</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">On this page</div>
+      <a href="#opening-settings" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Opening Settings</a>
+      <a href="#profiles" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Profiles</a>
+      <a href="#system-prompt" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">System Prompt</a>
+      <a href="#file-access" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">File Access</a>
+      <a href="#chat-params" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Chat Parameters</a>
+      <a href="#advanced-params" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Advanced Params</a>
+      <a href="#defaults" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Default Overrides</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Configuration</h1>
+    <p class="text-lg text-slate-600 mb-10">Profiles, system prompts, file sandboxing, and chat parameter tuning — all in one place.</p>
+
+    <!-- Opening Settings -->
+    <section id="opening-settings" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">settings</span> Opening Settings
+      </h2>
+      <p class="text-slate-600 mb-4">Click the <strong>Settings</strong> gear icon (⚙) in the top-right toolbar to open the Settings dialog. It contains four tabs:</p>
+      <div class="grid sm:grid-cols-4 gap-3">
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-center">
+          <div class="text-xl mb-1">👤</div>
+          <div class="text-xs font-semibold">Profiles</div>
+          <div class="text-xs text-slate-400 mt-1">Manage personas and profile-level config</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-center">
+          <div class="text-xl mb-1">🔧</div>
+          <div class="text-xs font-semibold">General</div>
+          <div class="text-xs text-slate-400 mt-1">App-wide settings and Ollama endpoint</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-center">
+          <div class="text-xl mb-1">🎛</div>
+          <div class="text-xs font-semibold">Defaults</div>
+          <div class="text-xs text-slate-400 mt-1">Default chat parameter presets</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-center">
+          <div class="text-xl mb-1">🔌</div>
+          <div class="text-xs font-semibold">Tools</div>
+          <div class="text-xs text-slate-400 mt-1">Manage built-in and custom tools</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Profiles -->
+    <section id="profiles" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">person</span> Profiles
+      </h2>
+      <p class="text-slate-600 mb-5">Profiles are saved configurations you can switch between instantly. Each profile has its own:</p>
+      <div class="overflow-hidden bg-white border border-slate-200 rounded-xl mb-5">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Setting</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr>
+              <td class="px-4 py-3 font-medium prose-code text-sm">name</td>
+              <td class="px-4 py-3 text-slate-600">Display name shown in the profile switcher</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 font-medium prose-code text-sm">model</td>
+              <td class="px-4 py-3 text-slate-600">Default Ollama model to preselect for this profile</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 font-medium prose-code text-sm">systemPrompt</td>
+              <td class="px-4 py-3 text-slate-600">The system message sent to the model every conversation</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 font-medium prose-code text-sm">allowedDirs</td>
+              <td class="px-4 py-3 text-slate-600">Folders the AI can read/write (see File Access below)</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 font-medium prose-code text-sm">chatParams</td>
+              <td class="px-4 py-3 text-slate-600">Default chat parameter preset for new conversations</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Managing profiles</div>
+        <div class="space-y-2 text-sm text-slate-600">
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">add_circle</span> Click <strong>New Profile</strong> to create one from scratch or copy an existing profile</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">edit</span> Click a profile name to edit its settings inline</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">swap_horiz</span> Switch active profile from the dropdown in the top toolbar</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">delete</span> Delete profiles (the default profile cannot be deleted)</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- System Prompt -->
+    <section id="system-prompt" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">description</span> System Prompt
+      </h2>
+      <p class="text-slate-600 mb-4">The system prompt is a hidden instruction sent to the model before your first message in every new conversation. Use it to set the AI's role, tone, response language, or any persistent instructions.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-5">
+        <div class="bg-slate-50 border-b border-slate-200 px-4 py-2 text-xs text-slate-400 font-semibold uppercase tracking-wider">Example: Developer profile system prompt</div>
+        <div class="p-4 prose-code text-sm text-slate-700 leading-relaxed whitespace-pre-wrap bg-slate-900 text-green-300">You are an expert software engineer assistant. Reply with code-first answers. Use fenced code blocks with the correct language identifier. Prefer concise, idiomatic solutions. When asked to write a file, always use the write_file tool with a complete absolute path.</div>
+      </div>
+
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">tips_and_updates</span>
+        <div class="text-sm text-slate-700">
+          The system prompt can also be overridden <strong>per conversation</strong> using the Advanced chat parameters panel — useful for one-off persona changes without touching your profile.
+        </div>
+      </div>
+    </section>
+
+    <!-- File Access -->
+    <section id="file-access" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">folder_managed</span> File Access (Allowed Directories)
+      </h2>
+      <p class="text-slate-600 mb-5">LexiChat restricts file tools to a whitelist of directories. The AI cannot read or write files outside these paths — this is enforced in the Rust backend, not just the prompt.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Adding a directory</div>
+        <ol class="space-y-2 text-sm text-slate-600 list-decimal list-inside">
+          <li>Open Settings → select your profile</li>
+          <li>Under <strong>Allowed Directories</strong>, click <strong>Add folder</strong></li>
+          <li>A system folder picker opens — navigate to the desired folder and confirm</li>
+          <li>The path appears in the list; click <strong>×</strong> to remove it later</li>
+        </ol>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">warning</span>
+        <div class="text-sm text-slate-700">
+          Avoid adding high-level paths like your home directory (<code class="prose-code">~</code>) to the allowed list. Instead, add specific working folders (e.g. <code class="prose-code">~/Documents/LexiChat</code>) to minimise the blast radius of accidental writes.
+        </div>
+      </div>
+    </section>
+
+    <!-- Chat Parameters -->
+    <section id="chat-params" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">tune</span> Chat Parameters (Per-Conversation)
+      </h2>
+      <p class="text-slate-600 mb-5">The <strong>sliders icon</strong> next to the attach button opens a quick-access panel for adjusting the current conversation's behaviour. Changes apply immediately to the next message you send and reset when you start a new chat.</p>
+
+      <div class="space-y-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent text-lg">psychology</span>
+            <div class="font-semibold text-sm">Response Style</div>
+          </div>
+          <div class="grid sm:grid-cols-3 gap-3 text-sm">
+            <div class="bg-slate-50 rounded-lg p-3">
+              <div class="font-medium mb-1">Precise</div>
+              <div class="text-xs text-slate-500">Low temperature (0.2). Best for facts, code, analysis — minimal creativity or variation.</div>
+            </div>
+            <div class="bg-indigo-50 rounded-lg p-3 border border-accent/20">
+              <div class="font-medium mb-1 text-accent">Balanced ✓ default</div>
+              <div class="text-xs text-slate-500">Model's own default temperature. Good for general-purpose conversations.</div>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-3">
+              <div class="font-medium mb-1">Creative</div>
+              <div class="text-xs text-slate-500">High temperature (1.0). More varied, imaginative — best for brainstorming and writing.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent text-lg">short_text</span>
+            <div class="font-semibold text-sm">Response Length</div>
+          </div>
+          <div class="grid sm:grid-cols-4 gap-3 text-xs">
+            <div class="bg-slate-50 rounded-lg p-3 text-center"><div class="font-medium mb-1">Short</div><div class="text-slate-400">256 tokens max</div></div>
+            <div class="bg-slate-50 rounded-lg p-3 text-center"><div class="font-medium mb-1">Medium</div><div class="text-slate-400">1024 tokens max</div></div>
+            <div class="bg-slate-50 rounded-lg p-3 text-center"><div class="font-medium mb-1">Long</div><div class="text-slate-400">4096 tokens max</div></div>
+            <div class="bg-indigo-50 rounded-lg p-3 text-center border border-accent/20"><div class="font-medium mb-1 text-accent">Auto ✓</div><div class="text-slate-400">Model decides</div></div>
+          </div>
+        </div>
+
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent text-lg">memory</span>
+            <div class="font-semibold text-sm">Memory (Context Window)</div>
+          </div>
+          <div class="grid sm:grid-cols-2 gap-3 text-sm">
+            <div class="bg-indigo-50 rounded-lg p-3 border border-accent/20">
+              <div class="font-medium mb-1 text-accent">Standard ✓ default</div>
+              <div class="text-xs text-slate-500">Uses the model's native context window. Recommended — avoids accidental truncation of large context models.</div>
+            </div>
+            <div class="bg-slate-50 rounded-lg p-3">
+              <div class="font-medium mb-1">Extended</div>
+              <div class="text-xs text-slate-500">Forces 8 192 token context. Use if the model's default is unexpectedly short.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Advanced Params -->
+    <section id="advanced-params" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">science</span> Advanced Parameters
+      </h2>
+      <p class="text-slate-600 mb-5">Click <strong>"Advanced settings…"</strong> at the bottom of the chat params panel to access raw model parameters. These map directly to the Ollama API's <code class="prose-code bg-slate-100 px-1.5 py-0.5 rounded text-sm">options</code> object.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Parameter</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Range</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">What it does</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">temperature</td>
+              <td class="px-4 py-3 text-slate-400">0–2</td>
+              <td class="px-4 py-3 text-slate-600">Controls randomness. Lower = more deterministic, higher = more creative.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">top_p</td>
+              <td class="px-4 py-3 text-slate-400">0–1</td>
+              <td class="px-4 py-3 text-slate-600">Nucleus sampling. Limits token selection to the top-P probability mass.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">top_k</td>
+              <td class="px-4 py-3 text-slate-400">1–100</td>
+              <td class="px-4 py-3 text-slate-600">Limits selection to the top K most likely tokens at each step.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">repeat_penalty</td>
+              <td class="px-4 py-3 text-slate-400">0.5–2</td>
+              <td class="px-4 py-3 text-slate-600">Penalises recently used tokens to reduce repetition.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">seed</td>
+              <td class="px-4 py-3 text-slate-400">integer</td>
+              <td class="px-4 py-3 text-slate-600">Fix a seed for reproducible outputs. Leave blank for random.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">num_ctx</td>
+              <td class="px-4 py-3 text-slate-400">tokens</td>
+              <td class="px-4 py-3 text-slate-600">Override the context window size in tokens.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">num_predict</td>
+              <td class="px-4 py-3 text-slate-400">tokens</td>
+              <td class="px-4 py-3 text-slate-600">Maximum number of tokens to generate in the response.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">system_prompt_override</td>
+              <td class="px-4 py-3 text-slate-400">text</td>
+              <td class="px-4 py-3 text-slate-600">Replace the profile system prompt just for this conversation.</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">keep_alive</td>
+              <td class="px-4 py-3 text-slate-400">e.g. "5m"</td>
+              <td class="px-4 py-3 text-slate-600">How long Ollama keeps the model loaded after the last request.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Defaults -->
+    <section id="defaults">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">bookmarks</span> Default Overrides
+      </h2>
+      <p class="text-slate-600 mb-4">Go to <strong>Settings → Defaults</strong> to set the chat parameter defaults that apply when you start a new conversation (or when a profile doesn't specify its own). These are the same controls as the per-conversation panel, but they're saved persistently and used as the starting point for every new chat.</p>
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">info</span>
+        <div class="text-sm text-slate-700">
+          <strong>Priority order:</strong> Per-conversation params (highest) → Profile defaults → App defaults (lowest). If a profile doesn't set a default, the app-level default is used.
+        </div>
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

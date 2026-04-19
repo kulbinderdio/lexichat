@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Features — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Explore LexiChat's full feature set: streaming chat, web search, file tools, profiles, vision, and more."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .prose-code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  .feature-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 99px; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="getting-started.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Getting Started</a>
+      <a href="configuration.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Configuration</a>
+      <a href="tools.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Tools</a>
+      <a href="integrations.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Integrations</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">On this page</div>
+      <a href="#chat" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Chat &amp; Streaming</a>
+      <a href="#web-search" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Web Search</a>
+      <a href="#file-tools" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">File Tools</a>
+      <a href="#vision" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Vision / Images</a>
+      <a href="#profiles" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Profiles</a>
+      <a href="#model-control" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Model Control</a>
+      <a href="#privacy" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Privacy</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Features Overview</h1>
+    <p class="text-lg text-slate-600 mb-10">A complete tour of what LexiChat can do for you — out of the box, no cloud required.</p>
+
+    <!-- Chat & Streaming -->
+    <section id="chat" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">chat</span> Chat &amp; Streaming Responses
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Core</div>
+      <p class="text-slate-600 mb-4">Every response streams token-by-token directly from the local Ollama server — there's no buffering and no waiting for a full response before you start reading. The chat interface renders Markdown (headings, bold, code blocks, lists) as it arrives.</p>
+      <ul class="space-y-2 text-sm text-slate-600">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Full Markdown rendering with syntax-highlighted code blocks</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Copy individual messages or entire conversations</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Full conversation history maintained across the session</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> New Chat button to clear context and start fresh</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Stop generation mid-stream</li>
+      </ul>
+    </section>
+
+    <!-- Web Search -->
+    <section id="web-search" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">travel_explore</span> Web Search
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Built-in tool</div>
+      <p class="text-slate-600 mb-4">LexiChat has a built-in <code class="prose-code bg-slate-100 px-1.5 py-0.5 rounded text-sm">web_search</code> tool powered by DuckDuckGo. The AI decides autonomously when a search is needed — you don't have to tell it to search, just ask your question naturally.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">How it works</div>
+        <div class="space-y-3">
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0">1</div>
+            <p class="text-sm text-slate-600">You ask a question that requires current information (news, prices, live data)</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0">2</div>
+            <p class="text-sm text-slate-600">The AI calls <code class="prose-code text-xs bg-slate-100 px-1 rounded">web_search</code> — you see a <span class="prose-code text-xs bg-slate-100 px-1 rounded">⚙ web_search("query")</span> indicator appear</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0">3</div>
+            <p class="text-sm text-slate-600">Results (title, URL, snippet) are fed back to the AI, which synthesises an answer with source links</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">shield</span>
+        <div class="text-sm text-slate-700">All searches go through DuckDuckGo — no tracking, no personalised profiling. Search queries never leave your machine except as anonymous DuckDuckGo requests.</div>
+      </div>
+    </section>
+
+    <!-- File Tools -->
+    <section id="file-tools" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">folder_open</span> File Tools
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Built-in tools</div>
+      <p class="text-slate-600 mb-4">LexiChat can read, write, and list files on your machine. You control which folders it has access to in Settings — by default it can only access directories you explicitly allow.</p>
+
+      <div class="grid sm:grid-cols-3 gap-4 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-medium text-sm mb-1 prose-code">read_file</div>
+          <div class="text-xs text-slate-500">Read any file in your allowed directories. Great for asking the AI to summarise, translate, or analyse a document.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-medium text-sm mb-1 prose-code">write_file</div>
+          <div class="text-xs text-slate-500">Have the AI draft and save a document, create a script, or save output to a file. You choose the destination folder.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-medium text-sm mb-1 prose-code">list_directory</div>
+          <div class="text-xs text-slate-500">Browse folder contents so the AI can find the right file to read or reference in its answer.</div>
+        </div>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">lock</span>
+        <div class="text-sm text-slate-700"><strong>Sandboxed access:</strong> File tools are strictly limited to the directories you configured. The AI cannot read or write outside those paths — any attempt is blocked at the Rust layer.</div>
+      </div>
+    </section>
+
+    <!-- Vision -->
+    <section id="vision" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">image</span> Vision / Image Analysis
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Requires a vision-capable model</div>
+      <p class="text-slate-600 mb-4">Attach images directly to your message using the paperclip icon. With a vision model like <code class="prose-code bg-slate-100 px-1.5 py-0.5 rounded text-sm">llava</code> or <code class="prose-code bg-slate-100 px-1.5 py-0.5 rounded text-sm">gemma3</code>, the AI can describe, analyse, extract text from, or answer questions about the image.</p>
+      <ul class="space-y-2 text-sm text-slate-600">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Supports JPEG, PNG, WebP, GIF</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Multiple images per message</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Images are sent locally to Ollama — never uploaded to any cloud</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base mt-0.5">check_circle</span> Preview thumbnails shown before sending</li>
+      </ul>
+    </section>
+
+    <!-- Profiles -->
+    <section id="profiles" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">person</span> Profiles &amp; Personas
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Settings → Profiles</div>
+      <p class="text-slate-600 mb-4">Profiles let you instantly switch the AI's persona, default model, system prompt, and parameter defaults. Create a profile for each context you work in:</p>
+
+      <div class="grid sm:grid-cols-2 gap-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="text-2xl">💻</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Developer</div>
+            <div class="text-xs text-slate-500">Technical system prompt, code-optimised model, long context window, Precise style</div>
+          </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="text-2xl">✍️</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Writer</div>
+            <div class="text-xs text-slate-500">Creative writing persona, higher temperature, longer responses, Creative style</div>
+          </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="text-2xl">📊</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Analyst</div>
+            <div class="text-xs text-slate-500">Data-focused prompt, file access enabled, Precise style, medium responses</div>
+          </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="text-2xl">🌍</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Translator</div>
+            <div class="text-xs text-slate-500">Multilingual system prompt, balanced style, translation-focused model</div>
+          </div>
+        </div>
+      </div>
+      <p class="text-sm text-slate-600">Each profile stores its own system prompt, allowed file directories, default model, and chat parameter defaults. Switch profiles instantly from the top bar.</p>
+    </section>
+
+    <!-- Model Control -->
+    <section id="model-control" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">tune</span> Model &amp; Parameter Control
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Chat params button · Settings → Defaults</div>
+      <p class="text-slate-600 mb-5">Fine-tune how the AI responds with a two-tier parameter system — simple presets for everyday use, raw numbers for power users.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-5">
+        <div class="border-b border-slate-100 px-5 py-3 bg-slate-50">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tier 1 — Quick presets</div>
+        </div>
+        <div class="p-5 grid sm:grid-cols-3 gap-4 text-sm">
+          <div>
+            <div class="font-medium mb-1">Response Style</div>
+            <div class="space-y-1 text-slate-500">
+              <div>Precise — factual, low creativity</div>
+              <div>Balanced — default</div>
+              <div>Creative — higher variance</div>
+            </div>
+          </div>
+          <div>
+            <div class="font-medium mb-1">Response Length</div>
+            <div class="space-y-1 text-slate-500">
+              <div>Short — concise answers</div>
+              <div>Medium — balanced</div>
+              <div>Long — comprehensive</div>
+              <div>Auto — model decides</div>
+            </div>
+          </div>
+          <div>
+            <div class="font-medium mb-1">Memory</div>
+            <div class="space-y-1 text-slate-500">
+              <div>Standard — model default</div>
+              <div>Extended — 8 K context</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <div class="border-b border-slate-100 px-5 py-3 bg-slate-50">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Tier 2 — Advanced (click "Advanced settings…")</div>
+        </div>
+        <div class="p-5 grid sm:grid-cols-2 gap-x-8 gap-y-2 text-sm text-slate-600">
+          <div class="flex justify-between"><span>Temperature</span><span class="text-slate-400 prose-code text-xs">0–2</span></div>
+          <div class="flex justify-between"><span>Top-P</span><span class="text-slate-400 prose-code text-xs">0–1</span></div>
+          <div class="flex justify-between"><span>Top-K</span><span class="text-slate-400 prose-code text-xs">1–100</span></div>
+          <div class="flex justify-between"><span>Repeat Penalty</span><span class="text-slate-400 prose-code text-xs">0.5–2</span></div>
+          <div class="flex justify-between"><span>Seed</span><span class="text-slate-400 prose-code text-xs">integer</span></div>
+          <div class="flex justify-between"><span>Context size (num_ctx)</span><span class="text-slate-400 prose-code text-xs">tokens</span></div>
+          <div class="flex justify-between"><span>Max tokens (num_predict)</span><span class="text-slate-400 prose-code text-xs">tokens</span></div>
+          <div class="flex justify-between"><span>System prompt override</span><span class="text-slate-400 prose-code text-xs">text</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Privacy -->
+    <section id="privacy">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">shield</span> Privacy by Design
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Core principle</div>
+      <p class="text-slate-600 mb-5">LexiChat is built around local-first principles. Your conversations, files, and data stay on your machine.</p>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">Models run locally via Ollama — no API keys required, no cloud inference</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">Conversations are not stored or logged anywhere beyond your RAM/session</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">Web search uses DuckDuckGo with no tracking or user profiling</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">File access is sandboxed to explicit directories you choose — no silent reads</div>
+        </div>
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

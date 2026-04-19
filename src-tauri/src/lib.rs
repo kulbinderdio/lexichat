@@ -108,7 +108,11 @@ pub struct SendMessageArgs {
     pub stop: Option<Vec<String>>,
     #[serde(default)]
     pub keep_alive: Option<String>,
+    #[serde(default = "default_web_search_results")]
+    pub web_search_results: usize,
 }
+
+fn default_web_search_results() -> usize { 10 }
 
 #[tauri::command]
 async fn send_message(
@@ -195,6 +199,7 @@ async fn send_message(
         specs_snapshot,
         &state.mcp_connections,
         allowed_dirs_snapshot,
+        args.web_search_results,
         &app,
     )
     .await

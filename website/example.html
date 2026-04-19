@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>LexiChat — Your Personal Knowledge Agent</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary-container": "#e0dfe4",
+                    "primary": "#007AFF",
+                    "on-secondary-fixed": "#1a1b1f",
+                    "outline": "#717786",
+                    "on-tertiary-fixed-variant": "#7200a3",
+                    "primary-fixed-dim": "#c2c1ff",
+                    "background": "#f9f9fe",
+                    "on-tertiary": "#ffffff",
+                    "on-secondary": "#ffffff",
+                    "surface-variant": "#e2e2e7",
+                    "tertiary": "#8d22c0",
+                    "primary-container": "#6462ec",
+                    "on-error": "#ffffff",
+                    "on-secondary-container": "#626267",
+                    "on-tertiary-container": "#fffbff",
+                    "error": "#ba1a1a",
+                    "surface": "#f9f9fe",
+                    "inverse-primary": "#c2c1ff",
+                    "on-secondary-fixed-variant": "#46464b",
+                    "on-error-container": "#93000a",
+                    "surface-container-highest": "#e2e2e7",
+                    "on-primary-fixed-variant": "#332dbc",
+                    "surface-container-lowest": "#ffffff",
+                    "on-surface": "#1a1c1f",
+                    "secondary-fixed-dim": "#c6c6cb",
+                    "primary-fixed": "#e2dfff",
+                    "on-background": "#1a1c1f",
+                    "inverse-surface": "#2e3034",
+                    "on-surface-variant": "#414755",
+                    "secondary-fixed": "#e3e2e7",
+                    "tertiary-fixed-dim": "#e9b3ff",
+                    "on-tertiary-fixed": "#310048",
+                    "surface-tint": "#007AFF",
+                    "error-container": "#ffdad6",
+                    "surface-container-low": "#f3f3f8",
+                    "inverse-on-surface": "#f0f0f5",
+                    "on-primary-fixed": "#0c006b",
+                    "tertiary-container": "#a943dc",
+                    "outline-variant": "#c1c6d7",
+                    "surface-container-high": "#e8e8ed",
+                    "surface-bright": "#f9f9fe",
+                    "on-primary": "#ffffff",
+                    "tertiary-fixed": "#f6d9ff",
+                    "surface-container": "#ededf2",
+                    "secondary": "#5d5e63",
+                    "on-primary-container": "#fffbff",
+                    "surface-dim": "#d9dade"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.5rem",
+                    "lg": "0.5rem",
+                    "xl": "0.75rem",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Inter"],
+                    "body": ["Inter"],
+                    "label": ["Inter"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; background-color: #f9f9fe; color: #1a1c1f; -webkit-font-smoothing: antialiased; }
+        .glass-header { backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+        .hero-gradient { background: linear-gradient(135deg, #007AFF 0%, #4a47d2 100%); }
+        .ghost-border { border: 1px solid rgba(193, 198, 215, 0.2); }
+        .ambient-shadow { box-shadow: 0 32px 64px rgba(26, 28, 31, 0.04); }
+        details > summary { list-style: none; }
+        details > summary::-webkit-details-marker { display: none; }
+        
+        .neural-pattern {
+            background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.15) 1px, transparent 0);
+            background-size: 24px 24px;
+        }
+        .neural-lines {
+            background: linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px) 0 0 / 100px 100%,
+                        linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px) 0 0 / 100% 100px;
+        }
+    </style>
+</head>
+<body class="bg-surface selection:bg-primary-fixed selection:text-on-primary-fixed-variant">
+<!-- TopNavBar -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl shadow-sm dark:shadow-none">
+<div class="flex justify-between items-center px-8 py-4 max-w-7xl mx-auto">
+<div class="text-xl font-bold tracking-tighter text-slate-900 dark:text-white">LexiChat</div>
+<div class="hidden md:flex items-center gap-8">
+<a class="text-primary dark:text-blue-400 font-semibold font-sans tracking-tight text-sm transition-colors" href="#">Features</a>
+<a class="text-slate-600 dark:text-slate-400 font-medium font-sans tracking-tight text-sm hover:text-primary transition-colors" href="#">How it Works</a>
+<a class="text-slate-600 dark:text-slate-400 font-medium font-sans tracking-tight text-sm hover:text-primary transition-colors" href="#">Privacy</a>
+<a class="text-slate-600 dark:text-slate-400 font-medium font-sans tracking-tight text-sm hover:text-primary transition-colors" href="#">Pricing</a>
+</div>
+<div class="relative group">
+<button class="bg-primary hover:opacity-90 active:scale-95 transition-all text-on-primary px-5 py-2 rounded-lg text-sm font-semibold tracking-tight flex items-center gap-2">
+                Download
+                <span class="material-symbols-outlined text-sm">expand_more</span>
+</button>
+<div class="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-outline-variant opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-[60]">
+<div class="p-2 space-y-1">
+<a class="flex items-center gap-3 px-3 py-2 hover:bg-surface-container rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined text-lg">desktop_mac</span>
+<span class="text-sm font-medium">macOS</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 hover:bg-surface-container rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined text-lg">desktop_windows</span>
+<span class="text-sm font-medium">Windows</span>
+</a>
+<a class="flex items-center gap-3 px-3 py-2 hover:bg-surface-container rounded-lg transition-colors" href="#">
+<span class="material-symbols-outlined text-lg">terminal</span>
+<span class="text-sm font-medium">Linux</span>
+</a>
+</div>
+</div>
+</div>
+</div>
+</nav>
+<main class="pt-24">
+<!-- Hero Section -->
+<section class="px-6 pt-16 pb-24 md:pt-24 md:pb-32 max-w-7xl mx-auto text-center">
+<div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary-fixed text-on-primary-fixed-variant text-[10px] font-bold tracking-widest uppercase mb-8">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">verified_user</span>
+            Local-First AI • Cross-Platform
+        </div><img alt="LexiChat App Icon" class="w-20 h-20 mx-auto mb-8 rounded-2xl shadow-lg ring-1 ring-black/5" src="https://lh3.googleusercontent.com/aida/ADBb0ugn_0a8MvCYs-jLQe4fmS2aZRGvLxfO4gf5uI5i1pCkgTUUj-y4AraZ9DIi0gtBBmHHIlJ4ySDpzppkTyB_C9_3ZyWLzrQQ2nTj5pA3MGhx0UMR9WmeUmNdXFwbtEth3K-Bqh9_YQqWZXQ0py_ABcxhmu-jTKY9M4M7HQ2Awapoh9qnFq9IEbF9vd6S_pU2BgXX8war8HDb-I1kXadBCgiYd_URsj97-zlsRX6Oy7vMLD4j5ew4ZeaWw_VgWiNIUvs5oyGSQ0mtlCg"/>
+<h1 class="text-5xl md:text-7xl font-extrabold tracking-tighter text-on-surface mb-6">
+            Meet Your Personal <br class="hidden md:block"/> <span class="text-primary">Knowledge Agent.</span>
+</h1>
+<p class="text-lg md:text-xl text-secondary max-w-2xl mx-auto leading-relaxed mb-10">
+            The ultimate interface for Ollama. A private, local AI that doesn't just talk—it works with your files, understands your data, and automates your documentation on macOS, Windows, and Linux.
+        </p>
+<div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20">
+<div class="relative group">
+<button class="hero-gradient text-on-primary px-8 py-4 rounded-xl font-bold text-lg ambient-shadow hover:opacity-90 active:scale-95 transition-all flex items-center gap-2">
+<span class="material-symbols-outlined">download_for_offline</span>
+                    Download LexiChat
+                    <span class="material-symbols-outlined">expand_more</span>
+</button>
+<div class="absolute left-1/2 -translate-x-1/2 mt-2 w-64 bg-white rounded-2xl shadow-2xl border border-outline-variant opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-[60] p-3 text-left">
+<p class="text-[10px] font-bold text-outline uppercase px-3 pb-2 tracking-widest">Select Platform</p>
+<a class="flex items-center justify-between px-4 py-3 hover:bg-surface-container rounded-xl transition-colors group/item" href="#">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary">desktop_mac</span>
+<span class="text-sm font-bold">macOS</span>
+</div>
+<span class="text-[10px] text-secondary">Universal</span>
+</a>
+<a class="flex items-center justify-between px-4 py-3 hover:bg-surface-container rounded-xl transition-colors group/item" href="#">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary">desktop_windows</span>
+<span class="text-sm font-bold">Windows</span>
+</div>
+<span class="text-[10px] text-secondary">x64 / ARM</span>
+</a>
+<a class="flex items-center justify-between px-4 py-3 hover:bg-surface-container rounded-xl transition-colors group/item" href="#">
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-primary">terminal</span>
+<span class="text-sm font-bold">Linux</span>
+</div>
+<span class="text-[10px] text-secondary">AppImage / Deb</span>
+</a>
+</div>
+</div>
+<button class="bg-surface-container-high text-on-surface px-8 py-4 rounded-xl font-semibold text-lg hover:bg-surface-container-highest transition-colors">
+                View Documentation
+            </button>
+</div>
+<!-- App Mockup -->
+<div class="relative max-w-6xl mx-auto">
+<div class="bg-surface-container-lowest rounded-2xl p-2 md:p-4 ghost-border ambient-shadow overflow-hidden">
+<img alt="LexiChat interface" class="w-full rounded-lg" src="https://lh3.googleusercontent.com/aida/ADBb0uiWckF0G0vsnTbLFdcwAQ4AmUu6F48IksDA-oMpzBOxveuInC3UNNl8P7HKyBycXpV20RUkgFLGL1S3t6KTjXz-tOoTRgy6ug8YLJvEh-OtRxRbA8j3JgYsUCcHXiYjzTK6W8n-3zAoluBXq71hPyRUZs9NxrCJ9YfC6suijlKrYMPQci2cUTagH5qOgKNmddy6NzQRhKygCpDFlSUwkpi2kR4sLnK7pOdYyC0iyKq_RIdeAu51ZgmSRP4purRyVpoma9MoxqQH4aI"/>
+</div>
+<!-- Decorative elements -->
+<div class="absolute -z-10 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full h-full bg-primary/5 blur-[120px] rounded-full"></div>
+</div>
+</section>
+<!-- Features Grid -->
+<section class="bg-surface-container-low py-32">
+<div class="max-w-7xl mx-auto px-6">
+<div class="mb-20">
+<h2 class="text-3xl font-bold tracking-tight text-on-surface mb-4">Intelligence, unboxed.</h2>
+<p class="text-secondary">Everything you need from a modern AI workspace, living entirely on your hardware across all platforms.</p>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+<!-- Feature 1: Bento style -->
+<div class="md:col-span-8 bg-surface-container-lowest p-10 rounded-xl ghost-border hover:shadow-lg transition-shadow flex flex-col justify-between min-h-[400px]">
+<div>
+<div class="w-12 h-12 bg-primary-fixed rounded-xl flex items-center justify-center text-primary mb-6">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">psychology</span>
+</div>
+<h3 class="text-2xl font-bold text-on-surface mb-4">From General Chat to Domain Expert</h3>
+<p class="text-secondary leading-relaxed max-w-md">LexiChat indexes your local directories on any OS, turning generic AI responses into deep, context-aware insights about your specific projects.</p>
+</div>
+<div class="mt-8 pt-8 border-t border-outline-variant/10">
+<div class="flex gap-2">
+<span class="px-3 py-1 bg-surface-container-high rounded-full text-xs font-medium text-secondary">Local RAG</span>
+<span class="px-3 py-1 bg-surface-container-high rounded-full text-xs font-medium text-secondary">Cross-Platform Sync</span>
+</div>
+</div>
+</div>
+<!-- Feature 2 -->
+<div class="md:col-span-4 bg-surface-container-lowest p-10 rounded-xl ghost-border hover:shadow-lg transition-shadow">
+<div class="w-12 h-12 bg-tertiary-fixed rounded-xl flex items-center justify-center text-tertiary mb-6">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">shield</span>
+</div>
+<h3 class="text-2xl font-bold text-on-surface mb-4">100% Private</h3>
+<p class="text-secondary leading-relaxed">Powered by Ollama. No data ever leaves your machine. No telemetry, no clouds, no compromises on your intellectual property, regardless of your hardware.</p>
+</div>
+<!-- Feature 3 -->
+<div class="md:col-span-4 bg-surface-container-lowest p-10 rounded-xl ghost-border hover:shadow-lg transition-shadow">
+<div class="w-12 h-12 bg-secondary-fixed rounded-xl flex items-center justify-center text-on-secondary-fixed-variant mb-6">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">settings_input_component</span>
+</div>
+<h3 class="text-2xl font-bold text-on-surface mb-4">Infinite Extensibility</h3>
+<p class="text-secondary leading-relaxed">Connect to any service via MCP and OpenAPI specs. Build custom tools that LexiChat can invoke to perform real-world tasks on your local system.</p>
+</div>
+<!-- Feature 4 -->
+<div class="md:col-span-8 bg-surface-container-lowest p-10 rounded-xl ghost-border hover:shadow-lg transition-shadow flex flex-col md:flex-row items-center gap-10">
+<div class="flex-1">
+<div class="w-12 h-12 bg-primary-fixed rounded-xl flex items-center justify-center text-primary mb-6">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">description</span>
+</div>
+<h3 class="text-2xl font-bold text-on-surface mb-4">Built-in File Tools</h3>
+<p class="text-secondary leading-relaxed">Native support for reading and writing complex documents across all operating systems. Export summaries or draft documents directly to your desktop.</p>
+</div>
+<div class="flex-1 w-full bg-surface-container p-6 rounded-lg">
+<div class="space-y-3">
+<div class="h-2 w-3/4 bg-outline-variant/30 rounded"></div>
+<div class="h-2 w-full bg-outline-variant/30 rounded"></div>
+<div class="h-2 w-5/6 bg-outline-variant/30 rounded"></div>
+<div class="h-8 w-1/3 bg-primary/20 rounded-md mt-4 border border-primary/30 flex items-center px-2">
+<span class="text-[10px] text-primary font-bold">Exporting...</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Detailed Section: Agent Tip -->
+<section class="py-32 px-6">
+<div class="max-w-7xl mx-auto flex flex-col lg:flex-row items-center gap-16">
+<div class="lg:w-1/2">
+<div class="inline-block px-3 py-1 rounded-full bg-tertiary-fixed text-on-tertiary-fixed-variant text-[10px] font-bold tracking-widest uppercase mb-6">Pro Feature</div>
+<h2 class="text-4xl font-bold tracking-tighter text-on-surface mb-6 leading-tight">Automate your paperwork with "Agent Actions"</h2>
+<p class="text-lg text-secondary mb-8 leading-relaxed">
+                    Don't just get answers—get outputs. LexiChat can autonomously generate formatted PDF reports, Word proposals, and Markdown documentation directly to your file system, whether you're on a Mac or a PC.
+                </p>
+<div class="space-y-4">
+<div class="flex items-start gap-4">
+<span class="material-symbols-outlined text-primary">picture_as_pdf</span>
+<div>
+<h4 class="font-bold text-on-surface">One-click PDF Export</h4>
+<p class="text-sm text-secondary">Perfectly formatted research papers and briefs.</p>
+</div>
+</div>
+<div class="flex items-start gap-4">
+<span class="material-symbols-outlined text-primary">article</span>
+<div>
+<h4 class="font-bold text-on-surface">Dynamic Word Docs</h4>
+<p class="text-sm text-secondary">Generate ready-to-edit .docx files for your team.</p>
+</div>
+</div>
+</div>
+</div>
+<div class="lg:w-1/2 w-full">
+<div class="bg-surface-container-high rounded-3xl p-8 relative overflow-hidden">
+<div class="bg-surface-container-lowest rounded-2xl p-6 ambient-shadow">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-3 h-3 rounded-full bg-[#FF5F56]"></div>
+<div class="w-3 h-3 rounded-full bg-[#FFBD2E]"></div>
+<div class="w-3 h-3 rounded-full bg-[#27C93F]"></div>
+</div>
+<div class="space-y-4">
+<div class="flex gap-3">
+<div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-[10px] font-bold">L</div>
+<div class="bg-surface-container rounded-2xl p-4 text-sm text-on-surface-variant max-w-[80%]">
+                                    I've completed the market analysis. Should I export this as a PDF or Word document?
+                                </div>
+</div>
+<div class="flex flex-row-reverse gap-3">
+<div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center text-secondary text-[10px] font-bold">ME</div>
+<div class="bg-primary-container text-on-primary-container rounded-2xl p-4 text-sm max-w-[80%]">
+                                    Export as a professional PDF report to my Desktop.
+                                </div>
+</div>
+<div class="pt-4 flex gap-2">
+<div class="flex items-center gap-2 px-4 py-2 bg-surface-container-high rounded-xl text-xs font-bold text-primary">
+<span class="material-symbols-outlined text-[16px]" style="font-variation-settings: 'FILL' 1;">task_alt</span>
+                                    Market_Analysis_2024.pdf created
+                                </div>
+</div>
+</div>
+</div>
+<!-- Gradient Glow -->
+<div class="absolute -bottom-10 -right-10 w-40 h-40 bg-primary/20 blur-3xl rounded-full"></div>
+</div>
+</div>
+</div>
+</section>
+<!-- Privacy Banner (Updated) -->
+<section class="px-6 py-12">
+<div class="max-w-7xl mx-auto hero-gradient rounded-[1.5rem] p-8 md:p-14 text-center text-on-primary relative overflow-hidden shadow-2xl">
+<!-- Technical Pattern Layers -->
+<div class="absolute inset-0 neural-pattern opacity-20 pointer-events-none"></div>
+<div class="absolute inset-0 neural-lines opacity-10 pointer-events-none"></div>
+<!-- LLM Schematic-like shapes -->
+<div class="absolute top-0 right-0 w-64 h-64 border border-white/10 rounded-full -translate-y-1/2 translate-x-1/2 flex items-center justify-center">
+<div class="w-48 h-48 border border-white/5 rounded-full flex items-center justify-center">
+<div class="w-32 h-32 border border-white/5 rounded-full"></div>
+</div>
+</div>
+<div class="absolute bottom-0 left-0 w-48 h-48 bg-white/5 rounded-lg -rotate-12 -translate-x-1/4 translate-y-1/4"></div>
+<div class="relative z-10 flex flex-col items-center">
+<div class="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center mb-6 backdrop-blur-md">
+<span class="material-symbols-outlined text-4xl" style="font-variation-settings: 'FILL' 1;">lock</span>
+</div>
+<h2 class="text-3xl md:text-4xl font-extrabold tracking-tighter mb-4 text-white">Your data stays on your machine.</h2>
+<p class="text-lg text-white/80 max-w-xl mx-auto leading-relaxed">
+                    No cloud servers, no tracking, no subscription traps. LexiChat is a one-time investment in your privacy and productivity across all your devices.
+                </p>
+</div>
+</div>
+</section>
+<!-- Final CTA -->
+<section class="py-32 px-6 text-center">
+<h2 class="text-4xl md:text-5xl font-extrabold tracking-tighter text-on-surface mb-8">Ready to evolve your workspace?</h2>
+<div class="flex flex-col items-center gap-10">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl">
+<a class="group p-8 rounded-3xl bg-surface-container-low border border-outline-variant hover:border-primary transition-all text-center flex flex-col items-center" href="#">
+<div class="w-16 h-16 rounded-2xl bg-white shadow-sm flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-3xl text-primary">desktop_mac</span>
+</div>
+<span class="font-bold text-lg mb-1">macOS</span>
+<span class="text-sm text-secondary mb-6">v1.4.2 (Universal)</span>
+<div class="w-full py-3 rounded-xl bg-primary text-on-primary font-bold text-sm">Download</div>
+</a>
+<a class="group p-8 rounded-3xl bg-surface-container-low border border-outline-variant hover:border-primary transition-all text-center flex flex-col items-center" href="#">
+<div class="w-16 h-16 rounded-2xl bg-white shadow-sm flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-3xl text-primary">desktop_windows</span>
+</div>
+<span class="font-bold text-lg mb-1">Windows</span>
+<span class="text-sm text-secondary mb-6">v1.4.2 (.msi)</span>
+<div class="w-full py-3 rounded-xl bg-primary text-on-primary font-bold text-sm">Download</div>
+</a>
+<a class="group p-8 rounded-3xl bg-surface-container-low border border-outline-variant hover:border-primary transition-all text-center flex flex-col items-center" href="#">
+<div class="w-16 h-16 rounded-2xl bg-white shadow-sm flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+<span class="material-symbols-outlined text-3xl text-primary">terminal</span>
+</div>
+<span class="font-bold text-lg mb-1">Linux</span>
+<span class="text-sm text-secondary mb-6">v1.4.2 (AppImage)</span>
+<div class="w-full py-3 rounded-xl bg-primary text-on-primary font-bold text-sm">Download</div>
+</a>
+</div>
+<div class="flex items-center gap-6">
+<a class="text-secondary hover:text-primary font-medium flex items-center gap-1 transition-colors" href="#">
+                    Documentation
+                    <span class="material-symbols-outlined text-sm">arrow_forward</span>
+</a>
+<div class="w-1.5 h-1.5 rounded-full bg-outline-variant"></div>
+<a class="text-secondary hover:text-primary font-medium flex items-center gap-1 transition-colors" href="#">
+                    Release Notes
+                </a>
+</div>
+<p class="text-xs text-secondary font-label">Requires Ollama installed on your local system.</p>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="w-full border-t border-slate-200/20 dark:border-slate-800/20 bg-slate-50 dark:bg-slate-950">
+<div class="flex flex-col md:flex-row justify-between items-center px-12 py-16 w-full max-w-7xl mx-auto">
+<div class="mb-8 md:mb-0">
+<div class="font-bold text-slate-900 dark:text-white mb-2">LexiChat</div>
+<p class="text-xs font-normal text-slate-500 dark:text-slate-400">© 2024 LexiChat. Built for the modern workspace.</p>
+</div>
+<div class="flex flex-wrap justify-center gap-8">
+<a class="text-xs font-normal text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors duration-200" href="#">Documentation</a>
+<a class="text-xs font-normal text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors duration-200" href="#">Privacy Policy</a>
+<a class="text-xs font-normal text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors duration-200" href="#">Terms of Service</a>
+<a class="text-xs font-normal text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors duration-200" href="#">Support</a>
+<a class="text-xs font-normal text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors duration-200" href="#">Twitter</a>
+<a class="text-xs font-normal text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors duration-200" href="#">GitHub</a>
+</div>
+</div>
+</footer>
+</body></html>

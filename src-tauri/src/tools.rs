@@ -3,7 +3,7 @@ use std::path::Path;
 use std::fs;
 
 /// Dispatch a built-in tool call. Returns the result string.
-pub async fn dispatch_builtin(name: &str, args: &Value, allowed_dirs: &[String]) -> String {
+pub async fn dispatch_builtin(name: &str, args: &Value, allowed_dirs: &[String], web_search_results: usize) -> String {
     match name {
         "read_file"          => read_file(args, allowed_dirs),
         "write_file"         => write_file(args, allowed_dirs),
@@ -16,7 +16,20 @@ pub async fn dispatch_builtin(name: &str, args: &Value, allowed_dirs: &[String])
         "move_file"          => move_file(args, allowed_dirs),
         "delete_file"        => delete_file(args, allowed_dirs),
         "find_old_files"     => find_old_files(args, allowed_dirs),
-        "web_search"         => web_search(args).await,
+        "web_search"         => web_search(args, web_search_results).await,
+        "fetch_webpage"      => fetch_webpage(args).await,
+        // Some models call this instead of web_search — treat as an alias.
+        // The schema uses "queries" (array); we take the first element.
+        "google:search" | "google_search" => {
+            let query = args["queries"]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                .or_else(|| args["query"].as_str())
+                .unwrap_or("");
+            let patched = serde_json::json!({ "query": query });
+            web_search(&patched, web_search_results).await
+        },
         "compose_email"      => compose_email(args),
         _                    => format!("Unknown tool: {name}"),
     }
@@ -582,7 +595,7 @@ fn compose_email(args: &Value) -> String {
 
 // ── Web search ────────────────────────────────────────────────────────────────
 
-async fn web_search(args: &Value) -> String {
+async fn web_search(args: &Value, max_results: usize) -> String {
     let query = args["query"].as_str().unwrap_or("");
     if query.is_empty() { return "No query provided".into(); }
 
@@ -639,7 +652,7 @@ async fn web_search(args: &Value) -> String {
                 Ok(h) => h,
                 Err(e) => return format!("Search error: {e}"),
             };
-            let results = extract_ddg_results(&html);
+            let results = extract_ddg_results(&html, max_results);
             if results.is_empty() {
                 format!("No results found for: {query}")
             } else {
@@ -656,6 +669,157 @@ async fn web_search(args: &Value) -> String {
         }
         Err(e) => format!("Search error: {e}"),
     }
+}
+
+async fn fetch_webpage(args: &Value) -> String {
+    let url = args["url"].as_str().unwrap_or("");
+    if url.is_empty() { return "No URL provided".into(); }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return format!("Invalid URL '{url}': must start with http:// or https://");
+    }
+
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, REFERER, UPGRADE_INSECURE_REQUESTS};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static(
+        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    ));
+    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
+    headers.insert(CACHE_CONTROL,   HeaderValue::from_static("max-age=0"));
+    headers.insert(UPGRADE_INSECURE_REQUESTS, HeaderValue::from_static("1"));
+    // Simulate arriving from a Google search — many sites (BBC, Guardian, etc.)
+    // allow more content to apparent search-engine referrals.
+    headers.insert(REFERER, HeaderValue::from_static("https://www.google.com/"));
+    headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("document"));
+    headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("navigate"));
+    headers.insert("Sec-Fetch-Site", HeaderValue::from_static("cross-site"));
+    headers.insert("Sec-Ch-Ua", HeaderValue::from_static(
+        r#""Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99""#,
+    ));
+    headers.insert("Sec-Ch-Ua-Mobile",   HeaderValue::from_static("?0"));
+    headers.insert("Sec-Ch-Ua-Platform", HeaderValue::from_static("\"macOS\""));
+
+    let client = match reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+        .default_headers(headers)
+        .cookie_store(true)
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return format!("Error building HTTP client: {e}"),
+    };
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => return format!("Error fetching '{url}': {e}"),
+    };
+
+    let status = resp.status();
+    let html = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => return format!("Error reading response from '{url}': {e}"),
+    };
+
+    let needs_jina = if !status.is_success() {
+        matches!(status.as_u16(), 401 | 403 | 429 | 451)
+    } else {
+        extract_text_from_html(&html).len() < 200
+    };
+
+    if needs_jina {
+        return fetch_via_jina(&client, url).await;
+    }
+
+    extract_and_truncate_html(&html, url)
+}
+
+/// Strip HTML and return clean text. Returns empty string for JS-only shells.
+fn extract_text_from_html(html: &str) -> String {
+    let cleaned = remove_tag_block(html, "script");
+    let cleaned = remove_tag_block(&cleaned, "style");
+    let cleaned = remove_tag_block(&cleaned, "head");
+    let text = strip_tags(&cleaned);
+    let text = decode_html_entities(&text);
+    text.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_and_truncate_html(html: &str, url: &str) -> String {
+    let text = extract_text_from_html(html);
+    if text.is_empty() {
+        return format!("No readable text found at '{url}'");
+    }
+    const MAX: usize = 6000;
+    if text.len() > MAX {
+        format!("{}\n\n[truncated — {} chars total]", &text[..MAX], text.len())
+    } else {
+        text
+    }
+}
+
+/// Fallback: fetch via Jina Reader, which renders JavaScript and returns clean markdown.
+async fn fetch_via_jina(client: &reqwest::Client, url: &str) -> String {
+    let jina_url = format!("https://r.jina.ai/{url}");
+    let resp = match client
+        .get(&jina_url)
+        .header("Accept", "text/plain")
+        .header("X-No-Cache", "true")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return format!("Could not fetch '{url}' (Jina fallback also failed: {e})"),
+    };
+
+    let status = resp.status();
+    let text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => return format!("Could not read Jina response for '{url}': {e}"),
+    };
+
+    if !status.is_success() {
+        return format!(
+            "Could not fetch '{url}': HTTP {status}. \
+            The site may require authentication or block all automated access."
+        );
+    }
+
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return format!("No readable content found at '{url}'");
+    }
+
+    const MAX: usize = 6000;
+    if text.len() > MAX {
+        format!("{}\n\n[truncated — {} chars total]", &text[..MAX], text.len())
+    } else {
+        text
+    }
+}
+
+/// Remove all content inside a tag (including the tag itself), e.g. <script>…</script>.
+fn remove_tag_block(html: &str, tag: &str) -> String {
+    let open  = format!("<{tag}");
+    let close = format!("</{tag}>");
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    loop {
+        let Some(start) = rest.to_lowercase().find(&open) else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start..];
+        let end_offset = after_open.to_lowercase().find(&close)
+            .map(|p| p + close.len())
+            .unwrap_or(after_open.len());
+        rest = &rest[start + end_offset..];
+    }
+    out
 }
 
 /// Decode a DuckDuckGo redirect href into a real destination URL.
@@ -675,11 +839,11 @@ fn decode_ddg_href(href: &str) -> String {
 }
 
 /// Extract (title, snippet, url) tuples from DuckDuckGo HTML results page.
-fn extract_ddg_results(html: &str) -> Vec<(String, String, String)> {
+fn extract_ddg_results(html: &str, max_results: usize) -> Vec<(String, String, String)> {
     let mut results = Vec::new();
     let mut pos = 0;
 
-    while results.len() < 6 {
+    while results.len() < max_results {
         // Find next result block by locating result__a (title link)
         let Some(title_idx) = html[pos..].find("class=\"result__a\"") else { break };
         let block_start = pos + title_idx;
@@ -864,8 +1028,10 @@ pub fn all_builtin_schemas() -> Vec<serde_json::Value> {
             vec![("directory","string","Directory to search."),
                  ("older_than_days","integer","Return files older than this many days."),
                  ("pattern","string","Optional filename glob filter.")], vec!["directory","older_than_days"]),
-        schema("web_search", "Search the web for current information.",
-            vec![("query","string","Search query (2-6 words work best).")], vec!["query"]),
+        schema("web_search", "Search the web for current information. Use short keyword phrases (2–6 words), not full questions. Good: \"Gravesend weather forecast\". Bad: \"what is the weather tomorrow in Gravesend\". If the first search returns no results or irrelevant results, retry with a shorter or broader query before giving up.",
+            vec![("query","string","Short keyword search query, 2–6 words. Use keywords, not questions or sentences.")], vec!["query"]),
+        schema("fetch_webpage", "Fetch and read the full text content of a webpage by URL. Strips HTML tags and returns the readable text. Use this to read a specific URL the user has provided, or to read the full article behind a web_search result.",
+            vec![("url","string","Full URL to fetch, must start with http:// or https://")], vec!["url"]),
         schema("compose_email", "Build a base64url-encoded RFC 2822 email string for use with the Gmail API sendMessage tool. Call this first, then pass the result as the 'raw' field to gmail_sendmessage.",
             vec![("to","string","Recipient email address(es), comma-separated."),
                  ("from","string","Sender email address (optional, Gmail will use the account address if omitted)."),
@@ -966,7 +1132,7 @@ mod tests {
             <a href="https://example.com" class="result__a">Example Title</a>
             <a class="result__snippet" href="https://example.com">This is the snippet text</a>
         "##;
-        let results = extract_ddg_results(html);
+        let results = extract_ddg_results(html, 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "Example Title");
         assert!(results[0].1.contains("snippet text"));
@@ -974,7 +1140,7 @@ mod tests {
 
     #[test]
     fn extract_ddg_results_empty_html() {
-        let results = extract_ddg_results("<html><body></body></html>");
+        let results = extract_ddg_results("<html><body></body></html>", 10);
         assert!(results.is_empty());
     }
 
@@ -985,7 +1151,7 @@ mod tests {
              <a class=\"result__snippet\" href=\"https://example.com/{i}\">Snippet {i}</a>"
         );
         let html: String = (0..10).map(block).collect();
-        let results = extract_ddg_results(&html);
+        let results = extract_ddg_results(&html, 6);
         assert!(results.len() <= 6);
     }
 
@@ -1095,7 +1261,7 @@ mod tests {
     #[test]
     fn all_builtin_schemas_returns_expected_count() {
         let schemas = all_builtin_schemas();
-        assert_eq!(schemas.len(), 13);
+        assert_eq!(schemas.len(), 14);
     }
 
     #[test]

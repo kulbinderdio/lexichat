@@ -252,6 +252,7 @@ pub async fn agent_loop(
     openapi_specs: Vec<RegisteredSpec>,
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: Vec<String>,
+    web_search_results: usize,
     app: &AppHandle,
 ) -> anyhow::Result<()> {
     let run_start = std::time::Instant::now();
@@ -345,7 +346,7 @@ pub async fn agent_loop(
             });
 
             // Route: builtin → openapi → mcp
-            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs).await;
+            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs, web_search_results).await;
 
             // Cap large responses
             let result = if result.len() > 6000 {
@@ -388,13 +389,14 @@ async fn dispatch_tool(
     openapi_specs: &[RegisteredSpec],
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: &[String],
+    web_search_results: usize,
 ) -> String {
     // 1. Try built-in tools first
     let builtin_names = ["read_file","write_file","list_files","search_files",
         "search_in_files","get_file_info","list_directory_tree","create_directory",
-        "move_file","delete_file","find_old_files","web_search","compose_email"];
+        "move_file","delete_file","find_old_files","web_search","fetch_webpage","compose_email"];
     if builtin_names.contains(&name) {
-        return crate::tools::dispatch_builtin(name, args, allowed_dirs).await;
+        return crate::tools::dispatch_builtin(name, args, allowed_dirs, web_search_results).await;
     }
 
     // 2. Try OpenAPI tools

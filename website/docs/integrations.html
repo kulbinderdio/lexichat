@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Integrations — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Connect LexiChat to any REST API using OpenAPI specs or define custom HTTP tools. Full integration guide."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .prose-code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  pre { background: #0f172a; border-radius: 0.75rem; padding: 1.25rem; overflow-x: auto; }
+  pre code { color: #94a3b8; font-size: 0.8125rem; line-height: 1.7; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .kw { color: #818cf8; }
+  .str { color: #34d399; }
+  .num { color: #fb923c; }
+  .cm { color: #475569; }
+  .key { color: #e2e8f0; }
+  .bool { color: #60a5fa; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="getting-started.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Getting Started</a>
+      <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="configuration.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Configuration</a>
+      <a href="tools.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Tools</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">On this page</div>
+      <a href="#overview" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Overview</a>
+      <a href="#openapi" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">OpenAPI Import</a>
+      <a href="#openapi-example" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Example spec</a>
+      <a href="#custom" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Custom Tools</a>
+      <a href="#custom-example" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Example</a>
+      <a href="#auth" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Authentication</a>
+      <a href="#managing" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Managing Tools</a>
+      <a href="#limitations" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Limitations</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">OpenAPI &amp; Custom Integrations</h1>
+    <p class="text-lg text-slate-600 mb-10">Connect LexiChat to any REST API — paste an OpenAPI spec or define your own HTTP endpoint in seconds.</p>
+
+    <!-- Overview -->
+    <section id="overview" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">hub</span> Overview
+      </h2>
+      <p class="text-slate-600 mb-5">Beyond the built-in tools, LexiChat lets you add arbitrary HTTP endpoints as callable tools. There are two ways to do this:</p>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent">description</span>
+            <div class="font-semibold">OpenAPI Import</div>
+          </div>
+          <p class="text-sm text-slate-600">Paste a JSON or YAML OpenAPI 3.x spec and LexiChat automatically generates one tool per API operation. Best for well-documented public or internal APIs.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent">build</span>
+            <div class="font-semibold">Custom Tools</div>
+          </div>
+          <p class="text-sm text-slate-600">Define a single HTTP endpoint with a form — name, URL template, method, and parameters. Best for simple webhooks or internal APIs without a full spec.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- OpenAPI Import -->
+    <section id="openapi" class="mb-10">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">description</span> OpenAPI Import
+      </h2>
+      <p class="text-slate-600 mb-5">LexiChat parses OpenAPI 3.x specifications (JSON or YAML). Each operation (<code class="prose-code bg-slate-100 px-1 rounded text-sm">GET /users/{id}</code>, etc.) becomes one tool the AI can call.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">How to import a spec</div>
+        <div class="space-y-3">
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">1</div>
+            <p class="text-sm text-slate-600">Open the Tools panel — click the <strong>wrench icon</strong> in the toolbar, then <strong>Import OpenAPI</strong></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">2</div>
+            <p class="text-sm text-slate-600">Paste your OpenAPI JSON or YAML into the text area, then click <strong>Parse</strong></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">3</div>
+            <p class="text-sm text-slate-600">Review the list of detected tools (operation ID, method, path, description)</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">4</div>
+            <p class="text-sm text-slate-600">Click <strong>Register All</strong> — tools are now available to the AI immediately</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">What gets extracted</div>
+        <div class="grid sm:grid-cols-2 gap-3 text-sm text-slate-600 mt-3">
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">check_circle</span> Operation ID → tool name</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">check_circle</span> <code>summary</code> / <code>description</code> → tool description</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">check_circle</span> Path parameters (<code>{id}</code>) → required params</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">check_circle</span> Query parameters → optional params</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">check_circle</span> Request body properties → body params</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">check_circle</span> HTTP method and base URL</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- OpenAPI example -->
+    <section id="openapi-example" class="mb-12">
+      <h3 class="text-lg font-semibold mb-3">Example OpenAPI spec</h3>
+      <p class="text-sm text-slate-600 mb-4">Here's a minimal spec that exposes a weather lookup endpoint. Paste this to try it out:</p>
+      <div class="relative group">
+        <button onclick="copyCode(this)" class="absolute top-3 right-3 z-10 flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white text-xs font-medium px-2.5 py-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100" title="Copy to clipboard">
+          <span class="material-symbols-outlined copy-icon" style="font-size:14px">content_copy</span>
+          <span class="copy-label">Copy</span>
+        </button>
+        <pre id="openapi-spec"><code><span class="kw">{</span>
+  <span class="key">"openapi"</span>: <span class="str">"3.0.0"</span>,
+  <span class="key">"info"</span>: <span class="kw">{</span>
+    <span class="key">"title"</span>: <span class="str">"Weather API"</span>,
+    <span class="key">"version"</span>: <span class="str">"1.0"</span>
+  <span class="kw">}</span>,
+  <span class="key">"servers"</span>: <span class="kw">[</span>
+    <span class="kw">{</span> <span class="key">"url"</span>: <span class="str">"https://api.open-meteo.com/v1"</span> <span class="kw">}</span>
+  <span class="kw">]</span>,
+  <span class="key">"paths"</span>: <span class="kw">{</span>
+    <span class="key">"/forecast"</span>: <span class="kw">{</span>
+      <span class="key">"get"</span>: <span class="kw">{</span>
+        <span class="key">"operationId"</span>: <span class="str">"get_weather"</span>,
+        <span class="key">"summary"</span>: <span class="str">"Get weather forecast for a location"</span>,
+        <span class="key">"parameters"</span>: <span class="kw">[</span>
+          <span class="kw">{</span>
+            <span class="key">"name"</span>: <span class="str">"latitude"</span>,
+            <span class="key">"in"</span>: <span class="str">"query"</span>,
+            <span class="key">"required"</span>: <span class="bool">true</span>,
+            <span class="key">"schema"</span>: <span class="kw">{</span> <span class="key">"type"</span>: <span class="str">"number"</span> <span class="kw">}</span>,
+            <span class="key">"description"</span>: <span class="str">"Latitude of the location"</span>
+          <span class="kw">}</span>,
+          <span class="kw">{</span>
+            <span class="key">"name"</span>: <span class="str">"longitude"</span>,
+            <span class="key">"in"</span>: <span class="str">"query"</span>,
+            <span class="key">"required"</span>: <span class="bool">true</span>,
+            <span class="key">"schema"</span>: <span class="kw">{</span> <span class="key">"type"</span>: <span class="str">"number"</span> <span class="kw">}</span>,
+            <span class="key">"description"</span>: <span class="str">"Longitude of the location"</span>
+          <span class="kw">}</span>,
+          <span class="kw">{</span>
+            <span class="key">"name"</span>: <span class="str">"current_weather"</span>,
+            <span class="key">"in"</span>: <span class="str">"query"</span>,
+            <span class="key">"required"</span>: <span class="bool">false</span>,
+            <span class="key">"schema"</span>: <span class="kw">{</span> <span class="key">"type"</span>: <span class="str">"boolean"</span> <span class="kw">}</span>,
+            <span class="key">"description"</span>: <span class="str">"Include current conditions"</span>
+          <span class="kw">}</span>
+        <span class="kw">]</span>
+      <span class="kw">}</span>
+    <span class="kw">}</span>
+  <span class="kw">}</span>
+<span class="kw">}</span></code></pre>
+      </div>
+      <p class="text-xs text-slate-400 mt-2 ml-1">After importing, the AI can answer questions like "What's the weather in London?" by calling <code class="prose-code">get_weather</code> with the coordinates it looks up.</p>
+    </section>
+
+    <!-- Custom Tools -->
+    <section id="custom" class="mb-10">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">build</span> Custom Tools
+      </h2>
+      <p class="text-slate-600 mb-5">For simple HTTP integrations that don't have an OpenAPI spec, use the Custom Tool builder to define an endpoint by hand.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Custom tool fields</div>
+        <div class="overflow-hidden rounded-lg border border-slate-100">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-100">
+                <th class="text-left px-4 py-2.5 font-semibold text-slate-600">Field</th>
+                <th class="text-left px-4 py-2.5 font-semibold text-slate-600">Description</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-50">
+              <tr>
+                <td class="px-4 py-2.5 prose-code font-medium text-sm">Name</td>
+                <td class="px-4 py-2.5 text-slate-600">Tool identifier shown to the model (snake_case, no spaces)</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-2.5 prose-code font-medium text-sm">Description</td>
+                <td class="px-4 py-2.5 text-slate-600">Tells the AI what this tool does and when to use it — be specific</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-2.5 prose-code font-medium text-sm">URL</td>
+                <td class="px-4 py-2.5 text-slate-600">Full URL with <code class="prose-code">{param}</code> placeholders for path params</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-2.5 prose-code font-medium text-sm">Method</td>
+                <td class="px-4 py-2.5 text-slate-600">GET, POST, PUT, DELETE, PATCH</td>
+              </tr>
+              <tr>
+                <td class="px-4 py-2.5 prose-code font-medium text-sm">Parameters</td>
+                <td class="px-4 py-2.5 text-slate-600">Add one or more params — each has name, type, location (path/query/body), description, required flag</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Parameter locations</div>
+        <div class="space-y-2 text-sm text-slate-600">
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded text-xs flex-shrink-0">path</span>
+            <p>Substituted directly into the URL. Requires a matching <code class="prose-code">{paramName}</code> in the URL template.</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs flex-shrink-0">query</span>
+            <p>Appended to the URL as <code class="prose-code">?key=value</code>. Works for GET requests and can be used with any method.</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-violet-600 bg-violet-50 px-2 py-0.5 rounded text-xs flex-shrink-0">body</span>
+            <p>Sent as a JSON key in the request body. LexiChat sets <code class="prose-code">Content-Type: application/json</code> automatically.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Custom example -->
+    <section id="custom-example" class="mb-12">
+      <h3 class="text-lg font-semibold mb-3">Example: GitHub Repository Info</h3>
+      <p class="text-sm text-slate-600 mb-4">A custom tool to fetch public GitHub repo metadata:</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5 text-sm">
+        <div class="grid grid-cols-3 gap-x-6 gap-y-3">
+          <div class="text-slate-400 font-medium">Name</div>
+          <div class="col-span-2 prose-code">get_github_repo</div>
+          <div class="text-slate-400 font-medium">Description</div>
+          <div class="col-span-2 text-slate-600">Get metadata for a public GitHub repository including stars, forks, and description</div>
+          <div class="text-slate-400 font-medium">URL</div>
+          <div class="col-span-2 prose-code text-accent">https://api.github.com/repos/{owner}/{repo}</div>
+          <div class="text-slate-400 font-medium">Method</div>
+          <div class="col-span-2">GET</div>
+        </div>
+        <div class="mt-4 pt-4 border-t border-slate-100">
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Parameters</div>
+          <div class="space-y-2">
+            <div class="flex items-center gap-3 text-xs">
+              <code class="prose-code bg-slate-100 px-2 py-1 rounded">owner</code>
+              <span class="text-slate-400">string</span>
+              <span class="bg-accent/10 text-accent px-1.5 py-0.5 rounded font-medium">path</span>
+              <span class="text-slate-500">The GitHub username or organisation</span>
+              <span class="bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium ml-auto">required</span>
+            </div>
+            <div class="flex items-center gap-3 text-xs">
+              <code class="prose-code bg-slate-100 px-2 py-1 rounded">repo</code>
+              <span class="text-slate-400">string</span>
+              <span class="bg-accent/10 text-accent px-1.5 py-0.5 rounded font-medium">path</span>
+              <span class="text-slate-500">The repository name</span>
+              <span class="bg-green-100 text-green-700 px-1.5 py-0.5 rounded font-medium ml-auto">required</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="text-sm text-slate-600 mb-3">Once registered, you can ask: <em>"How many stars does the ollama/ollama repo have?"</em> and the AI will call the tool automatically.</p>
+
+      <pre><code><span class="cm">// AI generates this call</span>
+{
+  <span class="key">"name"</span>: <span class="str">"get_github_repo"</span>,
+  <span class="key">"arguments"</span>: {
+    <span class="key">"owner"</span>: <span class="str">"ollama"</span>,
+    <span class="key">"repo"</span>: <span class="str">"ollama"</span>
+  }
+}
+
+<span class="cm">// LexiChat makes: GET https://api.github.com/repos/ollama/ollama</span>
+<span class="cm">// Returns JSON → fed back to model</span></code></pre>
+    </section>
+
+    <!-- Authentication -->
+    <section id="auth" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">lock</span> Authentication
+      </h2>
+      <p class="text-slate-600 mb-5">When adding an OpenAPI spec or MCP connection, you can configure authentication. LexiChat supports four methods:</p>
+      <div class="space-y-3">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">key</span>
+          <div class="text-sm text-slate-600"><strong class="text-slate-800">Bearer token</strong> — sends <code class="prose-code text-xs bg-slate-100 px-1.5 py-0.5 rounded">Authorization: Bearer &lt;token&gt;</code> on every request.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">vpn_key</span>
+          <div class="text-sm text-slate-600"><strong class="text-slate-800">API key</strong> — a custom header name and value (e.g. <code class="prose-code text-xs bg-slate-100 px-1.5 py-0.5 rounded">X-API-Key: secret</code>).</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">person</span>
+          <div class="text-sm text-slate-600"><strong class="text-slate-800">Basic auth</strong> — username and password, base64-encoded automatically into the <code class="prose-code text-xs bg-slate-100 px-1.5 py-0.5 rounded">Authorization</code> header.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">open_in_browser</span>
+          <div class="text-sm text-slate-600"><strong class="text-slate-800">OAuth2</strong> — client-credentials or authorization-code flow. For the auth-code flow, LexiChat opens your browser for the consent screen and exchanges the code for tokens automatically.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Managing Tools -->
+    <section id="managing" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">settings_applications</span> Managing Tools
+      </h2>
+      <p class="text-slate-600 mb-5">All tools (built-in and custom) are listed in the Tools panel. From here you can:</p>
+      <div class="space-y-3">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0">toggle_on</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Enable / Disable</div>
+            <div class="text-sm text-slate-600">Toggle individual tools on or off. Disabled tools are hidden from the AI — it won't call them even if relevant. Useful for reducing the schema payload sent to the model.</div>
+          </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0">delete</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Remove Custom Tools</div>
+            <div class="text-sm text-slate-600">Click the delete icon next to any custom or OpenAPI-imported tool to remove it permanently. Built-in tools cannot be removed (only disabled).</div>
+          </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0">source</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">View Tool Source</div>
+            <div class="text-sm text-slate-600">Hover over a tool to see its source group (Built-in / OpenAPI: &lt;title&gt; / Custom).</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Limitations -->
+    <section id="limitations">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">info</span> Current Limitations
+      </h2>
+      <div class="space-y-3">
+        <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
+          <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">schema</span>
+          <div class="text-sm text-slate-700"><strong>OpenAPI 3.x only.</strong> Swagger 2.0 specs are not supported. Convert with the Swagger Editor if needed.</div>
+        </div>
+        <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
+          <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">data_object</span>
+          <div class="text-sm text-slate-700"><strong>JSON responses only.</strong> Tools must return JSON. Non-JSON responses (HTML, plain text) will be returned as raw strings to the model.</div>
+        </div>
+        <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
+          <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">token</span>
+          <div class="text-sm text-slate-700"><strong>Context window usage.</strong> Each registered tool adds JSON schema to every request. With many tools, consider disabling unused ones to preserve context for the conversation.</div>
+        </div>
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+function copyCode(btn) {
+  const pre = btn.closest('.relative').querySelector('pre');
+  const text = pre.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const icon = btn.querySelector('.copy-icon');
+    const label = btn.querySelector('.copy-label');
+    icon.textContent = 'check';
+    label.textContent = 'Copied!';
+    btn.classList.add('bg-green-700', 'text-white');
+    btn.classList.remove('bg-slate-700', 'text-slate-300');
+    setTimeout(() => {
+      icon.textContent = 'content_copy';
+      label.textContent = 'Copy';
+      btn.classList.remove('bg-green-700', 'text-white');
+      btn.classList.add('bg-slate-700', 'text-slate-300');
+    }, 2000);
+  });
+}
+</script>
+</body>
+</html>

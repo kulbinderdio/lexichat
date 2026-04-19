@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LexiChat — Your Private AI Assistant</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="LexiChat is a free, local-first AI assistant powered by Ollama. It runs entirely on your machine — private, fast, and extensible."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: {
+        accent: '#6366f1',
+        'accent-light': '#818cf8',
+        'accent-dark': '#4f46e5',
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .hero-bg { background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(99,102,241,0.15) 0%, transparent 70%); }
+  .glass { background: rgba(255,255,255,0.7); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .glass-dark { background: rgba(17,17,17,0.8); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .card-hover { transition: transform 0.2s, box-shadow 0.2s; }
+  .card-hover:hover { transform: translateY(-2px); box-shadow: 0 20px 40px rgba(99,102,241,0.12); }
+  .glow { box-shadow: 0 0 40px rgba(99,102,241,0.25); }
+  .screen-shadow { box-shadow: 0 32px 80px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.05); }
+  @media (prefers-color-scheme: dark) {
+    .glass { background: rgba(17,17,17,0.8); }
+  }
+</style>
+</head>
+<body class="bg-white text-slate-900 antialiased">
+
+<!-- ── Navigation ─────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="index.html" class="flex items-center gap-2.5">
+      <img src="resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="#features" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="#screenshots" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Screenshots</a>
+      <a href="#support" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Support</a>
+      <a href="docs/index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Docs</a>
+    </div>
+    <div class="relative group">
+      <button class="bg-accent hover:bg-accent-dark text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
+        <span class="material-symbols-outlined text-base" style="font-size:16px">download</span>
+        Download Free
+        <span class="material-symbols-outlined text-base" style="font-size:14px">expand_more</span>
+      </button>
+      <div class="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 p-2">
+        <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_universal.dmg" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+          <div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-accent" style="font-size:18px">desktop_mac</span><span class="text-sm font-semibold">macOS</span></div>
+          <span class="text-xs text-slate-400">Universal</span>
+        </a>
+        <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_x64-setup.exe" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+          <div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-accent" style="font-size:18px">desktop_windows</span><span class="text-sm font-semibold">Windows</span></div>
+          <span class="text-xs text-slate-400">.exe installer</span>
+        </a>
+        <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_amd64.AppImage" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+          <div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-accent" style="font-size:18px">terminal</span><span class="text-sm font-semibold">Linux</span></div>
+          <span class="text-xs text-slate-400">AppImage x64</span>
+        </a>
+        <div class="border-t border-slate-100 mt-1 pt-1">
+          <a href="#download" class="flex items-center gap-2 px-3 py-2 text-xs text-slate-400 hover:text-accent transition-colors rounded-xl hover:bg-slate-50">
+            <span class="material-symbols-outlined" style="font-size:14px">expand_more</span>
+            All platforms &amp; formats
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Hero ───────────────────────────────────────────────────────────────── -->
+<section class="hero-bg pt-36 pb-24 px-6">
+  <div class="max-w-7xl mx-auto text-center">
+    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-8 border border-accent/20">
+      <span class="material-symbols-outlined" style="font-size:13px;font-variation-settings:'FILL' 1">lock</span>
+      100% Local · Completely Free
+    </div>
+
+    <div class="flex justify-center mb-8">
+      <img src="resources/lexi1.png" alt="LexiChat" class="w-24 h-24 rounded-3xl glow"/>
+    </div>
+
+    <h1 class="text-6xl md:text-8xl font-black tracking-tighter text-slate-900 mb-6 leading-none">
+      Your private<br/><span class="gradient-text">AI assistant.</span>
+    </h1>
+    <div class="flex justify-center mb-6 -mt-2">
+      <span class="inline-flex items-center gap-1.5 bg-slate-100 text-slate-500 text-xs font-semibold px-3 py-1.5 rounded-full">
+        <span class="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"></span>
+        v0.3.1
+      </span>
+    </div>
+    <p class="text-xl md:text-2xl text-slate-500 max-w-2xl mx-auto leading-relaxed mb-12 font-light">
+      LexiChat runs entirely on your machine. Powered by Ollama — no cloud, no subscriptions, no data leaving your device.
+    </p>
+
+    <div class="flex flex-col sm:flex-row items-center justify-center gap-4 mb-20">
+      <div class="relative group">
+        <a href="#download"
+          class="inline-flex items-center gap-2.5 bg-accent hover:bg-accent-dark text-white px-8 py-4 rounded-2xl font-bold text-lg transition-all hover:scale-[1.02] active:scale-[0.98] shadow-lg shadow-accent/30">
+          <span class="material-symbols-outlined" style="font-size:22px">download_for_offline</span>
+          Download LexiChat — Free
+        </a>
+      </div>
+      <a href="docs/index.html"
+        class="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-8 py-4 rounded-2xl font-semibold text-lg transition-colors">
+        <span class="material-symbols-outlined" style="font-size:20px">menu_book</span>
+        Documentation
+      </a>
+    </div>
+
+    <!-- App screenshot -->
+    <div class="relative max-w-5xl mx-auto">
+      <div class="bg-slate-900 rounded-2xl p-1.5 screen-shadow ring-1 ring-white/10">
+        <img src="resources/Screenshot 2026-04-17 at 11.57.38.png"
+          alt="LexiChat interface" class="w-full rounded-xl"/>
+      </div>
+      <div class="absolute -z-10 inset-0 bg-accent/20 blur-[80px] rounded-full scale-75"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Social proof strip ─────────────────────────────────────────────────── -->
+<section class="border-y border-slate-100 py-8 bg-slate-50/50">
+  <div class="max-w-5xl mx-auto px-6 flex flex-wrap items-center justify-center gap-8 text-sm text-slate-400 font-medium">
+    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-accent" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>No subscription required</span>
+    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-accent" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>No account needed</span>
+    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-accent" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>No telemetry</span>
+    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-accent" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>macOS · Windows · Linux</span>
+    <span class="flex items-center gap-2"><span class="material-symbols-outlined text-accent" style="font-size:16px;font-variation-settings:'FILL' 1">check_circle</span>100% free, forever</span>
+  </div>
+</section>
+
+<!-- ── Downloads ──────────────────────────────────────────────────────────── -->
+<section id="download" class="py-24 px-6 bg-white">
+  <div class="max-w-4xl mx-auto">
+    <div class="text-center mb-10">
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-4 border border-accent/20">Download</div>
+      <h2 class="text-3xl md:text-4xl font-black tracking-tighter text-slate-900">Get LexiChat <span class="text-slate-400 font-light">v0.3.1</span></h2>
+    </div>
+
+    <!-- Platform tabs -->
+    <div class="flex justify-center mb-6">
+      <div class="inline-flex bg-slate-100 rounded-xl p-1 gap-1">
+        <button onclick="showTab('mac')" id="tab-mac" class="dl-tab active px-5 py-2 rounded-lg text-sm font-semibold transition-all">
+          <span class="flex items-center gap-1.5"><span class="material-symbols-outlined" style="font-size:16px">desktop_mac</span>macOS</span>
+        </button>
+        <button onclick="showTab('win')" id="tab-win" class="dl-tab px-5 py-2 rounded-lg text-sm font-semibold transition-all">
+          <span class="flex items-center gap-1.5"><span class="material-symbols-outlined" style="font-size:16px">desktop_windows</span>Windows</span>
+        </button>
+        <button onclick="showTab('linux')" id="tab-linux" class="dl-tab px-5 py-2 rounded-lg text-sm font-semibold transition-all">
+          <span class="flex items-center gap-1.5"><span class="material-symbols-outlined" style="font-size:16px">terminal</span>Linux</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- macOS -->
+    <div id="dl-mac" class="dl-panel">
+      <div class="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-200 bg-white">
+          <div class="text-xs text-slate-400 font-medium">macOS 13 Ventura or later · Apple Silicon &amp; Intel</div>
+        </div>
+        <div class="divide-y divide-slate-200">
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">Universal DMG <span class="text-xs font-normal text-slate-400 ml-1">(recommended)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">18.99 MB · sha256: 68f12a2c356beef1…670ff</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_universal.dmg"
+              class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+        </div>
+        <div class="px-6 py-3 bg-slate-50 text-xs text-slate-400 flex items-center gap-1.5">
+          <span class="material-symbols-outlined" style="font-size:13px">info</span>
+          On first launch right-click → Open to bypass Gatekeeper.
+        </div>
+      </div>
+    </div>
+
+    <!-- Windows -->
+    <div id="dl-win" class="dl-panel hidden">
+      <div class="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-200 bg-white">
+          <div class="text-xs text-slate-400 font-medium">Windows 10 (build 1809+) or Windows 11 · x64</div>
+        </div>
+        <div class="divide-y divide-slate-200">
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">.exe Installer <span class="text-xs font-normal text-slate-400 ml-1">(recommended)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">5.37 MB · sha256: 3791e441f6cef401…77a90f</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_x64-setup.exe"
+              class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">.msi Installer</div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">7.39 MB · sha256: bb95d0faefac5f50…586fb</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_x64_en-US.msi"
+              class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Linux -->
+    <div id="dl-linux" class="dl-panel hidden">
+      <div class="bg-slate-50 border border-slate-200 rounded-2xl overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-200 bg-white flex items-center gap-3">
+          <div class="text-xs text-slate-400 font-medium">Choose your architecture:</div>
+          <div class="flex gap-1">
+            <button onclick="showArch('x64')" id="arch-x64" class="arch-tab active-arch text-xs font-semibold px-3 py-1 rounded-lg transition-all">x86_64</button>
+            <button onclick="showArch('arm')" id="arch-arm" class="arch-tab text-xs font-semibold px-3 py-1 rounded-lg transition-all">ARM64</button>
+          </div>
+        </div>
+
+        <!-- x64 -->
+        <div id="linux-x64" class="divide-y divide-slate-200">
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">AppImage <span class="text-xs font-normal text-slate-400 ml-1">(recommended — runs on any distro)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">88.2 MB · sha256: 652f50fdc73dc258…a11d1</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_amd64.AppImage"
+              class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">.deb <span class="text-xs font-normal text-slate-400 ml-1">(Debian / Ubuntu)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">9.27 MB · sha256: f2bfdc837279a834…68d795</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_amd64.deb"
+              class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">.rpm <span class="text-xs font-normal text-slate-400 ml-1">(Fedora / RHEL)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">9.27 MB · sha256: 0136593d96e852af…3d3ac4</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat-0.3.1-1.x86_64.rpm"
+              class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+        </div>
+
+        <!-- ARM64 -->
+        <div id="linux-arm" class="divide-y divide-slate-200 hidden">
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">AppImage <span class="text-xs font-normal text-slate-400 ml-1">(recommended — runs on any distro)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">86.23 MB · sha256: 552504a53a794a73…20fd6</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_aarch64.AppImage"
+              class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">.deb <span class="text-xs font-normal text-slate-400 ml-1">(Debian / Ubuntu)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">9.23 MB · sha256: 86c36299aa4b228d…445e757</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat_0.3.1_arm64.deb"
+              class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+          <div class="flex items-center justify-between px-6 py-4">
+            <div>
+              <div class="font-semibold text-sm">.rpm <span class="text-xs font-normal text-slate-400 ml-1">(Fedora / RHEL)</span></div>
+              <div class="text-xs text-slate-400 mt-0.5 font-mono">9.23 MB · sha256: 146b277da4995296…e2bf26</div>
+            </div>
+            <a href="https://downloads.lexi-chat.com/lexichat-releases/v0.3.1/LexiChat-0.3.1-1.aarch64.rpm"
+              class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
+            </a>
+          </div>
+        </div>
+
+        <div class="px-6 py-3 bg-slate-50 text-xs text-slate-400 flex items-center gap-1.5">
+          <span class="material-symbols-outlined" style="font-size:13px">info</span>
+          AppImage: <code class="font-mono">chmod +x LexiChat*.AppImage &amp;&amp; ./LexiChat*.AppImage</code>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── Features ───────────────────────────────────────────────────────────── -->
+<section id="features" class="py-32 px-6">
+  <div class="max-w-7xl mx-auto">
+    <div class="text-center mb-20">
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-6 border border-accent/20">Features</div>
+      <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-4">Everything you need.<br/>Nothing you don't.</h2>
+      <p class="text-xl text-slate-500 max-w-xl mx-auto">A complete AI workspace that lives on your hardware.</p>
+    </div>
+
+    <!-- Bento grid -->
+    <div class="grid grid-cols-1 md:grid-cols-12 gap-5">
+
+      <!-- Privacy — large -->
+      <div class="md:col-span-5 bg-gradient-to-br from-indigo-50 to-purple-50 border border-indigo-100 rounded-3xl p-10 card-hover">
+        <div class="w-14 h-14 bg-accent/15 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-accent" style="font-size:28px;font-variation-settings:'FILL' 1">shield</span>
+        </div>
+        <h3 class="text-2xl font-bold text-slate-900 mb-3">100% Private</h3>
+        <p class="text-slate-600 leading-relaxed">Powered by Ollama. Your conversations, files, and queries never leave your machine. No cloud API keys, no usage logging, no third-party servers involved.</p>
+        <div class="mt-6 flex gap-2 flex-wrap">
+          <span class="px-3 py-1 bg-white/70 border border-indigo-100 text-indigo-700 text-xs font-semibold rounded-full">No cloud</span>
+          <span class="px-3 py-1 bg-white/70 border border-indigo-100 text-indigo-700 text-xs font-semibold rounded-full">No telemetry</span>
+          <span class="px-3 py-1 bg-white/70 border border-indigo-100 text-indigo-700 text-xs font-semibold rounded-full">Offline-first</span>
+        </div>
+      </div>
+
+      <!-- File tools -->
+      <div class="md:col-span-7 bg-slate-900 text-white rounded-3xl p-10 card-hover overflow-hidden relative">
+        <div class="absolute inset-0 bg-gradient-to-br from-accent/20 to-transparent pointer-events-none"></div>
+        <div class="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-white" style="font-size:28px;font-variation-settings:'FILL' 1">folder_open</span>
+        </div>
+        <h3 class="text-2xl font-bold mb-3">File &amp; Document Tools</h3>
+        <p class="text-slate-300 leading-relaxed mb-6">Read, write, search, and summarise files directly. Native support for PDF, Word (.docx), plain text, and code files. Browse your folders interactively in the chat.</p>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div class="bg-white/10 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-accent-light" style="font-size:16px">picture_as_pdf</span>PDF read &amp; write</div>
+          <div class="bg-white/10 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-accent-light" style="font-size:16px">article</span>Word .docx support</div>
+          <div class="bg-white/10 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-accent-light" style="font-size:16px">search</span>Search within files</div>
+          <div class="bg-white/10 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-accent-light" style="font-size:16px">account_tree</span>Directory trees</div>
+        </div>
+      </div>
+
+      <!-- Web search -->
+      <div class="md:col-span-4 bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-100 rounded-3xl p-10 card-hover">
+        <div class="w-14 h-14 bg-emerald-500/15 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-emerald-600" style="font-size:28px;font-variation-settings:'FILL' 1">travel_explore</span>
+        </div>
+        <h3 class="text-2xl font-bold text-slate-900 mb-3">Web Search Built In</h3>
+        <p class="text-slate-600 leading-relaxed">Ask about current events, weather, or anything live. LexiChat searches DuckDuckGo and returns real results with clickable links — no browser switching needed.</p>
+      </div>
+
+      <!-- Profiles -->
+      <div class="md:col-span-4 bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-100 rounded-3xl p-10 card-hover">
+        <div class="w-14 h-14 bg-amber-500/15 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-amber-600" style="font-size:28px;font-variation-settings:'FILL' 1">manage_accounts</span>
+        </div>
+        <h3 class="text-2xl font-bold text-slate-900 mb-3">Agent Profiles</h3>
+        <p class="text-slate-600 leading-relaxed">Create multiple AI personas — a Code Assistant, a Writing Coach, a Research Agent — each with its own model, tools, system prompt, and file sandbox.</p>
+      </div>
+
+      <!-- Extensions -->
+      <div class="md:col-span-4 bg-gradient-to-br from-violet-50 to-pink-50 border border-violet-100 rounded-3xl p-10 card-hover">
+        <div class="w-14 h-14 bg-violet-500/15 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-violet-600" style="font-size:28px;font-variation-settings:'FILL' 1">extension</span>
+        </div>
+        <h3 class="text-2xl font-bold text-slate-900 mb-3">OpenAPI &amp; MCP</h3>
+        <p class="text-slate-600 leading-relaxed">Connect any external service by pasting an OpenAPI spec, or attach MCP servers. Turn LexiChat into a powerful automation hub for your workflow.</p>
+      </div>
+
+      <!-- Model params — full width strip -->
+      <div class="md:col-span-12 bg-slate-900 text-white rounded-3xl p-10 card-hover flex flex-col md:flex-row items-start md:items-center gap-8">
+        <div class="flex-1">
+          <div class="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center mb-4">
+            <span class="material-symbols-outlined text-white" style="font-size:28px;font-variation-settings:'FILL' 1">tune</span>
+          </div>
+          <h3 class="text-2xl font-bold mb-2">Fine-tune Every Response</h3>
+          <p class="text-slate-300 leading-relaxed max-w-xl">Progressive chat parameters let you switch between Precise, Balanced, and Creative modes in one click — or dive into advanced controls like temperature, top-p, context window, and more. Set global defaults or change them per-chat.</p>
+        </div>
+        <div class="grid grid-cols-3 gap-3 flex-shrink-0">
+          <div class="bg-white/10 rounded-2xl p-4 text-center"><div class="text-2xl font-black text-accent-light">0.2</div><div class="text-xs text-slate-400 mt-1">Precise temp</div></div>
+          <div class="bg-accent/30 border border-accent/50 rounded-2xl p-4 text-center"><div class="text-2xl font-black text-white">0.7</div><div class="text-xs text-slate-300 mt-1">Balanced</div></div>
+          <div class="bg-white/10 rounded-2xl p-4 text-center"><div class="text-2xl font-black text-purple-300">1.0</div><div class="text-xs text-slate-400 mt-1">Creative temp</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ── Screenshots ─────────────────────────────────────────────────────────── -->
+<section id="screenshots" class="py-32 px-6 bg-slate-50">
+  <div class="max-w-7xl mx-auto">
+    <div class="text-center mb-16">
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-6 border border-accent/20">Screenshots</div>
+      <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-4">See it in action.</h2>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-slate-900 rounded-2xl p-2 screen-shadow ring-1 ring-white/5">
+        <img src="resources/Screenshot 2026-04-17 at 11.57.38.png" alt="LexiChat chat interface" class="rounded-xl w-full"/>
+        <p class="text-center text-slate-400 text-xs py-3">Chat interface with tool results</p>
+      </div>
+      <div class="bg-slate-900 rounded-2xl p-2 screen-shadow ring-1 ring-white/5">
+        <img src="resources/Screenshot 2026-04-17 at 11.58.23.png" alt="LexiChat settings" class="rounded-xl w-full"/>
+        <p class="text-center text-slate-400 text-xs py-3">Settings &amp; profile management</p>
+      </div>
+      <div class="bg-slate-900 rounded-2xl p-2 screen-shadow ring-1 ring-white/5 md:col-span-2">
+        <img src="resources/Screenshot 2026-04-17 at 11.58.57.png" alt="LexiChat tools panel" class="rounded-xl w-full"/>
+        <p class="text-center text-slate-400 text-xs py-3">Extensible tools panel</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── How it works ────────────────────────────────────────────────────────── -->
+<section class="py-32 px-6">
+  <div class="max-w-5xl mx-auto">
+    <div class="text-center mb-20">
+      <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-6 border border-accent/20">Getting Started</div>
+      <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-4">Up and running in minutes.</h2>
+      <p class="text-xl text-slate-500">Three steps. No accounts. No API keys.</p>
+    </div>
+    <div class="space-y-6">
+      <div class="flex items-start gap-8 p-8 bg-white border border-slate-100 rounded-3xl shadow-sm">
+        <div class="w-14 h-14 bg-accent text-white rounded-2xl flex items-center justify-center font-black text-2xl flex-shrink-0">1</div>
+        <div>
+          <h3 class="text-xl font-bold text-slate-900 mb-2">Install Ollama</h3>
+          <p class="text-slate-600 leading-relaxed">Download <a href="https://ollama.com" class="text-accent font-medium hover:underline" target="_blank">Ollama</a> for your platform and pull a model. <code class="bg-slate-100 px-2 py-0.5 rounded text-sm font-mono">ollama pull gemma3</code> is a great starting point — it's fast and capable.</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-8 p-8 bg-white border border-slate-100 rounded-3xl shadow-sm">
+        <div class="w-14 h-14 bg-accent text-white rounded-2xl flex items-center justify-center font-black text-2xl flex-shrink-0">2</div>
+        <div>
+          <h3 class="text-xl font-bold text-slate-900 mb-2">Download &amp; install LexiChat</h3>
+          <p class="text-slate-600 leading-relaxed">Download the installer for your platform from the link above. macOS (Universal), Windows, and Linux (AppImage + .deb) all supported.</p>
+        </div>
+      </div>
+      <div class="flex items-start gap-8 p-8 bg-white border border-slate-100 rounded-3xl shadow-sm">
+        <div class="w-14 h-14 bg-accent text-white rounded-2xl flex items-center justify-center font-black text-2xl flex-shrink-0">3</div>
+        <div>
+          <h3 class="text-xl font-bold text-slate-900 mb-2">Start chatting</h3>
+          <p class="text-slate-600 leading-relaxed">Open LexiChat, select your model, and start a conversation. Add folders to the Sandbox to give Lexi access to your files, or connect external APIs via the Tools panel.</p>
+        </div>
+      </div>
+    </div>
+    <div class="text-center mt-12">
+      <a href="docs/getting-started.html" class="inline-flex items-center gap-2 text-accent font-semibold hover:underline">
+        Read the full getting started guide
+        <span class="material-symbols-outlined" style="font-size:18px">arrow_forward</span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ── Support / Donate ────────────────────────────────────────────────────── -->
+<section id="support" class="py-32 px-6 bg-gradient-to-b from-slate-50 to-white">
+  <div class="max-w-3xl mx-auto text-center">
+    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-6 border border-accent/20">Support the project</div>
+    <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-4">LexiChat is free.<br/>Keep it that way.</h2>
+    <p class="text-xl text-slate-500 max-w-xl mx-auto mb-12 leading-relaxed">
+      LexiChat is free and always will be. If it saves you time or sparks joy, consider supporting continued development.
+    </p>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 max-w-xl mx-auto">
+
+      <!-- Buy Me a Coffee -->
+      <div class="bg-amber-50 border border-amber-200 rounded-3xl p-8 flex flex-col items-center gap-4 card-hover">
+        <div class="text-5xl">☕</div>
+        <div>
+          <h3 class="font-bold text-slate-900 mb-1">Buy Me a Coffee</h3>
+          <p class="text-slate-500 text-sm">One-off or recurring support via Buy Me a Coffee.</p>
+        </div>
+        <!-- Replace href with your Buy Me a Coffee URL -->
+        <a href="#" class="w-full bg-amber-400 hover:bg-amber-500 text-amber-900 font-bold py-3 px-6 rounded-xl transition-colors text-sm flex items-center justify-center gap-2">
+          <span>Coming soon</span>
+        </a>
+      </div>
+
+      <!-- Bitcoin -->
+      <div class="bg-orange-50 border border-orange-200 rounded-3xl p-8 flex flex-col items-center gap-4 card-hover">
+        <div class="text-5xl">₿</div>
+        <div>
+          <h3 class="font-bold text-slate-900 mb-1">Bitcoin</h3>
+          <p class="text-slate-500 text-sm">Send sats directly — no platform fees.</p>
+        </div>
+        <div class="w-full bg-orange-100 border border-orange-200 rounded-xl px-3 py-2 text-xs font-mono text-slate-700 text-center break-all select-all cursor-pointer" title="Click to copy" onclick="navigator.clipboard.writeText('bc1q4faazp4qndldfsa8ahqeens3mej0svgwtl7h4v').then(()=>{this.textContent='Copied!';setTimeout(()=>{this.textContent='bc1q4faazp4qndldfsa8ahqeens3mej0svgwtl7h4v'},2000)})">
+          bc1q4faazp4qndldfsa8ahqeens3mej0svgwtl7h4v
+        </div>
+      </div>
+
+    </div>
+    <p class="text-slate-400 text-sm mt-8">
+      Every bit of support helps keep LexiChat free and actively maintained.
+    </p>
+    <p class="text-slate-400 text-sm mt-3">
+      Questions or feedback? Reach us at <a href="mailto:info@lexi-chat.com" class="text-accent hover:underline">info@lexi-chat.com</a>
+    </p>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-100 py-12 px-6">
+  <div class="max-w-7xl mx-auto">
+    <div class="flex flex-col md:flex-row justify-between items-center gap-6">
+      <div class="flex items-center gap-2.5">
+        <img src="resources/lexi1.png" alt="LexiChat" class="w-7 h-7 rounded-lg"/>
+        <span class="font-bold text-slate-900">LexiChat</span>
+        <span class="text-slate-400 text-sm">— Free</span>
+      </div>
+      <nav class="flex items-center gap-6 text-sm text-slate-500">
+        <a href="docs/index.html" class="hover:text-accent transition-colors">Documentation</a>
+        <a href="docs/getting-started.html" class="hover:text-accent transition-colors">Getting Started</a>
+        <a href="#support" class="hover:text-accent transition-colors">Support</a>
+        <a href="mailto:info@lexi-chat.com" class="hover:text-accent transition-colors">Contact</a>
+      </nav>
+      <p class="text-slate-400 text-sm">Built with <a href="https://tauri.app" class="hover:text-accent" target="_blank">Tauri</a> &amp; <a href="https://ollama.com" class="hover:text-accent" target="_blank">Ollama</a></p>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Platform tabs
+  function showTab(id) {
+    document.querySelectorAll('.dl-panel').forEach(p => p.classList.add('hidden'));
+    document.querySelectorAll('.dl-tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('dl-' + id).classList.remove('hidden');
+    document.getElementById('tab-' + id).classList.add('active');
+  }
+  // Linux arch tabs
+  function showArch(id) {
+    document.querySelectorAll('#linux-x64, #linux-arm').forEach(p => p.classList.add('hidden'));
+    document.querySelectorAll('.arch-tab').forEach(t => t.classList.remove('active-arch'));
+    document.getElementById('linux-' + id).classList.remove('hidden');
+    document.getElementById('arch-' + id).classList.add('active-arch');
+  }
+</script>
+<style>
+  .dl-tab { color: #64748b; }
+  .dl-tab.active { background: white; color: #6366f1; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .arch-tab { color: #94a3b8; background: transparent; }
+  .arch-tab.active-arch { background: white; color: #6366f1; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+</style>
+
+</body>
+</html>

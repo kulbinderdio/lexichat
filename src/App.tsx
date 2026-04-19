@@ -39,7 +39,7 @@ Rules:
 - When asked about files or folders on this computer, call list_files or list_directory_tree right away using any path the user mentioned, or the configured folders if none was given.
 - To find files whose names match a pattern or start with certain letters, use search_files with a glob pattern (e.g. "D*" to find files starting with D).
 - Always use full absolute paths — never '.' or '~'.
-- Use web_search for current events, weather, or live data.
+- Use web_search for current events, weather, or live data. Use fetch_webpage to read the full contents of a specific URL the user provides or a result from web_search.
 - ALWAYS write a helpful text response after using tools — summarise what you found, list the results, or answer the user's question directly. Never leave the chat blank after a tool call.
 - If asked about your own tools, capabilities, or what you can do, answer directly from your knowledge — do not call any tools to answer this question.
 - NEVER call read_file on image files (.jpg, .jpeg, .png, .gif, .webp, .bmp, etc.). Images are sent directly in the message via the vision API — describe them from what you can see. If no image is attached, tell the user to use the paperclip button to attach it.
@@ -65,6 +65,7 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "find_old_files", description: "Find files not modified in N days.", parameters: { type: "object", properties: { directory: { type: "string", description: "Directory to search." }, older_than_days: { type: "integer", description: "Days threshold." }, pattern: { type: "string", description: "Optional glob filter." } }, required: ["directory","older_than_days"] } } },
   { type: "function", function: { name: "web_search", description: "Search the web for current information.", parameters: { type: "object", properties: { query: { type: "string", description: "Search query." } }, required: ["query"] } } },
   { type: "function", function: { name: "compose_email", description: "Build a base64url-encoded RFC 2822 email string for the Gmail API. Call this first, then pass the result as the 'raw' field to gmail_sendmessage.", parameters: { type: "object", properties: { to: { type: "string", description: "Recipient email address(es), comma-separated." }, from: { type: "string", description: "Sender email address (optional)." }, subject: { type: "string", description: "Email subject line." }, body: { type: "string", description: "Plain text email body." }, reply_to_message_id: { type: "string", description: "Message-ID to reply to, for threading (optional)." } }, required: ["to","subject","body"] } } },
+  { type: "function", function: { name: "fetch_webpage", description: "Fetch and read the full text content of a webpage by URL. Use this to read a specific URL the user provides, or to read the full article behind a web search result.", parameters: { type: "object", properties: { url: { type: "string", description: "Full URL to fetch, must start with http:// or https://" } }, required: ["url"] } } },
 ];
 
 // ── Built-in OpenAPI specs ────────────────────────────────────────────────────
@@ -160,6 +161,7 @@ const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
 const DEFAULT_SETTINGS: AppSettings = {
   host: "http://localhost:11434",
   maxTools: 30,
+  webSearchResults: 10,
   numGPULayers: null,
   models: [],
   enabledTools: { read_file: true, list_files: true, web_search: true },
@@ -250,13 +252,17 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
           <ThinkingDots />
         ) : msg.streaming ? (
           <div className="assistant-text">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => (
+              <a href={href} onClick={e => { e.preventDefault(); if (href) openUrl(href); }}>{children}</a>
+            )}}>{msg.text}</ReactMarkdown>
             <span className="streaming-cursor" />
           </div>
         ) : (
           msg.text && (
             <div className="assistant-text">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => (
+                <a href={href} onClick={e => { e.preventDefault(); if (href) openUrl(href); }}>{children}</a>
+              )}}>{msg.text}</ReactMarkdown>
             </div>
           )
         )}
@@ -448,13 +454,12 @@ function extractUrls(text: string): string[] {
 function urlLabel(url: string): string {
   try {
     const u = new URL(url);
-    // Show host + first path segment as a readable label
-    const parts = u.pathname.split("/").filter(Boolean);
-    return parts.length ? `${u.hostname} / ${decodeURIComponent(parts[0])}` : u.hostname;
+    const path = decodeURIComponent(u.pathname + u.search).replace(/\/$/, "");
+    return path ? `${u.hostname}${path}` : u.hostname;
   } catch { return url; }
 }
 
-function UrlListResult({ name, result }: { name: string; result: string }) {
+function UrlListResult({ name, result, onSend }: { name: string; result: string; onSend?: (text: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const urls = extractUrls(result);
 
@@ -476,6 +481,14 @@ function UrlListResult({ name, result }: { name: string; result: string }) {
                 {urlLabel(url)}
               </span>
               <div className="file-browser-actions">
+                {onSend && (
+                  <button
+                    className="file-action-chip"
+                    onClick={e => { e.stopPropagation(); onSend(`Use fetch_webpage to read the full content of this URL and summarise it: ${url}`); }}
+                  >
+                    Fetch
+                  </button>
+                )}
                 <button
                   className="file-action-chip"
                   onClick={e => { e.stopPropagation(); openUrl(url); }}
@@ -503,7 +516,7 @@ function ToolResultRow({
   }
   const urls = extractUrls(result);
   if (urls.length > 0) {
-    return <UrlListResult name={name} result={result} />;
+    return <UrlListResult name={name} result={result} onSend={onSend} />;
   }
   const preview = result.length > 120 ? result.slice(0, 120) + "…" : result;
   return (
@@ -672,9 +685,15 @@ export default function App() {
       const resolved = resolveParams(chatParams);
       const effectiveBase = resolved.systemPromptOverride ?? basePrompt;
 
+      // Build context vars block from the active profile
+      const contextVars = activeProfile?.contextVars?.filter(v => v.name.trim() && v.value.trim()) ?? [];
+      const contextVarsSuffix = contextVars.length > 0
+        ? `\n\nUser context (treat these as facts about the user — use them automatically when relevant, do not repeat them unless asked):\n${contextVars.map(v => `- ${v.name}: ${v.value}`).join("\n")}`
+        : "";
+
       const systemPrompt = allowedDirs.length > 0
-        ? `${effectiveBase}${externalSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
-        : `${effectiveBase}${externalSuffix}`;
+        ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
+        : `${effectiveBase}${externalSuffix}${contextVarsSuffix}`;
 
       await invoke("send_message", {
         args: {
@@ -692,6 +711,7 @@ export default function App() {
           num_predict: resolved.numPredict,
           stop: resolved.stop ?? null,
           keep_alive: resolved.keepAlive ?? null,
+          web_search_results: settings.webSearchResults ?? 10,
         }
       });
     } catch (err) {
@@ -930,7 +950,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 0.1.0</div>
+            <div className="about-version">Version 0.3.1</div>
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>

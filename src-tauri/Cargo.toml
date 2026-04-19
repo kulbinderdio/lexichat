@@ -1,6 +1,6 @@
 [package]
 name = "lexichat"
-version = "0.1.0"
+version = "0.3.1"
 description = "LexiChat — Local AI Agent"
 authors = ["you"]
 edition = "2021"
@@ -24,7 +24,7 @@ tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "gzip", "cookies"] }
 futures-util = "0.3"
 urlencoding = "2"
 anyhow = "1"

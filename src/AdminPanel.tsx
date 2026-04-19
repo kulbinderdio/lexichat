@@ -46,6 +46,11 @@ export interface StoredOpenAPISpec {
 // IDs of built-in specs that ship with the app (user can disable but not delete)
 export const BUILTIN_OPENAPI_SPEC_IDS = new Set(["builtin-wikipedia"]);
 
+export interface ContextVar {
+  name: string;
+  value: string;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -56,11 +61,13 @@ export interface Profile {
   openapiSpecs: StoredOpenAPISpec[];
   maxTools: number;
   chatParams?: ChatParams;
+  contextVars?: ContextVar[];
 }
 
 export interface AppSettings {
   host: string;
   maxTools: number;
+  webSearchResults: number;
   numGPULayers: number | null;
   models: string[];
   enabledTools: Record<string, boolean>;
@@ -465,10 +472,123 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
               )}
             </div>
 
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label>Context Variables</label>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8, lineHeight: 1.5 }}>
+                Name/value pairs injected into every conversation as facts about you. The AI uses them automatically when relevant — e.g. <em>location</em>, <em>timezone</em>, <em>name</em>, <em>occupation</em>.
+              </div>
+              <ContextVarsEditor
+                vars={d.contextVars ?? []}
+                onChange={vars => setDraft({ ...d, contextVars: vars })}
+              />
+            </div>
+
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <button className="btn" onClick={cancelEdit}>Cancel</button>
               <button className="btn primary" onClick={saveProfile} disabled={!d.name.trim()}>Save Profile</button>
             </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Context Vars Editor ───────────────────────────────────────────────────────
+
+const SUGGESTED_VARS = [
+  { name: "name",         placeholder: "e.g. Alex" },
+  { name: "location",     placeholder: "e.g. Gravesend, UK" },
+  { name: "timezone",     placeholder: "e.g. Europe/London" },
+  { name: "language",     placeholder: "e.g. British English" },
+  { name: "units",        placeholder: "e.g. metric" },
+  { name: "currency",     placeholder: "e.g. GBP" },
+  { name: "date_format",  placeholder: "e.g. DD/MM/YYYY" },
+  { name: "occupation",   placeholder: "e.g. Software Developer" },
+  { name: "expertise",    placeholder: "e.g. expert / intermediate / beginner" },
+  { name: "os",           placeholder: "e.g. macOS Sequoia" },
+  { name: "stack",        placeholder: "e.g. Rust, TypeScript, React" },
+  { name: "current_project", placeholder: "e.g. LexiChat — Tauri/Rust AI app" },
+  { name: "company",      placeholder: "e.g. Acme Ltd" },
+  { name: "industry",     placeholder: "e.g. Technology" },
+  { name: "writing_tone", placeholder: "e.g. professional but friendly" },
+  { name: "interests",    placeholder: "e.g. history, cycling, jazz" },
+];
+
+function ContextVarsEditor({ vars, onChange }: { vars: ContextVar[]; onChange: (v: ContextVar[]) => void }) {
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const update = (i: number, field: "name" | "value", val: string) => {
+    const next = vars.map((v, idx) => idx === i ? { ...v, [field]: val } : v);
+    onChange(next);
+  };
+
+  const remove = (i: number) => onChange(vars.filter((_, idx) => idx !== i));
+
+  const add = (name = "", value = "") => onChange([...vars, { name, value }]);
+
+  const addSuggestion = (name: string) => {
+    if (!vars.some(v => v.name === name)) add(name, "");
+    setShowSuggestions(false);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {vars.map((v, i) => (
+        <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            className="admin-input"
+            value={v.name}
+            onChange={e => update(i, "name", e.target.value)}
+            placeholder="name"
+            style={{ width: 130, flexShrink: 0, fontFamily: "monospace", fontSize: 11 }}
+          />
+          <input
+            className="admin-input"
+            value={v.value}
+            onChange={e => update(i, "value", e.target.value)}
+            placeholder={SUGGESTED_VARS.find(s => s.name === v.name)?.placeholder ?? "value"}
+            style={{ flex: 1, fontSize: 12 }}
+          />
+          <button
+            className="icon-btn"
+            onClick={() => remove(i)}
+            title="Remove"
+            style={{ flexShrink: 0, color: "var(--text-tertiary)" }}
+          >✕</button>
+        </div>
+      ))}
+
+      <div style={{ display: "flex", gap: 6, marginTop: 2, position: "relative" }}>
+        <button className="btn" style={{ fontSize: 11 }} onClick={() => add()}>+ Add variable</button>
+        <button className="btn" style={{ fontSize: 11 }} onClick={() => setShowSuggestions(s => !s)}>
+          Suggestions ▾
+        </button>
+        {showSuggestions && (
+          <div style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 50,
+            background: "var(--bg-primary)", border: "1px solid var(--border)",
+            borderRadius: 10, padding: "6px 0", minWidth: 200,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.15)", maxHeight: 260, overflowY: "auto"
+          }}>
+            {SUGGESTED_VARS.map(s => {
+              const already = vars.some(v => v.name === s.name);
+              return (
+                <button
+                  key={s.name}
+                  onClick={() => !already && addSuggestion(s.name)}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    width: "100%", padding: "6px 12px", background: "none", border: "none",
+                    cursor: already ? "default" : "pointer", textAlign: "left",
+                    opacity: already ? 0.4 : 1, gap: 8,
+                  }}
+                >
+                  <span style={{ fontFamily: "monospace", fontSize: 11 }}>{s.name}</span>
+                  {already && <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>added</span>}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -482,6 +602,7 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
   const setToolEnabled = (name: string, val: boolean) =>
     onChange({ ...settings, enabledTools: { ...settings.enabledTools, [name]: val } });
   const setMaxTools = (v: number) => onChange({ ...settings, maxTools: v });
+  const setWebSearchResults = (v: number) => onChange({ ...settings, webSearchResults: v });
 
   return (
     <div className="admin-scroll">
@@ -526,6 +647,22 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
           </div>
           {settings.maxTools !== 30 && (
             <button className="link-btn" onClick={() => setMaxTools(30)}>Reset to default (30)</button>
+          )}
+        </div>
+        <div className="admin-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
+            <div style={{ flex: 1 }}>
+              <div className="admin-row-title">Web search results</div>
+              <div className="admin-row-sub">Number of results returned per web_search call.</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button className="stepper-btn" onClick={() => setWebSearchResults(Math.max(1, settings.webSearchResults - 1))}>−</button>
+              <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "monospace", minWidth: 28, textAlign: "center" }}>{settings.webSearchResults}</span>
+              <button className="stepper-btn" onClick={() => setWebSearchResults(Math.min(20, settings.webSearchResults + 1))}>+</button>
+            </div>
+          </div>
+          {settings.webSearchResults !== 10 && (
+            <button className="link-btn" onClick={() => setWebSearchResults(10)}>Reset to default (10)</button>
           )}
         </div>
       </section>

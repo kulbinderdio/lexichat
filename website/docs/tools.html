@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Built-in Tools — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Reference for LexiChat's built-in AI tools: web_search, read_file, write_file, and list_directory."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .prose-code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  pre { background: #0f172a; border-radius: 0.75rem; padding: 1.25rem; overflow-x: auto; }
+  pre code { color: #94a3b8; font-size: 0.8125rem; line-height: 1.6; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .kw { color: #818cf8; }
+  .str { color: #34d399; }
+  .num { color: #fb923c; }
+  .cm { color: #475569; }
+  .key { color: #e2e8f0; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="getting-started.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Getting Started</a>
+      <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="configuration.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Configuration</a>
+      <a href="integrations.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Integrations</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Tools</div>
+      <a href="#overview" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Overview</a>
+      <a href="#web_search" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">web_search</a>
+      <a href="#read_file" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">read_file</a>
+      <a href="#write_file" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">write_file</a>
+      <a href="#list_directory" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">list_directory</a>
+      <a href="#indicators" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Tool Indicators</a>
+      <a href="#security" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Security</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Built-in Tools</h1>
+    <p class="text-lg text-slate-600 mb-10">Complete reference for every tool available to the AI out of the box — parameters, return values, and examples.</p>
+
+    <!-- Overview -->
+    <section id="overview" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">info</span> How Tools Work
+      </h2>
+      <p class="text-slate-600 mb-4">LexiChat uses the Ollama tool-calling API. When you send a message, the model receives a list of available tools alongside your message. If it decides a tool is needed, it emits a structured JSON call — LexiChat intercepts this, executes the tool in the Rust backend, and feeds the result back to the model in the next turn.</p>
+      <div class="bg-white border border-slate-200 rounded-xl p-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Agentic loop</div>
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+          <div class="bg-slate-100 rounded-lg px-3 py-1.5 font-medium">Your message</div>
+          <span class="text-slate-400">→</span>
+          <div class="bg-slate-100 rounded-lg px-3 py-1.5 font-medium">Model thinks</div>
+          <span class="text-slate-400">→</span>
+          <div class="bg-accent/10 text-accent rounded-lg px-3 py-1.5 font-medium">Tool call</div>
+          <span class="text-slate-400">→</span>
+          <div class="bg-slate-100 rounded-lg px-3 py-1.5 font-medium">Tool result</div>
+          <span class="text-slate-400">→</span>
+          <div class="bg-slate-100 rounded-lg px-3 py-1.5 font-medium">Model responds</div>
+        </div>
+        <p class="text-xs text-slate-400 mt-3">The loop can repeat multiple times in a single response if the model needs to call several tools.</p>
+      </div>
+    </section>
+
+    <!-- web_search -->
+    <section id="web_search" class="mb-12">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center flex-shrink-0">
+          <span class="material-symbols-outlined text-blue-500">travel_explore</span>
+        </div>
+        <div>
+          <h2 class="text-xl font-semibold prose-code">web_search</h2>
+          <div class="text-xs text-slate-400">Search the web using DuckDuckGo</div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Parameter</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Type</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Required</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">query</td>
+              <td class="px-4 py-3 text-slate-400">string</td>
+              <td class="px-4 py-3"><span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">yes</span></td>
+              <td class="px-4 py-3 text-slate-600">The search query string</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Returns</div>
+        <p class="text-sm text-slate-600">A list of up to 10 results, each containing: <strong>title</strong>, <strong>url</strong>, and <strong>snippet</strong> (short excerpt).</p>
+      </div>
+
+      <pre><code><span class="cm">// Example model call</span>
+{
+  <span class="key">"name"</span>: <span class="str">"web_search"</span>,
+  <span class="key">"arguments"</span>: {
+    <span class="key">"query"</span>: <span class="str">"latest Ollama release notes"</span>
+  }
+}
+
+<span class="cm">// Returned to model</span>
+[
+  {
+    <span class="key">"title"</span>: <span class="str">"Ollama 0.6 Released — New Features"</span>,
+    <span class="key">"url"</span>: <span class="str">"https://ollama.com/blog/release-0.6"</span>,
+    <span class="key">"snippet"</span>: <span class="str">"Ollama 0.6 brings structured outputs, improved..."</span>
+  },
+  ...
+]</code></pre>
+    </section>
+
+    <!-- read_file -->
+    <section id="read_file" class="mb-12">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center flex-shrink-0">
+          <span class="material-symbols-outlined text-emerald-500">draft</span>
+        </div>
+        <div>
+          <h2 class="text-xl font-semibold prose-code">read_file</h2>
+          <div class="text-xs text-slate-400">Read the contents of a file in an allowed directory</div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Parameter</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Type</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Required</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="border-b border-slate-100">
+              <td class="px-4 py-3 prose-code font-medium">path</td>
+              <td class="px-4 py-3 text-slate-400">string</td>
+              <td class="px-4 py-3"><span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">yes</span></td>
+              <td class="px-4 py-3 text-slate-600">Absolute path to the file (must be within an allowed directory)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Returns</div>
+        <p class="text-sm text-slate-600">The full UTF-8 contents of the file as a string. Binary files return an error.</p>
+      </div>
+
+      <pre><code><span class="cm">// Example: ask the AI to summarise a document</span>
+<span class="cm">// User says: "Summarise ~/Documents/LexiChat/report.md"</span>
+
+{
+  <span class="key">"name"</span>: <span class="str">"read_file"</span>,
+  <span class="key">"arguments"</span>: {
+    <span class="key">"path"</span>: <span class="str">"/Users/alice/Documents/LexiChat/report.md"</span>
+  }
+}</code></pre>
+    </section>
+
+    <!-- write_file -->
+    <section id="write_file" class="mb-12">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-violet-50 rounded-xl flex items-center justify-center flex-shrink-0">
+          <span class="material-symbols-outlined text-violet-500">edit_document</span>
+        </div>
+        <div>
+          <h2 class="text-xl font-semibold prose-code">write_file</h2>
+          <div class="text-xs text-slate-400">Write content to a file in an allowed directory</div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Parameter</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Type</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Required</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">path</td>
+              <td class="px-4 py-3 text-slate-400">string</td>
+              <td class="px-4 py-3"><span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">yes</span></td>
+              <td class="px-4 py-3 text-slate-600">Full absolute path including filename and extension</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">content</td>
+              <td class="px-4 py-3 text-slate-400">string</td>
+              <td class="px-4 py-3"><span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">yes</span></td>
+              <td class="px-4 py-3 text-slate-600">The text content to write. Overwrites the file if it already exists.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3 mb-4">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">warning</span>
+        <div class="text-sm text-slate-700"><strong>Overwrites existing files without confirmation.</strong> If the path doesn't exist, it is created (including intermediate directories, as long as they're within an allowed directory).</div>
+      </div>
+
+      <pre><code><span class="cm">// User says: "Write a haiku about mountains and save it"</span>
+{
+  <span class="key">"name"</span>: <span class="str">"write_file"</span>,
+  <span class="key">"arguments"</span>: {
+    <span class="key">"path"</span>: <span class="str">"/Users/alice/Documents/LexiChat/mountain_haiku.txt"</span>,
+    <span class="key">"content"</span>: <span class="str">"Silent peaks above\nClouds drift past ancient granite\nEcho of the wind"</span>
+  }
+}</code></pre>
+    </section>
+
+    <!-- list_directory -->
+    <section id="list_directory" class="mb-12">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
+          <span class="material-symbols-outlined text-amber-500">folder_open</span>
+        </div>
+        <div>
+          <h2 class="text-xl font-semibold prose-code">list_directory</h2>
+          <div class="text-xs text-slate-400">List the contents of a directory in an allowed path</div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Parameter</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Type</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Required</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">path</td>
+              <td class="px-4 py-3 text-slate-400">string</td>
+              <td class="px-4 py-3"><span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">yes</span></td>
+              <td class="px-4 py-3 text-slate-600">Absolute path to the directory to list</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Returns</div>
+        <p class="text-sm text-slate-600">A list of filenames and subdirectory names in the specified directory (one level deep, not recursive).</p>
+      </div>
+
+      <pre><code><span class="cm">// User says: "What files do I have in my LexiChat folder?"</span>
+{
+  <span class="key">"name"</span>: <span class="str">"list_directory"</span>,
+  <span class="key">"arguments"</span>: {
+    <span class="key">"path"</span>: <span class="str">"/Users/alice/Documents/LexiChat"</span>
+  }
+}
+
+<span class="cm">// Returned to model</span>
+[<span class="str">"report.md"</span>, <span class="str">"mountain_haiku.txt"</span>, <span class="str">"notes/"</span>, <span class="str">"archive/"</span>]</code></pre>
+    </section>
+
+    <!-- Indicators -->
+    <section id="indicators" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">visibility</span> Tool Indicators in Chat
+      </h2>
+      <p class="text-slate-600 mb-4">Every time the AI calls a tool, a small indicator appears inline in the conversation so you can see exactly what it's doing:</p>
+      <div class="space-y-3">
+        <div class="bg-white border border-slate-200 rounded-xl px-4 py-3 flex items-center gap-3">
+          <code class="prose-code text-sm bg-slate-900 text-green-400 px-3 py-1.5 rounded-lg">⚙ web_search("ollama release")</code>
+          <span class="text-sm text-slate-500">— shown while the search is running</span>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl px-4 py-3 flex items-center gap-3">
+          <code class="prose-code text-sm bg-slate-900 text-green-400 px-3 py-1.5 rounded-lg">⚙ read_file("/Users/alice/Documents/report.md")</code>
+          <span class="text-sm text-slate-500">— shown while reading</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Security -->
+    <section id="security">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">security</span> Security Notes
+      </h2>
+      <div class="space-y-3">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">lock</span>
+          <div class="text-sm text-slate-600"><strong>Path sandboxing</strong> — all file tools enforce the allowed-directory whitelist in Rust before any filesystem operation. No amount of prompt injection can escape this boundary.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">visibility</span>
+          <div class="text-sm text-slate-600"><strong>Full transparency</strong> — every tool call and its arguments are shown in the chat. You can always see exactly what the AI is doing and stop it mid-stream if needed.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">cloud_off</span>
+          <div class="text-sm text-slate-600"><strong>No exfiltration</strong> — tool results go back to your local Ollama model only. No tool sends data to any external service (web_search sends the query to DuckDuckGo but not your file contents).</div>
+        </div>
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

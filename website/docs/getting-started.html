@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Getting Started — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Install LexiChat, set up Ollama, pull a model, and send your first message."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .prose-code { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+  .step-line::before { content: ''; position: absolute; left: 19px; top: 48px; bottom: 0; width: 2px; background: linear-gradient(to bottom, #e2e8f0, transparent); }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="configuration.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Configuration</a>
+      <a href="tools.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Tools</a>
+      <a href="integrations.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Integrations</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">On this page</div>
+      <a href="#requirements" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Requirements</a>
+      <a href="#install-ollama" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Install Ollama</a>
+      <a href="#pull-model" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Pull a model</a>
+      <a href="#install-lexi" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Install LexiChat</a>
+      <a href="#first-chat" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">First chat</a>
+      <a href="#next-steps" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Next steps</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Getting Started</h1>
+    <p class="text-lg text-slate-600 mb-10">Everything you need from zero to your first local AI conversation — takes about five minutes.</p>
+
+    <!-- Requirements -->
+    <section id="requirements" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">checklist</span> Requirements
+      </h2>
+      <div class="grid sm:grid-cols-3 gap-4">
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="text-sm font-semibold mb-1">macOS</div>
+          <div class="text-xs text-slate-500">macOS 13 Ventura or later. Apple Silicon or Intel, 8 GB RAM minimum (16 GB recommended).</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="text-sm font-semibold mb-1">Windows</div>
+          <div class="text-xs text-slate-500">Windows 10 (build 1809+) or Windows 11. 8 GB RAM minimum.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="text-sm font-semibold mb-1">Disk space</div>
+          <div class="text-xs text-slate-500">~100 MB for LexiChat. Models range from 2 GB (small) to 20+ GB (large). Plan accordingly.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Install Ollama -->
+    <section id="install-ollama" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">download</span> Step 1 — Install Ollama
+      </h2>
+      <p class="text-slate-600 mb-5">LexiChat uses <strong>Ollama</strong> as its local model server. Ollama manages downloads, GPU acceleration, and API serving automatically.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-5">
+        <div class="bg-slate-50 border-b border-slate-200 px-4 py-2 flex items-center gap-2">
+          <div class="w-3 h-3 rounded-full bg-red-400"></div>
+          <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+          <div class="w-3 h-3 rounded-full bg-green-400"></div>
+          <span class="text-xs text-slate-400 ml-2 prose-code">Terminal</span>
+        </div>
+        <div class="p-4">
+          <p class="text-xs text-slate-400 mb-2"># macOS / Linux — one-liner installer</p>
+          <code class="prose-code text-sm text-slate-800">curl -fsSL https://ollama.com/install.sh | sh</code>
+        </div>
+      </div>
+
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">info</span>
+        <div class="text-sm text-slate-700">
+          <strong>Windows:</strong> Download the installer from <strong>ollama.com</strong> and run it. Ollama will appear in your system tray once running.
+        </div>
+      </div>
+    </section>
+
+    <!-- Pull a Model -->
+    <section id="pull-model" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">psychology</span> Step 2 — Pull a Model
+      </h2>
+      <p class="text-slate-600 mb-5">Once Ollama is running, pull a model. We recommend starting with <code class="prose-code bg-slate-100 px-1.5 py-0.5 rounded text-sm">gemma3</code> — it's fast, capable, and supports tool calling.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-6">
+        <div class="bg-slate-50 border-b border-slate-200 px-4 py-2 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <div class="w-3 h-3 rounded-full bg-red-400"></div>
+            <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+            <div class="w-3 h-3 rounded-full bg-green-400"></div>
+          </div>
+          <span class="text-xs text-slate-400 prose-code">Terminal</span>
+        </div>
+        <div class="p-4 space-y-3">
+          <div>
+            <p class="text-xs text-slate-400 mb-1"># Recommended starting model (~5 GB)</p>
+            <code class="prose-code text-sm text-slate-800">ollama pull gemma3</code>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400 mb-1"># Larger, more capable (~27 GB — needs 32 GB RAM)</p>
+            <code class="prose-code text-sm text-slate-800">ollama pull gemma3:27b</code>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400 mb-1"># Tiny model for low-RAM machines (~2 GB)</p>
+            <code class="prose-code text-sm text-slate-800">ollama pull qwen2.5:3b</code>
+          </div>
+        </div>
+      </div>
+
+      <!-- Model comparison table -->
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Model</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Size</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">RAM needed</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Best for</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">gemma3</td>
+              <td class="px-4 py-3 text-slate-500">~5 GB</td>
+              <td class="px-4 py-3 text-slate-500">8 GB</td>
+              <td class="px-4 py-3 text-slate-500">General use, tools, writing</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">gemma3:27b</td>
+              <td class="px-4 py-3 text-slate-500">~27 GB</td>
+              <td class="px-4 py-3 text-slate-500">32 GB</td>
+              <td class="px-4 py-3 text-slate-500">Complex reasoning, coding</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">qwen2.5:3b</td>
+              <td class="px-4 py-3 text-slate-500">~2 GB</td>
+              <td class="px-4 py-3 text-slate-500">4 GB</td>
+              <td class="px-4 py-3 text-slate-500">Low RAM, quick tasks</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">llava</td>
+              <td class="px-4 py-3 text-slate-500">~4 GB</td>
+              <td class="px-4 py-3 text-slate-500">8 GB</td>
+              <td class="px-4 py-3 text-slate-500">Vision / image analysis</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Install LexiChat -->
+    <section id="install-lexi" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">install_desktop</span> Step 3 — Install LexiChat
+      </h2>
+      <p class="text-slate-600 mb-5">Download the latest release for your platform from <a href="https://lexi-chat.com/#download" class="text-accent font-medium hover:underline">lexi-chat.com</a>. All platforms and formats are listed there with SHA256 checksums.</p>
+
+      <div class="grid sm:grid-cols-2 gap-4 mb-6">
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <svg class="w-8 h-8 text-slate-600" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98l-.09.06c-.22.14-2.2 1.28-2.18 3.81.03 3.02 2.65 4.03 2.68 4.04l-.05.17zM13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            <div>
+              <div class="font-semibold text-sm">macOS</div>
+              <div class="text-xs text-slate-400">.dmg installer</div>
+            </div>
+          </div>
+          <ol class="text-sm text-slate-600 space-y-1.5 list-decimal list-inside">
+            <li>Download <strong>LexiChat.dmg</strong> from Releases</li>
+            <li>Open the DMG and drag to Applications</li>
+            <li>Right-click → Open on first launch (Gatekeeper)</li>
+          </ol>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-3 mb-3">
+            <svg class="w-8 h-8 text-slate-600" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+            <div>
+              <div class="font-semibold text-sm">Windows</div>
+              <div class="text-xs text-slate-400">.msi or .exe installer</div>
+            </div>
+          </div>
+          <ol class="text-sm text-slate-600 space-y-1.5 list-decimal list-inside">
+            <li>Download <strong>LexiChat_setup.exe</strong> from Releases</li>
+            <li>Run the installer and follow prompts</li>
+            <li>LexiChat appears in Start Menu</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">warning</span>
+        <div class="text-sm text-slate-700">
+          Make sure Ollama is running before launching LexiChat. On macOS, Ollama runs as a menu-bar app. On Windows, check the system tray.
+        </div>
+      </div>
+    </section>
+
+    <!-- First Chat -->
+    <section id="first-chat" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">chat</span> Step 4 — Your First Chat
+      </h2>
+
+      <div class="space-y-5">
+        <div class="relative pl-12 pb-8 step-line">
+          <div class="absolute left-0 w-10 h-10 bg-accent rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">1</div>
+          <h3 class="font-semibold mb-1">Select a model</h3>
+          <p class="text-sm text-slate-600">In the model picker at the bottom of the chat, choose the model you pulled (e.g. <code class="prose-code bg-slate-100 px-1 rounded">gemma3</code>). LexiChat shows all locally available Ollama models.</p>
+        </div>
+        <div class="relative pl-12 pb-8 step-line">
+          <div class="absolute left-0 w-10 h-10 bg-accent rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">2</div>
+          <h3 class="font-semibold mb-1">Type a message</h3>
+          <p class="text-sm text-slate-600">Click the input box at the bottom, type your question, and press Enter or click Send. Responses stream in real time.</p>
+        </div>
+        <div class="relative pl-12 pb-8 step-line">
+          <div class="absolute left-0 w-10 h-10 bg-accent rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">3</div>
+          <h3 class="font-semibold mb-1">Try an image</h3>
+          <p class="text-sm text-slate-600">Click the paperclip icon to attach an image. With a vision-capable model like <code class="prose-code bg-slate-100 px-1 rounded">llava</code>, the AI can describe or analyse it.</p>
+        </div>
+        <div class="relative pl-12">
+          <div class="absolute left-0 w-10 h-10 bg-accent rounded-full flex items-center justify-center text-white font-bold text-sm flex-shrink-0">4</div>
+          <h3 class="font-semibold mb-1">Ask it to search the web</h3>
+          <p class="text-sm text-slate-600">Try: <em>"What happened in the news today?"</em> — the AI will call the built-in DuckDuckGo web search tool automatically and show you a <span class="prose-code bg-slate-100 px-1 rounded text-xs">⚙ web_search</span> indicator as it works.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Next Steps -->
+    <section id="next-steps">
+      <h2 class="text-xl font-semibold mb-5 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">explore</span> Next Steps
+      </h2>
+      <div class="grid sm:grid-cols-3 gap-4">
+        <a href="features.html" class="bg-white border border-slate-200 rounded-xl p-4 hover:border-accent/40 transition-colors group">
+          <div class="text-sm font-semibold group-hover:text-accent transition-colors mb-1">Features Overview →</div>
+          <div class="text-xs text-slate-400">Discover all the things LexiChat can do</div>
+        </a>
+        <a href="configuration.html" class="bg-white border border-slate-200 rounded-xl p-4 hover:border-accent/40 transition-colors group">
+          <div class="text-sm font-semibold group-hover:text-accent transition-colors mb-1">Configuration →</div>
+          <div class="text-xs text-slate-400">Set up profiles, system prompts, and model params</div>
+        </a>
+        <a href="integrations.html" class="bg-white border border-slate-200 rounded-xl p-4 hover:border-accent/40 transition-colors group">
+          <div class="text-sm font-semibold group-hover:text-accent transition-colors mb-1">Integrations →</div>
+          <div class="text-xs text-slate-400">Connect to any REST API via OpenAPI</div>
+        </a>
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LexiChat Documentation</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Complete documentation for LexiChat — installation, features, configuration, tools, and integrations."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: {
+        accent: '#6366f1',
+        'accent-light': '#818cf8',
+        'accent-dark': '#4f46e5',
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .card-hover { transition: transform 0.2s, box-shadow 0.2s; }
+  .card-hover:hover { transform: translateY(-3px); box-shadow: 0 20px 40px rgba(99,102,241,0.12); }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Navigation ──────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="../index.html#features" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="../index.html#screenshots" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Screenshots</a>
+      <a href="index.html" class="text-sm font-medium text-accent transition-colors">Docs</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Hero ────────────────────────────────────────────────────────────────── -->
+<section class="pt-32 pb-16 px-6">
+  <div class="max-w-4xl mx-auto text-center">
+    <div class="inline-flex items-center gap-2 bg-accent/10 text-accent text-sm font-medium px-4 py-1.5 rounded-full mb-6">
+      <span class="material-symbols-outlined text-base">menu_book</span>
+      Documentation
+    </div>
+    <h1 class="text-4xl md:text-5xl font-bold tracking-tight mb-4">
+      Everything you need to know about <span class="gradient-text">LexiChat</span>
+    </h1>
+    <p class="text-lg text-slate-600 max-w-2xl mx-auto">
+      From first install to advanced integrations — guides, references, and how-tos for getting the most out of your local AI assistant.
+    </p>
+  </div>
+</section>
+
+<!-- ── Quick Search Hint ────────────────────────────────────────────────────── -->
+<section class="pb-8 px-6">
+  <div class="max-w-2xl mx-auto">
+    <div class="bg-white border border-slate-200 rounded-xl px-4 py-3 flex items-center gap-3 text-slate-400 shadow-sm">
+      <span class="material-symbols-outlined text-xl">search</span>
+      <span class="text-sm">Browse the sections below or use Ctrl+F to find what you need</span>
+    </div>
+  </div>
+</section>
+
+<!-- ── Doc Cards ───────────────────────────────────────────────────────────── -->
+<section class="pb-24 px-6">
+  <div class="max-w-5xl mx-auto grid md:grid-cols-2 gap-6">
+
+    <!-- Getting Started -->
+    <a href="getting-started.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-indigo-100 transition-colors">
+          <span class="material-symbols-outlined text-accent text-2xl">rocket_launch</span>
+        </div>
+        <div>
+          <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">Getting Started</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">Install Ollama, pull a model, download LexiChat, and send your first message in minutes.</p>
+          <ul class="mt-4 space-y-1.5">
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>System requirements</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Installing Ollama &amp; pulling models</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>First chat walkthrough</li>
+          </ul>
+        </div>
+      </div>
+    </a>
+
+    <!-- Features Overview -->
+    <a href="features.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 bg-violet-50 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-violet-100 transition-colors">
+          <span class="material-symbols-outlined text-violet-500 text-2xl">auto_awesome</span>
+        </div>
+        <div>
+          <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">Features Overview</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">Explore everything LexiChat can do — web search, file tools, multi-profile, vision, and more.</p>
+          <ul class="mt-4 space-y-1.5">
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Chat &amp; streaming responses</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Web search</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>File read &amp; write</li>
+          </ul>
+        </div>
+      </div>
+    </a>
+
+    <!-- Configuration -->
+    <a href="configuration.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-100 transition-colors">
+          <span class="material-symbols-outlined text-emerald-500 text-2xl">tune</span>
+        </div>
+        <div>
+          <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">Configuration</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">Profiles, system prompts, chat parameters, and advanced model options — all explained.</p>
+          <ul class="mt-4 space-y-1.5">
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Profiles &amp; personas</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Chat parameter presets</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Advanced model options</li>
+          </ul>
+        </div>
+      </div>
+    </a>
+
+    <!-- Built-in Tools -->
+    <a href="tools.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-amber-100 transition-colors">
+          <span class="material-symbols-outlined text-amber-500 text-2xl">build</span>
+        </div>
+        <div>
+          <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">Built-in Tools</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">Reference for every built-in tool the AI can call — parameters, examples, and security notes.</p>
+          <ul class="mt-4 space-y-1.5">
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>web_search</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>read_file / write_file</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>list_directory</li>
+          </ul>
+        </div>
+      </div>
+    </a>
+
+    <!-- Integrations -->
+    <a href="integrations.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block md:col-span-2">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 bg-rose-50 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-rose-100 transition-colors">
+          <span class="material-symbols-outlined text-rose-500 text-2xl">hub</span>
+        </div>
+        <div class="flex-1">
+          <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">OpenAPI &amp; Custom Integrations</h2>
+          <p class="text-slate-500 text-sm leading-relaxed mb-4">Connect LexiChat to any REST API — paste an OpenAPI spec or define custom endpoints. Includes an MCP-style tool protocol overview.</p>
+          <div class="grid sm:grid-cols-3 gap-3">
+            <div class="bg-slate-50 rounded-lg px-3 py-2.5">
+              <div class="text-xs font-semibold text-slate-700 mb-0.5">OpenAPI Import</div>
+              <div class="text-xs text-slate-400">Paste JSON/YAML spec and instantly get callable tools</div>
+            </div>
+            <div class="bg-slate-50 rounded-lg px-3 py-2.5">
+              <div class="text-xs font-semibold text-slate-700 mb-0.5">Custom Tools</div>
+              <div class="text-xs text-slate-400">Define HTTP endpoints with path, query, or body params</div>
+            </div>
+            <div class="bg-slate-50 rounded-lg px-3 py-2.5">
+              <div class="text-xs font-semibold text-slate-700 mb-0.5">Tool Security</div>
+              <div class="text-xs text-slate-400">All tool calls are visible and auditable in the chat</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </a>
+
+  </div>
+</section>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
