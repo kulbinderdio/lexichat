@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { buildExportEnvelope, validateImport, resolveImportName } from "./profileIO";
 import { ChatParams, DEFAULT_CHAT_PARAMS, ChatParamsDefaults, AdvancedParamsContent } from "./ChatParamsPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ export interface StoredMCPServer {
   args: string[];
   env: Record<string, string>;
   auth?: AuthConfig;
+  enabledTools?: Record<string, boolean>;  // prefixed tool name → enabled; absent = enabled
 }
 
 export interface StoredOpenAPISpec {
@@ -303,6 +305,44 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
     onChange({ ...settings, activeProfileId: id });
   };
 
+  const [importError, setImportError] = useState("");
+
+  const exportProfile = async (profile: Profile) => {
+    const envelope = buildExportEnvelope(profile);
+    const json = JSON.stringify(envelope, null, 2);
+    const defaultName = profile.name.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
+    const path = await save({
+      title: "Export Profile",
+      defaultPath: `${defaultName}.json`,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (!path) return;
+    await invoke("write_file_text", { path, content: json });
+  };
+
+  const importProfile = async () => {
+    setImportError("");
+    const path = await open({ multiple: false, title: "Import Profile", filters: [{ name: "JSON", extensions: ["json"] }] });
+    if (typeof path !== "string") return;
+    let raw: string;
+    try { raw = await invoke<string>("read_file_text", { path }); } catch { setImportError("Could not read file."); return; }
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { setImportError("File is not valid JSON."); return; }
+    const imported = validateImport(parsed);
+    if (!imported) { setImportError("Not a valid LexiChat profile file."); return; }
+    const newProfile: Profile = {
+      ...imported,
+      id: uid(),
+      name: resolveImportName(imported.name, settings.profiles),
+      mcpServers:   imported.mcpServers   ?? [],
+      openapiSpecs: imported.openapiSpecs ?? [],
+      enabledTools: imported.enabledTools ?? {},
+      maxTools:     imported.maxTools     ?? settings.maxTools,
+    };
+    onChange({ ...settings, profiles: [...settings.profiles, newProfile] });
+    setSelectedId(newProfile.id);
+  };
+
   const d = draft;
 
   return (
@@ -341,10 +381,14 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
             </div>
           ))}
         </div>
-        <div style={{ padding: 8, borderTop: "1px solid var(--border)" }}>
+        <div style={{ padding: 8, borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 6 }}>
           <button className="btn primary" style={{ width: "100%", fontSize: 11 }} onClick={newProfile}>
             + New Profile
           </button>
+          <button className="btn" style={{ width: "100%", fontSize: 11 }} onClick={importProfile}>
+            Import Profile
+          </button>
+          {importError && <div style={{ color: "#f87171", fontSize: 11 }}>{importError}</div>}
         </div>
       </div>
 
@@ -362,6 +406,7 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
                 {selected!.model && <div style={{ fontSize: 11, opacity: 0.5, fontFamily: "monospace", marginTop: 2 }}>{selected!.model}</div>}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn" onClick={() => exportProfile(selected!)}>Export</button>
                 <button className="btn" onClick={() => editProfile(selected!)}>Edit</button>
                 <button
                   className="btn primary"
@@ -1121,6 +1166,16 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
   const toggleExpand = (id: string) =>
     setExpanded(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
 
+  const isToolEnabled = (storedSrv: StoredMCPServer | undefined, toolName: string) =>
+    storedSrv?.enabledTools?.[toolName] !== false;
+
+  const toggleTool = (serverId: string, toolName: string, enabled: boolean) => {
+    const updated = stored.map(s =>
+      s.id !== serverId ? s : { ...s, enabledTools: { ...(s.enabledTools ?? {}), [toolName]: enabled } }
+    );
+    onChange(updated);
+  };
+
   return (
     <div className="admin-scroll" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ flex: 1 }}>
@@ -1142,7 +1197,13 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
                   <span style={{ color: srv.connected ? "#4ade80" : srv.error ? "#f87171" : "#888",
                     fontSize: 10, background: (srv.connected ? "#4ade80" : "#f87171") + "22",
                     padding: "1px 6px", borderRadius: 10 }}>
-                    {srv.connected ? `✓ ${srv.tool_count} tools` : srv.error ? "✕ Error" : "Disconnected"}
+                    {srv.connected ? (() => {
+                      const storedSrv = stored.find(s => s.id === srv.id);
+                      const enabledCount = srv.tools.filter(t => isToolEnabled(storedSrv, t.name)).length;
+                      return enabledCount === srv.tool_count
+                        ? `✓ ${srv.tool_count} tools`
+                        : `✓ ${enabledCount}/${srv.tool_count} tools`;
+                    })() : srv.error ? "✕ Error" : "Disconnected"}
                   </span>
                 </div>
               </div>
@@ -1157,15 +1218,36 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
             {expanded.has(srv.id) && (
               <div style={{ paddingLeft: 28 }}>
                 {srv.error && <div style={{ fontSize: 11, color: "#f87171", padding: "4px 16px" }}>{srv.error}</div>}
-                {srv.tools.map(t => (
-                  <div key={t.name} className="admin-row" style={{ paddingTop: 3, paddingBottom: 3 }}>
-                    <span style={{ color: "var(--purple)", fontSize: 10 }}>⚡</span>
-                    <div className="admin-row-text">
-                      <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 600 }}>{t.name}</span>
-                      {t.description && <span className="admin-row-sub">{t.description}</span>}
-                    </div>
+                {srv.tools.length > 0 && (
+                  <div style={{ paddingBottom: 4, display: "flex", gap: 8 }}>
+                    <button className="btn" style={{ fontSize: 10, padding: "1px 7px" }}
+                      onClick={() => onChange(stored.map(s => s.id !== srv.id ? s : {
+                        ...s, enabledTools: Object.fromEntries(srv.tools.map(t => [t.name, true]))
+                      }))}>All</button>
+                    <button className="btn" style={{ fontSize: 10, padding: "1px 7px" }}
+                      onClick={() => onChange(stored.map(s => s.id !== srv.id ? s : {
+                        ...s, enabledTools: Object.fromEntries(srv.tools.map(t => [t.name, false]))
+                      }))}>None</button>
                   </div>
-                ))}
+                )}
+                {srv.tools.map(t => {
+                  const storedSrv = stored.find(s => s.id === srv.id);
+                  const enabled = isToolEnabled(storedSrv, t.name);
+                  return (
+                    <label key={t.name} className="admin-row" style={{ cursor: "pointer", paddingTop: 3, paddingBottom: 3 }}>
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={e => toggleTool(srv.id, t.name, e.target.checked)}
+                        style={{ marginRight: 6, accentColor: "var(--purple)" }}
+                      />
+                      <div className="admin-row-text">
+                        <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 600 }}>{t.name}</span>
+                        {t.description && <span className="admin-row-sub">{t.description}</span>}
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             )}
           </section>

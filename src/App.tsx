@@ -7,7 +7,7 @@ import { Settings, RotateCcw, Bug, Paperclip, Info } from "lucide-react";
 import lexiLogo from "./assets/lexi.png";
 import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec } from "./AdminPanel";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { DebugPanel } from "./DebugPanel";
 import "./App.css";
@@ -217,7 +217,7 @@ function ThinkingDots() {
   );
 }
 
-// ── Copy button ───────────────────────────────────────────────────────────────
+// ── Copy + Save buttons ───────────────────────────────────────────────────────
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -230,6 +230,55 @@ function CopyButton({ text }: { text: string }) {
     <button className={`copy-btn${copied ? " copied" : ""}`} onClick={copy}>
       {copied ? "✓ Copied" : "⧉ Copy"}
     </button>
+  );
+}
+
+function SaveMenu({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const saveAs = async (ext: string) => {
+    setOpen(false);
+    const filters = ext === "docx"
+      ? [{ name: "Word Document", extensions: ["docx"] }]
+      : ext === "pdf"
+      ? [{ name: "PDF", extensions: ["pdf"] }]
+      : [{ name: "Text File", extensions: ["txt"] }];
+    const path = await save({ title: "Save response", filters });
+    if (!path) return;
+    const finalPath = path.endsWith(`.${ext}`) ? path : `${path}.${ext}`;
+    await invoke("save_document", { path: finalPath, content: text });
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
+      <button className="copy-btn" onClick={() => setOpen(o => !o)} title="Save as…">
+        ···
+      </button>
+      {open && (
+        <div className="save-menu-dropdown">
+          <div className="save-menu-header">Save response as</div>
+          <button className="save-menu-item" onClick={() => saveAs("txt")}>
+            <span className="save-menu-ext">TXT</span>Plain text
+          </button>
+          <button className="save-menu-item" onClick={() => saveAs("pdf")}>
+            <span className="save-menu-ext">PDF</span>PDF document
+          </button>
+          <button className="save-menu-item" onClick={() => saveAs("docx")}>
+            <span className="save-menu-ext" style={{ background: "rgba(59,130,246,0.15)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.25)" }}>DOC</span>Word document
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -281,7 +330,10 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         )}
 
         {!msg.streaming && msg.text && (
-          <div><CopyButton text={msg.text} /></div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <CopyButton text={msg.text} />
+            <SaveMenu text={msg.text} />
+          </div>
         )}
       </div>
     </div>
@@ -446,10 +498,27 @@ function FileBrowserResult({
 
 const URL_REGEX = /https?:\/\/[^\s"'\]>),}]+/g;
 
-function extractUrls(text: string): string[] {
-  const matches = text.match(URL_REGEX) ?? [];
-  // Deduplicate while preserving order
-  return [...new Set(matches)];
+function extractUrlsWithTitles(text: string): { url: string; title: string }[] {
+  const lines = text.split('\n');
+  const result: { url: string; title: string }[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    const urlMatch = trimmed.match(/^(https?:\/\/[^\s"'\]>),}]+)/);
+    if (!urlMatch) continue;
+    const url = urlMatch[1];
+    if (seen.has(url)) continue;
+    seen.add(url);
+    // Look back up to 3 lines for a numbered title "N. Title"
+    let title = '';
+    for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
+      const m = lines[j].trim().match(/^\d+\.\s+(.+)$/);
+      if (m) { title = m[1]; break; }
+    }
+    result.push({ url, title });
+  }
+  return result;
 }
 
 function urlLabel(url: string): string {
@@ -462,7 +531,7 @@ function urlLabel(url: string): string {
 
 function UrlListResult({ name, result, onSend }: { name: string; result: string; onSend?: (text: string) => void }) {
   const [expanded, setExpanded] = useState(false);
-  const urls = extractUrls(result);
+  const entries = extractUrlsWithTitles(result);
 
   return (
     <div className="msg-tool-result">
@@ -470,15 +539,15 @@ function UrlListResult({ name, result, onSend }: { name: string; result: string;
         <span className="tool-result-check">✓</span>
         <span className="tool-result-name">{name}</span>
         <span className="tool-result-dot">·</span>
-        <span className="tool-result-preview">{urls.length} link{urls.length !== 1 ? "s" : ""}</span>
+        <span className="tool-result-preview">{entries.length} link{entries.length !== 1 ? "s" : ""}</span>
         <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{expanded ? "▲" : "▼"}</span>
       </div>
       {expanded && (
         <div className="file-browser">
-          {urls.map((url, i) => (
+          {entries.map(({ url, title }, i) => (
             <div key={i} className="file-browser-row">
               <span className="file-browser-icon">🔗</span>
-              <span className="file-browser-name" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={url}>
+              <span className="file-browser-name" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={title || url}>
                 {urlLabel(url)}
               </span>
               <div className="file-browser-actions">
@@ -515,7 +584,7 @@ function ToolResultRow({
   if (FILE_LISTING_TOOLS.has(name)) {
     return <FileBrowserResult name={name} result={result} args={args} onSend={onSend} onAttach={onAttach} />;
   }
-  const urls = extractUrls(result);
+  const urls = extractUrlsWithTitles(result);
   if (urls.length > 0) {
     return <UrlListResult name={name} result={result} onSend={onSend} />;
   }
@@ -698,6 +767,13 @@ export default function App() {
         ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
         : `${effectiveBase}${externalSuffix}${contextVarsSuffix}`;
 
+      const activeMcp = activeProfile?.mcpServers ?? settings.mcpServers ?? [];
+      const disabledMcpTools = activeMcp.flatMap(srv =>
+        Object.entries(srv.enabledTools ?? {})
+          .filter(([, en]) => !en)
+          .map(([name]) => name)
+      );
+
       await invoke("send_message", {
         args: {
           model: selectedModel,
@@ -715,6 +791,7 @@ export default function App() {
           stop: resolved.stop ?? null,
           keep_alive: resolved.keepAlive ?? null,
           web_search_results: settings.webSearchResults ?? 10,
+          disabled_mcp_tools: disabledMcpTools,
         }
       });
     } catch (err) {

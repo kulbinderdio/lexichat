@@ -316,6 +316,210 @@ fn pdf_wrap(line: &str, max_chars: usize) -> Vec<String> {
     segments
 }
 
+// ── DOCX markdown rendering helpers ──────────────────────────────────────────
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+     .replace('<', "&lt;")
+     .replace('>', "&gt;")
+     .replace('"', "&quot;")
+}
+
+struct InlineRun { text: String, bold: bool, italic: bool, code: bool }
+
+fn flush_run(buf: &mut String, runs: &mut Vec<InlineRun>, bold: bool, italic: bool, code: bool) {
+    if !buf.is_empty() {
+        runs.push(InlineRun { text: std::mem::take(buf), bold, italic, code });
+    }
+}
+
+// Parse inline markdown (* ** *** ` ) into styled runs.
+// Deliberately ignores _ / __ to avoid false positives in snake_case identifiers.
+fn parse_inline(text: &str) -> Vec<InlineRun> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let mut runs: Vec<InlineRun> = Vec::new();
+    let mut buf = String::new();
+    let mut bold = false;
+    let mut italic = false;
+    let mut code = false;
+    let mut i = 0;
+
+    while i < n {
+        if code {
+            if chars[i] == '`' {
+                flush_run(&mut buf, &mut runs, bold, italic, true);
+                code = false;
+            } else {
+                buf.push(chars[i]);
+            }
+            i += 1;
+            continue;
+        }
+        if chars[i] == '*' {
+            let mut count = 0;
+            while i < n && chars[i] == '*' { count += 1; i += 1; }
+            flush_run(&mut buf, &mut runs, bold, italic, code);
+            match count {
+                1 => italic = !italic,
+                2 => bold = !bold,
+                _ => { bold = !bold; italic = !italic; }
+            }
+        } else if chars[i] == '`' {
+            flush_run(&mut buf, &mut runs, bold, italic, code);
+            code = true;
+            i += 1;
+        } else {
+            buf.push(chars[i]);
+            i += 1;
+        }
+    }
+    flush_run(&mut buf, &mut runs, bold, italic, code);
+    runs
+}
+
+fn inline_runs_xml(text: &str) -> String {
+    let mut out = String::new();
+    for run in parse_inline(text) {
+        if run.text.is_empty() { continue; }
+        let escaped = xml_escape(&run.text);
+        let mut rpr = String::new();
+        if run.bold   { rpr.push_str("<w:b/>"); }
+        if run.italic { rpr.push_str("<w:i/>"); }
+        if run.code   { rpr.push_str(r#"<w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="20"/>"#); }
+        if rpr.is_empty() {
+            out.push_str(&format!(r#"<w:r><w:t xml:space="preserve">{escaped}</w:t></w:r>"#));
+        } else {
+            out.push_str(&format!(r#"<w:r><w:rPr>{rpr}</w:rPr><w:t xml:space="preserve">{escaped}</w:t></w:r>"#));
+        }
+    }
+    out
+}
+
+fn heading_para(text: &str, style: &str) -> String {
+    let runs = inline_runs_xml(text);
+    format!(r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr>{runs}</w:p>"#)
+}
+
+fn is_numbered_item(s: &str) -> bool {
+    let mut i = 0;
+    let b = s.as_bytes();
+    while i < b.len() && b[i].is_ascii_digit() { i += 1; }
+    i > 0 && b.get(i) == Some(&b'.') && b.get(i + 1) == Some(&b' ')
+}
+
+fn md_to_docx_body(content: &str) -> String {
+    let mut out = String::new();
+    let mut in_code_block = false;
+
+    for line in content.lines() {
+        let s = line.trim();
+
+        // Fenced code block toggle
+        if s.starts_with("```") {
+            in_code_block = !in_code_block;
+            // Emit an empty para when closing to add spacing
+            if !in_code_block {
+                out.push_str(r#"<w:p><w:pPr><w:spacing w:after="60"/></w:pPr></w:p>"#);
+            }
+            continue;
+        }
+
+        if in_code_block {
+            let escaped = xml_escape(line); // preserve original indentation
+            out.push_str(&format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="CodeBlock"/></w:pPr><w:r><w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>"#
+            ));
+            continue;
+        }
+
+        // Headings (check most hashes first)
+        if let Some(t) = s.strip_prefix("#### ").or_else(|| s.strip_prefix("##### ")).or_else(|| s.strip_prefix("###### ")) {
+            out.push_str(&heading_para(t, "Heading3"));
+        } else if let Some(t) = s.strip_prefix("### ") {
+            out.push_str(&heading_para(t, "Heading3"));
+        } else if let Some(t) = s.strip_prefix("## ") {
+            out.push_str(&heading_para(t, "Heading2"));
+        } else if let Some(t) = s.strip_prefix("# ") {
+            out.push_str(&heading_para(t, "Heading1"));
+        }
+        // Horizontal rule
+        else if s == "---" || s == "***" || s == "___" || s == "- - -" || s == "* * *" {
+            out.push_str(r#"<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="6" w:space="1" w:color="auto"/></w:pBdr></w:pPr></w:p>"#);
+        }
+        // Blockquote
+        else if s.starts_with('>') {
+            let t = s[1..].trim_start_matches(' ');
+            let runs = inline_runs_xml(t);
+            out.push_str(&format!(
+                r#"<w:p><w:pPr><w:ind w:left="720"/></w:pPr>{runs}</w:p>"#
+            ));
+        }
+        // Bullet list
+        else if let Some(t) = s.strip_prefix("- ").or_else(|| s.strip_prefix("* ")).or_else(|| s.strip_prefix("+ ")) {
+            let runs = inline_runs_xml(t);
+            let bullet = xml_escape("•");
+            out.push_str(&format!(
+                r#"<w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t xml:space="preserve">{bullet}   </w:t></w:r>{runs}</w:p>"#
+            ));
+        }
+        // Numbered list
+        else if is_numbered_item(s) {
+            let runs = inline_runs_xml(s);
+            out.push_str(&format!(
+                r#"<w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>{runs}</w:p>"#
+            ));
+        }
+        // Empty line
+        else if s.is_empty() {
+            out.push_str(r#"<w:p><w:pPr><w:spacing w:after="60"/></w:pPr></w:p>"#);
+        }
+        // Normal paragraph
+        else {
+            let runs = inline_runs_xml(s);
+            out.push_str(&format!(r#"<w:p>{runs}</w:p>"#));
+        }
+    }
+    out
+}
+
+fn docx_styles() -> &'static str {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:next w:val="Normal"/>
+    <w:pPr><w:spacing w:before="240" w:after="60"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="40"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading2">
+    <w:name w:val="heading 2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:next w:val="Normal"/>
+    <w:pPr><w:spacing w:before="200" w:after="60"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="32"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="Heading3">
+    <w:name w:val="heading 3"/>
+    <w:basedOn w:val="Normal"/>
+    <w:next w:val="Normal"/>
+    <w:pPr><w:spacing w:before="160" w:after="60"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="26"/></w:rPr>
+  </w:style>
+  <w:style w:type="paragraph" w:styleId="CodeBlock">
+    <w:name w:val="Code Block"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:ind w:left="720"/><w:spacing w:before="0" w:after="0"/></w:pPr>
+    <w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:sz w:val="20"/></w:rPr>
+  </w:style>
+</w:styles>"#
+}
+
 fn write_docx(path: &str, content: &str) -> String {
     use std::io::Write as IoWrite;
     use zip::write::SimpleFileOptions;
@@ -328,20 +532,11 @@ fn write_docx(path: &str, content: &str) -> String {
     let opts = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    // Build paragraph XML from content lines
-    let paragraphs: String = content.lines().map(|line| {
-        let escaped = line
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('"', "&quot;");
-        format!(r#"<w:p><w:r><w:t xml:space="preserve">{escaped}</w:t></w:r></w:p>"#)
-    }).collect::<Vec<_>>().join("");
-
+    let body = md_to_docx_body(content);
     let document_xml = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-<w:body>{paragraphs}<w:sectPr/></w:body>
+<w:body>{body}<w:sectPr/></w:body>
 </w:document>"#
     );
 
@@ -350,6 +545,7 @@ fn write_docx(path: &str, content: &str) -> String {
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>"#;
 
     let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -358,7 +554,9 @@ fn write_docx(path: &str, content: &str) -> String {
 </Relationships>"#;
 
     let word_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>"#;
 
     let mut ok = true;
     ok &= zip.start_file("[Content_Types].xml", opts).is_ok();
@@ -367,6 +565,8 @@ fn write_docx(path: &str, content: &str) -> String {
     ok &= zip.write_all(rels.as_bytes()).is_ok();
     ok &= zip.start_file("word/_rels/document.xml.rels", opts).is_ok();
     ok &= zip.write_all(word_rels.as_bytes()).is_ok();
+    ok &= zip.start_file("word/styles.xml", opts).is_ok();
+    ok &= zip.write_all(docx_styles().as_bytes()).is_ok();
     ok &= zip.start_file("word/document.xml", opts).is_ok();
     ok &= zip.write_all(document_xml.as_bytes()).is_ok();
 
@@ -374,6 +574,23 @@ fn write_docx(path: &str, content: &str) -> String {
         return format!("Error writing DOCX '{path}'");
     }
     format!("Written DOCX '{path}' ({} chars)", content.len())
+}
+
+/// Save content to path, routing by extension (.docx / .pdf / anything else → plain text).
+/// No sandbox check — caller is responsible for using a user-chosen path.
+pub fn save_document(path: &str, content: &str) -> Result<(), String> {
+    let lower = path.to_lowercase();
+    let result = if lower.ends_with(".docx") {
+        write_docx(path, content)
+    } else if lower.ends_with(".pdf") {
+        write_pdf(path, content)
+    } else {
+        match fs::write(path, content) {
+            Ok(_)  => format!("ok"),
+            Err(e) => format!("Error: {e}"),
+        }
+    };
+    if result.starts_with("Error") { Err(result) } else { Ok(()) }
 }
 
 fn list_files(args: &Value, allowed_dirs: &[String]) -> String {

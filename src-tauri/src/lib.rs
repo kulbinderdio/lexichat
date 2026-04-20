@@ -110,6 +110,8 @@ pub struct SendMessageArgs {
     pub keep_alive: Option<String>,
     #[serde(default = "default_web_search_results")]
     pub web_search_results: usize,
+    #[serde(default)]
+    pub disabled_mcp_tools: Vec<String>,
 }
 
 fn default_web_search_results() -> usize { 10 }
@@ -158,10 +160,11 @@ async fn send_message(
         all_tools.extend(extra);
     }
 
-    // Add MCP tools (all currently connected — already profile-scoped by set_mcp_servers)
+    // Add MCP tools (profile-scoped by set_mcp_servers, filtered by per-tool disable list)
     {
         let extra: Vec<ollama::ToolSchema> = state.mcp_connections.lock().await.values()
             .flat_map(|conn| conn.tools.iter()
+                .filter(|t| !args.disabled_mcp_tools.contains(&t.name))
                 .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
             .collect();
         all_tools.extend(extra);
@@ -240,6 +243,21 @@ fn persist_allowed_dirs(state: &State<'_, AppState>) {
     if let Ok(json) = serde_json::to_string(&dirs) {
         let _ = std::fs::write(allowed_dirs_path(), json);
     }
+}
+
+#[tauri::command]
+fn write_file_text(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_document(path: String, content: String) -> Result<(), String> {
+    crate::tools::save_document(&path, &content)
+}
+
+#[tauri::command]
+fn read_file_text(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -738,6 +756,9 @@ pub fn run() {
             add_allowed_dir,
             remove_allowed_dir,
             set_allowed_dirs,
+            write_file_text,
+            read_file_text,
+            save_document,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
