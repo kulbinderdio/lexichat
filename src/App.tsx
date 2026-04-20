@@ -496,8 +496,6 @@ function FileBrowserResult({
 
 // ── URL list (interactive tool result) ───────────────────────────────────────
 
-const URL_REGEX = /https?:\/\/[^\s"'\]>),}]+/g;
-
 function extractUrlsWithTitles(text: string): { url: string; title: string }[] {
   const lines = text.split('\n');
   const result: { url: string; title: string }[] = [];
