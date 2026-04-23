@@ -166,6 +166,7 @@ struct ChunkMessage {
 }
 
 /// Stream one LLM turn. Returns (full_text, tool_calls).
+/// When `silent` is true all `app.emit` calls are skipped (used by background jobs).
 async fn stream_chat(
     host: &str,
     model: &str,
@@ -174,6 +175,7 @@ async fn stream_chat(
     options: Option<&ChatOptions>,
     keep_alive: Option<&str>,
     app: &AppHandle,
+    silent: bool,
 ) -> anyhow::Result<(String, Vec<WireToolCall>)> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
@@ -218,13 +220,13 @@ async fn stream_chat(
             if let Some(msg) = parsed.message {
                 if let Some(delta) = msg.thinking {
                     if !delta.is_empty() {
-                        let _ = app.emit("agent-thinking", ThinkingEvent { delta });
+                        if !silent { let _ = app.emit("agent-thinking", ThinkingEvent { delta }); }
                     }
                 }
                 if let Some(delta) = msg.content {
                     if !delta.is_empty() {
                         full_text.push_str(&delta);
-                        let _ = app.emit("agent-token", TokenEvent { delta });
+                        if !silent { let _ = app.emit("agent-token", TokenEvent { delta }); }
                     }
                 }
                 if let Some(tcs) = msg.tool_calls {
@@ -254,13 +256,14 @@ pub async fn agent_loop(
     allowed_dirs: Vec<String>,
     web_search_results: usize,
     app: &AppHandle,
+    silent: bool,
 ) -> anyhow::Result<()> {
     let run_start = std::time::Instant::now();
     let mut nudged = false;
     for step in 0..MAX_STEPS {
         let step_start = std::time::Instant::now();
         let schema_names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
-        let _ = app.emit("debug-step-start", DebugStepEvent { step, schema_names });
+        if !silent { let _ = app.emit("debug-step-start", DebugStepEvent { step, schema_names }); }
 
         // Build wire messages: system + history
         let wire = {
@@ -277,24 +280,28 @@ pub async fn agent_loop(
             w
         };
 
-        let (full_text, tool_calls) = match stream_chat(host, model, &wire, tools, options.as_ref(), keep_alive.as_deref(), app).await {
+        let (full_text, tool_calls) = match stream_chat(host, model, &wire, tools, options.as_ref(), keep_alive.as_deref(), app, silent).await {
             Ok(v) => v,
             Err(e) => {
-                let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
-                let _ = app.emit("debug-run-done", DebugRunDoneEvent {
-                    total_ms: run_start.elapsed().as_millis() as u64,
-                    error: Some(e.to_string()),
-                });
+                if !silent {
+                    let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
+                    let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                        total_ms: run_start.elapsed().as_millis() as u64,
+                        error: Some(e.to_string()),
+                    });
+                }
                 return Err(e);
             }
         };
 
         let step_ms = step_start.elapsed().as_millis() as u64;
-        let _ = app.emit("debug-step-done", DebugStepDoneEvent {
-            step,
-            llm_text: full_text.clone(),
-            duration_ms: step_ms,
-        });
+        if !silent {
+            let _ = app.emit("debug-step-done", DebugStepDoneEvent {
+                step,
+                llm_text: full_text.clone(),
+                duration_ms: step_ms,
+            });
+        }
 
         // Append assistant message to history
         {
@@ -326,11 +333,13 @@ pub async fn agent_loop(
                 });
                 continue;
             }
-            let _ = app.emit("agent-done", DoneEvent { error: None });
-            let _ = app.emit("debug-run-done", DebugRunDoneEvent {
-                total_ms: run_start.elapsed().as_millis() as u64,
-                error: None,
-            });
+            if !silent {
+                let _ = app.emit("agent-done", DoneEvent { error: None });
+                let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                    total_ms: run_start.elapsed().as_millis() as u64,
+                    error: None,
+                });
+            }
             return Ok(());
         }
 
@@ -340,25 +349,31 @@ pub async fn agent_loop(
             let args = &call.function.arguments;
             let pretty_args = serde_json::to_string_pretty(args).unwrap_or_default();
 
-            let _ = app.emit("agent-tool-call", ToolCallEvent {
-                name: name.clone(),
-                args: pretty_args,
-            });
+            if !silent {
+                let _ = app.emit("agent-tool-call", ToolCallEvent {
+                    name: name.clone(),
+                    args: pretty_args,
+                });
+            }
 
             // Route: builtin → openapi → mcp
-            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs, web_search_results).await;
+            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs, web_search_results, app).await;
 
-            // Cap large responses
-            let result = if result.len() > 6000 {
+            // Cap large responses — but never truncate passthrough values like compose_email
+            // whose full content must be forwarded intact to the next tool call.
+            let passthrough = ["compose_email"];
+            let result = if !passthrough.contains(&name.as_str()) && result.len() > 6000 {
                 format!("{}\n…[truncated: {} chars total]", &result[..6000], result.len())
             } else {
                 result
             };
 
-            let _ = app.emit("agent-tool-result", ToolResultEvent {
-                name: name.clone(),
-                result: result.clone(),
-            });
+            if !silent {
+                let _ = app.emit("agent-tool-result", ToolResultEvent {
+                    name: name.clone(),
+                    result: result.clone(),
+                });
+            }
 
             let mut conv = conversation.lock().unwrap();
             conv.push(WireMessage {
@@ -374,12 +389,22 @@ pub async fn agent_loop(
 
     // Hit max steps
     let msg = "Stopped: reached maximum steps without a final answer.".to_string();
-    let _ = app.emit("agent-done", DoneEvent { error: Some(msg.clone()) });
-    let _ = app.emit("debug-run-done", DebugRunDoneEvent {
-        total_ms: run_start.elapsed().as_millis() as u64,
-        error: Some(msg),
-    });
+    if !silent {
+        let _ = app.emit("agent-done", DoneEvent { error: Some(msg.clone()) });
+        let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+            total_ms: run_start.elapsed().as_millis() as u64,
+            error: Some(msg),
+        });
+    }
     Ok(())
+}
+
+/// Returns true if `s` is NOT already valid base64url — i.e. the model forgot
+/// to call compose_email and passed the raw MIME text directly.
+fn needs_base64url_encoding(s: &str) -> bool {
+    // Valid base64url contains only A-Za-z0-9+/=_- and no whitespace.
+    // Plain email text always has spaces, newlines, or colon headers.
+    s.contains('\n') || s.contains('\r') || s.contains(": ")
 }
 
 /// Route a tool call to the right executor.
@@ -390,11 +415,13 @@ async fn dispatch_tool(
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: &[String],
     web_search_results: usize,
+    app: &AppHandle,
 ) -> String {
     // 1. Try built-in tools first
     let builtin_names = ["read_file","write_file","list_files","search_files",
         "search_in_files","get_file_info","list_directory_tree","create_directory",
-        "move_file","delete_file","find_old_files","web_search","fetch_webpage","compose_email"];
+        "move_file","delete_file","find_old_files","web_search","fetch_webpage","compose_email",
+        "get_current_datetime"];
     if builtin_names.contains(&name) {
         return crate::tools::dispatch_builtin(name, args, allowed_dirs, web_search_results).await;
     }
@@ -402,7 +429,23 @@ async fn dispatch_tool(
     // 2. Try OpenAPI tools
     for spec in openapi_specs.iter() {
         if let Some(tool) = spec.tools.iter().find(|t| t.name == name) {
-            return crate::openapi::execute(spec, tool, args).await;
+            // Auto-encode the 'raw' field for Gmail sendMessage if the model passes
+            // plain text instead of going through compose_email first.
+            let patched;
+            let effective_args = if let Some(raw) = args["raw"].as_str() {
+                if needs_base64url_encoding(raw) {
+                    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+                    let mut obj = args.clone();
+                    if let Some(map) = obj.as_object_mut() {
+                        map.insert("raw".into(), serde_json::Value::String(
+                            URL_SAFE_NO_PAD.encode(raw.as_bytes())
+                        ));
+                    }
+                    patched = obj;
+                    &patched
+                } else { args }
+            } else { args };
+            return crate::openapi::execute(spec, tool, effective_args, Some(app)).await;
         }
     }
 
@@ -411,7 +454,29 @@ async fn dispatch_tool(
         let mut connections = mcp_connections.lock().await;
         for conn in connections.values_mut() {
             if conn.tools.iter().any(|t| t.name == name) {
-                return conn.call_tool(name, args).await;
+                // Snapshot token before the call to detect if a refresh occurred
+                let token_before = if let crate::mcp::AuthConfig::OAuth2 { ref access_token, .. } = conn.config.auth {
+                    Some(access_token.clone())
+                } else { None };
+
+                let result = conn.call_tool(name, args).await;
+
+                // If the token changed (refresh happened), persist it to the frontend
+                if let (Some(before), crate::mcp::AuthConfig::OAuth2 { ref access_token, .. }) =
+                    (token_before, &conn.config.auth)
+                {
+                    if *access_token != before {
+                        use tauri::Emitter;
+                        let _ = app.emit("openapi-token-refreshed", serde_json::json!({
+                            "spec_id": conn.config.id,
+                            "access_token": access_token,
+                        }));
+                        // Also update AppState so the next call within this run uses the new token
+                        // (AppState.mcp_connections IS the live connection map — already updated)
+                    }
+                }
+
+                return result;
             }
         }
     }

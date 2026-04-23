@@ -104,6 +104,27 @@ impl AuthConfig {
         json["access_token"].as_str().map(String::from)
     }
 
+    /// Use the refresh_token to get a new access_token. Returns the new token on success.
+    /// Works with any RFC 6749-compliant provider. Includes scope when provided (required
+    /// by some providers, e.g. Microsoft). Only sends client_secret if non-empty (some
+    /// providers use public-client / PKCE flows without a secret).
+    pub async fn try_refresh(&self, client: &reqwest::Client) -> Option<String> {
+        let AuthConfig::OAuth2 { token_url, client_id, client_secret, refresh_token, scope, .. } = self else {
+            return None;
+        };
+        if refresh_token.is_empty() || token_url.is_empty() { return None; }
+        let mut params: Vec<(&str, &str)> = vec![
+            ("grant_type",    "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id",     client_id.as_str()),
+        ];
+        if !client_secret.is_empty() { params.push(("client_secret", client_secret.as_str())); }
+        if !scope.is_empty()         { params.push(("scope", scope.as_str())); }
+        let resp = client.post(token_url.as_str()).form(&params).send().await.ok()?;
+        let json: Value = resp.json().await.ok()?;
+        json["access_token"].as_str().map(String::from)
+    }
+
     /// Apply auth, fetching an OAuth2 token when needed.
     pub async fn apply_async(
         &self,
@@ -187,6 +208,7 @@ impl MCPConnection {
             let mut cmd = tokio::process::Command::new(&config.command);
             cmd.args(&config.args)
                .envs(&config.env)
+               .kill_on_drop(true)
                .stdin(Stdio::piped())
                .stdout(Stdio::piped())
                .stderr(Stdio::null());
@@ -234,9 +256,20 @@ impl MCPConnection {
             "params": params
         });
 
-        match &self.transport {
+        match &mut self.transport {
             Transport::Http { url, client, auth } => {
-                http_rpc(client, url, auth, msg).await
+                let (val, new_token) = http_rpc(client, url, auth, msg).await?;
+                // If a token refresh occurred, update the stored auth in place
+                if let Some(tok) = new_token {
+                    if let AuthConfig::OAuth2 { ref mut access_token, .. } = auth {
+                        *access_token = tok.clone();
+                    }
+                    // Also update the parent config so future send_request calls use the new token
+                    if let AuthConfig::OAuth2 { ref mut access_token, .. } = self.config.auth {
+                        *access_token = tok;
+                    }
+                }
+                Ok(val)
             }
             Transport::Stdio { stdin, stdout, .. } => {
                 let line = serde_json::to_string(&msg).unwrap() + "\n";
@@ -316,22 +349,48 @@ impl MCPConnection {
 
 // ── HTTP JSON-RPC helper ──────────────────────────────────────────────────────
 
-async fn http_rpc(client: &reqwest::Client, url: &str, auth: &AuthConfig, msg: Value) -> Result<Value, String> {
-    let req = client
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .json(&msg);
-    let resp = auth.apply_async(client, req).await
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
+async fn http_rpc(client: &reqwest::Client, url: &str, auth: &AuthConfig, msg: Value) -> Result<(Value, Option<String>), String> {
+    let make_req = |token_override: Option<&str>| {
+        let mut r = client
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .json(&msg);
+        if let Some(tok) = token_override {
+            r = r.header("Authorization", format!("Bearer {tok}"));
+        }
+        r
+    };
 
+    let req = auth.apply_async(client, make_req(None)).await;
+    let resp = req.send().await.map_err(|e| format!("HTTP request failed: {e}"))?;
     let status = resp.status();
+
+    // On 401, attempt a token refresh and retry once
+    if status.as_u16() == 401 {
+        if let Some(new_token) = auth.try_refresh(client).await {
+            let retry_resp = make_req(Some(&new_token))
+                .send().await
+                .map_err(|e| format!("HTTP request failed after refresh: {e}"))?;
+            let retry_status = retry_resp.status();
+            if !retry_status.is_success() && retry_status.as_u16() != 202 {
+                return Err(format!("HTTP {retry_status}"));
+            }
+            let body = parse_http_rpc_body(retry_resp).await?;
+            return Ok((body, Some(new_token)));
+        }
+        return Err(format!("HTTP 401 — re-authentication required"));
+    }
+
     if !status.is_success() && status.as_u16() != 202 {
         return Err(format!("HTTP {status}"));
     }
 
+    let body = parse_http_rpc_body(resp).await?;
+    Ok((body, None))
+}
+
+async fn parse_http_rpc_body(resp: reqwest::Response) -> Result<Value, String> {
     // 202 No Content (notifications) or empty body
     let content_type = resp.headers()
         .get("content-type")
@@ -345,7 +404,6 @@ async fn http_rpc(client: &reqwest::Client, url: &str, auth: &AuthConfig, msg: V
     }
 
     if content_type.contains("text/event-stream") {
-        // Streamable HTTP transport — parse SSE events
         for line in body.lines() {
             let line = line.trim();
             if let Some(data) = line.strip_prefix("data:") {
@@ -363,7 +421,6 @@ async fn http_rpc(client: &reqwest::Client, url: &str, auth: &AuthConfig, msg: V
         }
         Err("No result found in SSE response".into())
     } else {
-        // Plain JSON response
         let val: Value = serde_json::from_str(&body)
             .map_err(|e| format!("JSON parse error: {e}\nBody: {body}"))?;
         if let Some(err) = val.get("error") {

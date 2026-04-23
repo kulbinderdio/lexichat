@@ -162,7 +162,14 @@ pub fn parse_spec(title: &str, _base_url: &str, spec_json: &str) -> Result<Vec<A
 }
 
 /// Execute an OpenAPI tool call.
-pub async fn execute(spec: &RegisteredSpec, tool: &APITool, args: &Value) -> String {
+/// `app` is optional: when provided, a refreshed OAuth2 access_token is persisted
+/// back to AppState and emitted to the frontend for localStorage persistence.
+pub async fn execute(
+    spec: &RegisteredSpec,
+    tool: &APITool,
+    args: &Value,
+    app: Option<&tauri::AppHandle>,
+) -> String {
     let client = reqwest::Client::new();
 
     // Build URL: substitute path parameters
@@ -213,12 +220,46 @@ pub async fn execute(spec: &RegisteredSpec, tool: &APITool, args: &Value) -> Str
         req = req.json(&body_params);
     }
 
+    let result = send_and_format(req).await;
+
+    // On 401, try refreshing the OAuth2 token and retry once
+    if result.starts_with("HTTP 401") {
+        if let Some(new_token) = spec.auth.try_refresh(&client).await {
+            // Persist the new token so subsequent calls in this run succeed
+            if let Some(app) = app {
+                persist_refreshed_token(app, &spec.id, &new_token).await;
+            }
+
+            // Rebuild request with the refreshed token
+            let retry_base = match tool.method.as_str() {
+                "GET"    => client.get(&url),
+                "POST"   => client.post(&url),
+                "PUT"    => client.put(&url),
+                "PATCH"  => client.patch(&url),
+                "DELETE" => client.delete(&url),
+                _        => client.get(&url),
+            };
+            let mut retry_req = retry_base
+                .header("Authorization", format!("Bearer {new_token}"))
+                .header("User-Agent", concat!("LexiChat/", env!("CARGO_PKG_VERSION")))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json");
+            if !body_params.is_empty() {
+                retry_req = retry_req.json(&body_params);
+            }
+            return send_and_format(retry_req).await;
+        }
+    }
+
+    result
+}
+
+async fn send_and_format(req: reqwest::RequestBuilder) -> String {
     match req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             match resp.text().await {
                 Ok(body) => {
-                    // Try to pretty-print JSON
                     if let Ok(json) = serde_json::from_str::<Value>(&body) {
                         format!("HTTP {status}\n{}", serde_json::to_string_pretty(&json).unwrap_or(body))
                     } else {
@@ -230,6 +271,28 @@ pub async fn execute(spec: &RegisteredSpec, tool: &APITool, args: &Value) -> Str
         }
         Err(e) => format!("Request error: {e}"),
     }
+}
+
+/// Update the in-memory AppState with the new access_token and notify the frontend to persist it.
+async fn persist_refreshed_token(app: &tauri::AppHandle, spec_id: &str, new_token: &str) {
+    use tauri::Manager;
+    let state = app.state::<crate::AppState>();
+    {
+        let mut specs = state.openapi_specs.lock().unwrap();
+        for spec in specs.iter_mut() {
+            if spec.id == spec_id {
+                if let crate::mcp::AuthConfig::OAuth2 { ref mut access_token, .. } = spec.auth {
+                    *access_token = new_token.to_string();
+                }
+                break;
+            }
+        }
+    }
+    use tauri::Emitter;
+    let _ = app.emit("openapi-token-refreshed", serde_json::json!({
+        "spec_id": spec_id,
+        "access_token": new_token,
+    }));
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

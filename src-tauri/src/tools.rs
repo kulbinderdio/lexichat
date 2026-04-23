@@ -30,8 +30,9 @@ pub async fn dispatch_builtin(name: &str, args: &Value, allowed_dirs: &[String],
             let patched = serde_json::json!({ "query": query });
             web_search(&patched, web_search_results).await
         },
-        "compose_email"      => compose_email(args),
-        _                    => format!("Unknown tool: {name}"),
+        "compose_email"         => compose_email(args),
+        "get_current_datetime"  => get_current_datetime(),
+        _                       => format!("Unknown tool: {name}"),
     }
 }
 
@@ -781,18 +782,23 @@ fn find_old_files(args: &Value, allowed_dirs: &[String]) -> String {
 
 /// Build a base64url-encoded RFC 2822 email string ready for the Gmail API `raw` field.
 fn compose_email(args: &Value) -> String {
-    let to      = args["to"].as_str().unwrap_or("");
-    let from    = args["from"].as_str().unwrap_or("");
-    let subject = args["subject"].as_str().unwrap_or("");
-    let body    = args["body"].as_str().unwrap_or("");
+    let to          = args["to"].as_str().unwrap_or("");
+    let from        = args["from"].as_str().unwrap_or("");
+    let subject     = args["subject"].as_str().unwrap_or("");
+    let body        = args["body"].as_str().unwrap_or("");
     let reply_to_id = args["reply_to_message_id"].as_str().unwrap_or("");
 
     if to.is_empty() {
         return "Error: 'to' is required".into();
     }
 
+    use base64::{Engine as _, engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}};
+
+    // Base64-encode the body so any UTF-8 content and long lines are handled correctly
+    let body_b64 = STANDARD.encode(body.as_bytes());
+
     let mut msg = String::new();
-    if !from.is_empty()    { msg.push_str(&format!("From: {from}\r\n")); }
+    if !from.is_empty() { msg.push_str(&format!("From: {from}\r\n")); }
     msg.push_str(&format!("To: {to}\r\n"));
     msg.push_str(&format!("Subject: {subject}\r\n"));
     if !reply_to_id.is_empty() {
@@ -801,13 +807,31 @@ fn compose_email(args: &Value) -> String {
     }
     msg.push_str("MIME-Version: 1.0\r\n");
     msg.push_str("Content-Type: text/plain; charset=UTF-8\r\n");
-    msg.push_str("Content-Transfer-Encoding: quoted-printable\r\n");
+    msg.push_str("Content-Transfer-Encoding: base64\r\n");
     msg.push_str("\r\n");
-    msg.push_str(body);
+    msg.push_str(&body_b64);
 
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    let encoded = URL_SAFE_NO_PAD.encode(msg.as_bytes());
-    format!("base64url encoded email (pass this as the 'raw' field to gmail_sendmessage):\n{encoded}")
+    // Outer envelope: base64url (no padding) for the Gmail API 'raw' field
+    URL_SAFE_NO_PAD.encode(msg.as_bytes())
+}
+
+// ── Date / time ───────────────────────────────────────────────────────────────
+
+fn get_current_datetime() -> String {
+    let now = chrono::Local::now();
+    format!(
+        "Current date and time:\n\
+         - Human readable: {}\n\
+         - ISO 8601: {}\n\
+         - Filename-safe: {}\n\
+         - Day: {}\n\
+         - Unix timestamp: {}",
+        now.format("%A, %d %B %Y at %H:%M:%S"),
+        now.format("%Y-%m-%dT%H:%M:%S%z"),
+        now.format("%Y-%m-%d_%H-%M"),
+        now.format("%A"),
+        now.timestamp(),
+    )
 }
 
 // ── Web search ────────────────────────────────────────────────────────────────
@@ -1249,7 +1273,8 @@ pub fn all_builtin_schemas() -> Vec<serde_json::Value> {
             vec![("query","string","Short keyword search query, 2–6 words. Use keywords, not questions or sentences.")], vec!["query"]),
         schema("fetch_webpage", "Fetch and read the full text content of a webpage by URL. Strips HTML tags and returns the readable text. Use this to read a specific URL the user has provided, or to read the full article behind a web_search result.",
             vec![("url","string","Full URL to fetch, must start with http:// or https://")], vec!["url"]),
-        schema("compose_email", "Build a base64url-encoded RFC 2822 email string for use with the Gmail API sendMessage tool. Call this first, then pass the result as the 'raw' field to gmail_sendmessage.",
+        schema_no_params("get_current_datetime", "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use this whenever you need today's date, the current time, or a timestamp for a filename."),
+        schema("compose_email", "Build a base64url-encoded RFC 2822 email ready for the Gmail API. Returns ONLY the raw base64url string — use the entire return value as the 'raw' field in gmail_sendmessage, with no modification.",
             vec![("to","string","Recipient email address(es), comma-separated."),
                  ("from","string","Sender email address (optional, Gmail will use the account address if omitted)."),
                  ("subject","string","Email subject line."),
@@ -1257,6 +1282,17 @@ pub fn all_builtin_schemas() -> Vec<serde_json::Value> {
                  ("reply_to_message_id","string","Message-ID to reply to, for threading (optional).")],
             vec!["to","subject","body"]),
     ]
+}
+
+fn schema_no_params(name: &str, desc: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": desc,
+            "parameters": { "type": "object", "properties": {}, "required": [] }
+        }
+    })
 }
 
 fn schema(name: &str, desc: &str, params: Vec<(&str,&str,&str)>, required: Vec<&str>) -> serde_json::Value {
@@ -1478,7 +1514,7 @@ mod tests {
     #[test]
     fn all_builtin_schemas_returns_expected_count() {
         let schemas = all_builtin_schemas();
-        assert_eq!(schemas.len(), 14);
+        assert_eq!(schemas.len(), 15);
     }
 
     #[test]

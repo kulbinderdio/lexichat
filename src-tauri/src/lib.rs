@@ -2,10 +2,11 @@ mod ollama;
 mod tools;
 mod openapi;
 mod mcp;
+mod jobs;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use serde::{Deserialize, Serialize};
 use openapi::RegisteredSpec;
 use mcp::{MCPServerConfig, MCPConnection, AuthConfig};
@@ -18,13 +19,14 @@ pub struct AppState {
     pub openapi_specs:   Mutex<Vec<RegisteredSpec>>,
     pub mcp_servers:     Mutex<Vec<MCPServerConfig>>,
     pub mcp_connections: tokio::sync::Mutex<HashMap<String, MCPConnection>>,
-    /// Allowed directories for file tool access
     pub allowed_dirs:    Mutex<Vec<String>>,
+    pub jobs:            Mutex<Vec<jobs::ScheduledJob>>,
+    pub job_runs:        Mutex<Vec<jobs::JobRun>>,
+    pub tray:            Mutex<Option<tauri::tray::TrayIcon<tauri::Wry>>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        // Load persisted allowed dirs
         let saved = std::fs::read_to_string(allowed_dirs_path())
             .ok()
             .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
@@ -36,6 +38,9 @@ impl Default for AppState {
             mcp_servers:     Mutex::new(Vec::new()),
             mcp_connections: tokio::sync::Mutex::new(HashMap::new()),
             allowed_dirs:    Mutex::new(saved),
+            jobs:            Mutex::new(jobs::load_jobs()),
+            job_runs:        Mutex::new(jobs::load_runs()),
+            tray:            Mutex::new(None),
         }
     }
 }
@@ -44,7 +49,7 @@ fn allowed_dirs_path() -> std::path::PathBuf {
     dirs_path().join("allowed_dirs.json")
 }
 
-fn dirs_path() -> std::path::PathBuf {
+pub fn dirs_path() -> std::path::PathBuf {
     let base = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let new_dir = base.join("lexichat");
     let _ = std::fs::create_dir_all(&new_dir);
@@ -204,6 +209,7 @@ async fn send_message(
         allowed_dirs_snapshot,
         args.web_search_results,
         &app,
+        false, // silent = false for interactive chat
     )
     .await
     .map_err(|e| e.to_string())
@@ -258,6 +264,22 @@ fn save_document(path: String, content: String) -> Result<(), String> {
 #[tauri::command]
 fn read_file_text(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_image_data_url(path: String) -> Result<String, String> {
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let ext = std::path::Path::new(&path)
+        .extension().and_then(|e| e.to_str()).unwrap_or("png").to_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif"          => "image/gif",
+        "webp"         => "image/webp",
+        "bmp"          => "image/bmp",
+        _              => "image/png",
+    };
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(&bytes)))
 }
 
 #[tauri::command]
@@ -667,7 +689,7 @@ async fn oauth2_authorize(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn uuid_v4() -> String {
+pub fn uuid_v4() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().subsec_nanos();
     format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
@@ -724,6 +746,183 @@ fn build_menu(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+// ── Scheduled job commands ────────────────────────────────────────────────────
+
+#[tauri::command]
+fn get_jobs(state: State<'_, AppState>) -> Vec<jobs::ScheduledJob> {
+    state.jobs.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn save_job(job: jobs::ScheduledJob, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    let mut stored = state.jobs.lock().unwrap();
+    if let Some(pos) = stored.iter().position(|j| j.id == job.id) {
+        stored[pos] = job.clone();
+    } else {
+        stored.push(job.clone());
+    }
+    let list = stored.clone();
+    drop(stored);
+    let r = jobs::save_jobs(&list).map_err(|e| e.to_string());
+    update_tray_tooltip(&app);
+    r
+}
+
+#[tauri::command]
+fn delete_job(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
+    let mut stored = state.jobs.lock().unwrap();
+    stored.retain(|j| j.id != id);
+    let list = stored.clone();
+    drop(stored);
+    let r = jobs::save_jobs(&list).map_err(|e| e.to_string());
+    update_tray_tooltip(&app);
+    r
+}
+
+#[tauri::command]
+async fn run_job_now(
+    id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<jobs::JobRun, String> {
+    let job = state.jobs.lock().unwrap()
+        .iter()
+        .find(|j| j.id == id)
+        .cloned()
+        .ok_or_else(|| "Job not found".to_string())?;
+
+    let (started_at, output, trace, error) = jobs::execute_job(&job, &state, &app).await;
+    let finished_at = chrono::Utc::now();
+    let duration_ms = (finished_at - started_at).num_milliseconds().max(0) as u64;
+
+    let run = jobs::JobRun {
+        id:           uuid_v4(),
+        job_id:       job.id.clone(),
+        job_name:     job.name.clone(),
+        profile_name: job.profile_name.clone(),
+        started_at,
+        finished_at,
+        duration_ms,
+        status:       if error.is_none() { jobs::RunStatus::Success } else { jobs::RunStatus::Error },
+        output,
+        error,
+        trace,
+        _ran_at_legacy: None,
+    };
+
+    jobs::append_run(run.clone()).map_err(|e| e.to_string())?;
+
+    {
+        let mut stored = state.jobs.lock().unwrap();
+        if let Some(j) = stored.iter_mut().find(|j| j.id == id) {
+            j.last_run_at = Some(chrono::Utc::now());
+        }
+        let list = stored.clone();
+        drop(stored);
+        jobs::save_jobs(&list).map_err(|e| e.to_string())?;
+    }
+
+    use tauri::Emitter;
+    let _ = app.emit("job-run-done", &run);
+
+    Ok(run)
+}
+
+#[tauri::command]
+fn get_job_runs(job_id: Option<String>) -> Vec<jobs::JobRun> {
+    let runs = jobs::load_runs();
+    match job_id {
+        Some(id) => runs.into_iter().filter(|r| r.job_id == id).collect(),
+        None     => runs,
+    }
+}
+
+#[tauri::command]
+fn clear_job_runs(job_id: Option<String>) -> Result<(), String> {
+    let mut runs = jobs::load_runs();
+    match &job_id {
+        Some(id) => runs.retain(|r| &r.job_id != id),
+        None     => runs.clear(),
+    }
+    let json = serde_json::to_string_pretty(&runs).map_err(|e| e.to_string())?;
+    std::fs::write(jobs::runs_path(), json).map_err(|e| e.to_string())
+}
+
+// ── Tray ──────────────────────────────────────────────────────────────────────
+
+fn toggle_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_visible().unwrap_or(false) {
+            let _ = w.hide();
+        } else {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+    }
+}
+
+pub fn update_tray_tooltip(app: &AppHandle) {
+    let job_count = app.try_state::<AppState>()
+        .map(|s| s.jobs.lock().map(|j| j.iter().filter(|x| x.enabled).count()).unwrap_or(0))
+        .unwrap_or(0);
+    let tip = if job_count == 0 {
+        "LexiChat".to_string()
+    } else {
+        format!("LexiChat — {job_count} scheduled job{}", if job_count == 1 { "" } else { "s" })
+    };
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(guard) = state.tray.lock() {
+            if let Some(tray) = guard.as_ref() {
+                let _ = tray.set_tooltip(Some(tip.as_str()));
+            }
+        }
+    }
+}
+
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::{
+        menu::{Menu, MenuItem, PredefinedMenuItem},
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    };
+
+    let open = MenuItem::with_id(app, "open", "Open LexiChat", true, None::<&str>)?;
+    let sep  = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit LexiChat", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &sep, &quit])?;
+
+    let tray = TrayIconBuilder::with_id("main")
+        .icon(app.default_window_icon().unwrap().clone())
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("LexiChat")
+        .on_menu_event(|app: &AppHandle, event| match event.id.as_ref() {
+            "open" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray: &tauri::tray::TrayIcon<tauri::Wry>, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                toggle_window(tray.app_handle());
+            }
+        })
+        .build(app)?;
+
+    // Store in AppState so update_tray_tooltip can reach it
+    app.state::<AppState>().tray.lock().unwrap().replace(tray);
+
+    Ok(())
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -733,6 +932,21 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             build_menu(app)?;
+            jobs::spawn_scheduler(app.handle().clone());
+            setup_tray(app)?;
+
+            // Hide window on close instead of quitting — keeps scheduler alive
+            if let Some(window) = app.get_webview_window("main") {
+                let w = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w.hide();
+                    }
+                });
+            }
+
+            update_tray_tooltip(app.handle());
             Ok(())
         })
         .manage(AppState::default())
@@ -758,8 +972,28 @@ pub fn run() {
             set_allowed_dirs,
             write_file_text,
             read_file_text,
+            read_image_data_url,
             save_document,
+            get_jobs,
+            save_job,
+            delete_job,
+            run_job_now,
+            get_job_runs,
+            clear_job_runs,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // On macOS, clicking the Dock icon while all windows are hidden restores the window
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = &event {
+                if !has_visible_windows {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                }
+            }
+            let _ = event; // suppress unused warning on non-mac
+        });
 }

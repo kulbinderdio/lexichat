@@ -1,0 +1,836 @@
+import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import type { Profile, StoredMCPServer } from "./AdminPanel";
+import { save } from "@tauri-apps/plugin-dialog";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import type { ScheduledJob, JobRun, JobSchedule, TraceStep } from "./jobTypes";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const BUILTIN_TOOLS = [
+  { name: "list_files",          label: "List Files",         icon: "📁" },
+  { name: "read_file",           label: "Read File",          icon: "📄" },
+  { name: "write_file",          label: "Write File",         icon: "✏️" },
+  { name: "search_files",        label: "Search Files",       icon: "🔎" },
+  { name: "search_in_files",     label: "Search In Files",    icon: "🔍" },
+  { name: "get_file_info",       label: "Get File Info",      icon: "ℹ️" },
+  { name: "list_directory_tree", label: "Directory Tree",     icon: "🌳" },
+  { name: "create_directory",    label: "Create Directory",   icon: "📂" },
+  { name: "move_file",           label: "Move / Rename",      icon: "↕️" },
+  { name: "delete_file",         label: "Delete File",        icon: "🗑️" },
+  { name: "find_old_files",      label: "Find Old Files",     icon: "🗂️" },
+  { name: "web_search",          label: "Web Search",         icon: "🌐" },
+  { name: "fetch_webpage",       label: "Fetch Webpage",      icon: "🔗" },
+  { name: "get_current_datetime", label: "Get Date / Time",   icon: "🕐" },
+];
+
+const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function scheduleLabel(s: JobSchedule): string {
+  if (s.type === "Daily")    return `Daily at ${pad(s.hour!)}:${pad(s.minute!)}`;
+  if (s.type === "Interval") return `Every ${s.hours}h`;
+  if (s.type === "Weekly")   return `${WEEKDAYS[s.weekday!]?.slice(0,3)} ${pad(s.hour!)}:${pad(s.minute!)}`;
+  return "Manual";
+}
+
+function relativeTime(iso: string): string {
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 2)   return "just now";
+  if (mins < 60)  return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24)   return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7)   return `${days}d ago`;
+  return d.toLocaleDateString();
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function resolveProfileContext(
+  profile: Profile,
+  selectedSpecIds: string[],
+  selectedMcpIds: string[],
+  disabledMcpTools: string[],
+): import("./jobTypes").JobProfileContext {
+  return {
+    ollama_host: profile.host ?? "http://localhost:11434",
+    allowed_dirs: profile.allowedDirs ?? [],
+    openapi_specs: (profile.openapiSpecs ?? [])
+      .filter(s => s.enabled !== false && selectedSpecIds.includes(s.id))
+      .map(s => ({ id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth })),
+    mcp_servers: (profile.mcpServers ?? [])
+      .filter(s => selectedMcpIds.includes(s.id))
+      .map(s => ({ id: s.id, name: s.name, command: s.command, args: s.args ?? [], env: s.env ?? {}, auth: s.auth })),
+    disabled_mcp_tools: disabledMcpTools,
+    snapshot_at: new Date().toISOString(),
+  };
+}
+
+function blankJob(profile: Profile | null = null): ScheduledJob {
+  const enabledBuiltins = profile
+    ? Object.entries(profile.enabledTools ?? {}).filter(([, v]) => v !== false).map(([k]) => k)
+    : ["web_search"];
+  return {
+    id: uid(),
+    name: "",
+    enabled: true,
+    schedule: { type: "Daily", hour: 9, minute: 0 },
+    prompt: "",
+    model: profile?.model ?? "",
+    system_prompt: profile?.systemPrompt ?? null,
+    enabled_builtin_tools: enabledBuiltins,
+    output_file: null,
+    created_at: new Date().toISOString(),
+    last_run_at: null,
+    profile_id: profile?.id ?? null,
+    profile_name: profile?.name ?? null,
+    profile_context: null,
+  };
+}
+
+function nextRunLabel(job: ScheduledJob): string {
+  if (!job.enabled) return "Disabled";
+  const s = job.schedule;
+  const now = new Date();
+  if (s.type === "Manual") return "Manual only";
+  if (s.type === "Interval") {
+    if (!job.last_run_at) return "Within 30 seconds";
+    const next = new Date(new Date(job.last_run_at).getTime() + (s.hours ?? 1) * 3600_000);
+    return next <= now ? "Due now" : `Next: ${next.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  }
+  if (s.type === "Daily" || s.type === "Weekly") {
+    const h = pad(s.hour ?? 0), m = pad(s.minute ?? 0);
+    if (s.type === "Weekly") {
+      const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+      return `Next: ${days[s.weekday ?? 0]} ${h}:${m}`;
+    }
+    const target = new Date(); target.setHours(s.hour ?? 0, s.minute ?? 0, 0, 0);
+    if (job.last_run_at && new Date(job.last_run_at).toDateString() === now.toDateString()) {
+      target.setDate(target.getDate() + 1);
+    } else if (target < now) {
+      // Due today but past — will run at next tick if within the minute window, else tomorrow
+      const diff = now.getTime() - target.getTime();
+      if (diff < 60_000) return "Running soon…";
+      target.setDate(target.getDate() + 1);
+    }
+    return `Next: ${target.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} ${h}:${m}`;
+  }
+  return "";
+}
+
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
+
+interface Props {
+  models: string[];
+  profiles: Profile[];
+  activeProfileId: string | null;
+  onClose: () => void;
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+
+export function JobsPanel({ models, profiles, activeProfileId, onClose }: Props) {
+  const [tab, setTab]               = useState<"jobs" | "history">("jobs");
+  const [jobs, setJobs]             = useState<ScheduledJob[]>([]);
+  const [runs, setRuns]             = useState<JobRun[]>([]);
+  const [editingJob, setEditingJob] = useState<ScheduledJob | null>(null);
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+  const [filterJobId, setFilterJobId] = useState<string | null>(null);
+  const [error, setError]           = useState("");
+
+  useEffect(() => {
+    invoke<ScheduledJob[]>("get_jobs").then(setJobs).catch(() => {});
+    invoke<JobRun[]>("get_job_runs", { jobId: null }).then(setRuns).catch(() => {});
+
+    // Listen for job completions — updates history and clears running state
+    // regardless of whether this panel is open or was closed mid-run.
+    const unlisten = listen<JobRun>("job-run-done", e => {
+      const run = e.payload;
+      setRuns(prev => prev.some(r => r.id === run.id) ? prev : [run, ...prev]);
+      setRunningIds(prev => { const s = new Set(prev); s.delete(run.job_id); return s; });
+      // Refresh job list to pick up updated last_run_at
+      invoke<ScheduledJob[]>("get_jobs").then(setJobs).catch(() => {});
+    });
+    return () => { unlisten.then(f => f()); };
+  }, []);
+
+  const saveJob = async (job: ScheduledJob) => {
+    try {
+      await invoke("save_job", { job });
+      setJobs(prev => {
+        const idx = prev.findIndex(j => j.id === job.id);
+        return idx >= 0 ? prev.map(j => j.id === job.id ? job : j) : [...prev, job];
+      });
+      setEditingJob(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const deleteJob = async (id: string) => {
+    await invoke("delete_job", { id });
+    setJobs(prev => prev.filter(j => j.id !== id));
+  };
+
+  // Fire-and-forget — the job runs in Rust until completion.
+  // Closing the panel NEVER interrupts it; result arrives via job-run-done event.
+  const runNow = (id: string) => {
+    setRunningIds(prev => new Set([...prev, id]));
+    setError("");
+    invoke("run_job_now", { id }).catch((e: unknown) => {
+      setError(String(e));
+      setRunningIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+    });
+  };
+
+  const clearRuns = async () => {
+    await invoke("clear_job_runs", { jobId: filterJobId ?? null });
+    setRuns(filterJobId ? runs.filter(r => r.job_id !== filterJobId) : []);
+  };
+
+  const filteredRuns = filterJobId ? runs.filter(r => r.job_id === filterJobId) : runs;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="admin-modal" onClick={e => e.stopPropagation()}>
+
+        {/* Header */}
+        <div className="admin-header">
+          <span className="admin-title">
+            Scheduled Jobs
+            {runningIds.size > 0 && (
+              <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 8, fontWeight: 400 }}>
+                · {runningIds.size} running…
+              </span>
+            )}
+          </span>
+          <button className="btn primary" onClick={onClose}>
+            {runningIds.size > 0 ? "Close (jobs keep running)" : "Done"}
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="admin-tabbar">
+          <button className={`admin-tab ${tab === "jobs" ? "active" : ""}`} onClick={() => setTab("jobs")}>
+            Scheduled Jobs
+            {jobs.length > 0 && <span className="tab-count">{jobs.length}</span>}
+          </button>
+          <button className={`admin-tab ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>
+            Run History
+            {runs.length > 0 && <span className="tab-count">{runs.length}</span>}
+          </button>
+        </div>
+        <div className="admin-divider" />
+
+        {/* Content */}
+        <div className="admin-content" style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          {tab === "jobs" && (
+            <JobsTab
+              jobs={jobs}
+              models={models}
+              profiles={profiles}
+              editingJob={editingJob}
+              runningIds={runningIds}
+              error={error}
+              onEdit={setEditingJob}
+              onSave={saveJob}
+              onCancel={() => setEditingJob(null)}
+              onDelete={deleteJob}
+              onRunNow={runNow}
+              onNew={() => {
+                const ap = profiles.find(p => p.id === activeProfileId) ?? null;
+                setEditingJob(blankJob(ap ?? null));
+              }}
+              onToggle={j => saveJob({ ...j, enabled: !j.enabled })}
+            />
+          )}
+          {tab === "history" && (
+            <HistoryTab
+              runs={filteredRuns}
+              jobs={jobs}
+              filterJobId={filterJobId}
+              onFilterChange={setFilterJobId}
+              onClear={clearRuns}
+            />
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ── Jobs tab ──────────────────────────────────────────────────────────────────
+
+function JobsTab({ jobs, models, profiles, editingJob, runningIds, error, onEdit, onSave, onCancel, onDelete, onRunNow, onNew, onToggle }: {
+  jobs: ScheduledJob[];
+  models: string[];
+  profiles: Profile[];
+  editingJob: ScheduledJob | null;
+  runningIds: Set<string>;
+  error: string;
+  onEdit: (j: ScheduledJob) => void;
+  onSave: (j: ScheduledJob) => void;
+  onCancel: () => void;
+  onDelete: (id: string) => void;
+  onRunNow: (id: string) => void;
+  onNew: () => void;
+  onToggle: (j: ScheduledJob) => void;
+}) {
+  if (editingJob) {
+    return <JobForm job={editingJob} models={models} profiles={profiles} onSave={onSave} onCancel={onCancel} />;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {jobs.length === 0 && (
+          <div className="admin-empty">No scheduled jobs yet. Create one to run prompts automatically.</div>
+        )}
+        {jobs.map(job => (
+          <div key={job.id} className="job-row">
+            {/* Enable toggle */}
+            <input
+              type="checkbox"
+              checked={job.enabled}
+              onChange={() => onToggle(job)}
+              style={{ accentColor: "var(--accent)", flexShrink: 0 }}
+            />
+            {/* Info */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="job-row-name">{job.name}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                <span className="job-schedule-pill">{scheduleLabel(job.schedule)}</span>
+                {job.profile_name && (
+                  <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "var(--surface2)", color: "var(--text-secondary)" }}>
+                    {job.profile_name}
+                  </span>
+                )}
+                <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+                  {job.last_run_at ? `Last run ${relativeTime(job.last_run_at)}` : "Never run"}
+                </span>
+                <span style={{ fontSize: 10, color: "var(--accent)", fontWeight: 500 }}>
+                  {nextRunLabel(job)}
+                </span>
+                {job.profile_context && (() => {
+                  const stale = Date.now() - new Date(job.profile_context!.snapshot_at).getTime() > 7 * 86400_000;
+                  return stale ? (
+                    <span title="Profile may have changed. Edit job to refresh snapshot." style={{ fontSize: 10, color: "#f59e0b", cursor: "help" }}>⚠ stale</span>
+                  ) : null;
+                })()}
+              </div>
+            </div>
+            {/* Actions */}
+            <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }} onClick={() => onEdit(job)}>Edit</button>
+            <button
+              className="btn"
+              style={{ fontSize: 11, padding: "3px 8px", minWidth: 60 }}
+              onClick={() => onRunNow(job.id)}
+              disabled={runningIds.has(job.id)}
+            >
+              {runningIds.has(job.id) ? "…" : "▶ Run"}
+            </button>
+            <button className="icon-btn danger" onClick={() => onDelete(job.id)}>✕</button>
+          </div>
+        ))}
+        {error && <div style={{ padding: "8px 16px", color: "#f87171", fontSize: 12 }}>{error}</div>}
+      </div>
+      {/* Footer */}
+      <div style={{ padding: 12, borderTop: "1px solid var(--border)" }}>
+        <button className="btn primary" style={{ width: "100%", fontSize: 12 }} onClick={onNew}>
+          + New Job
+        </button>
+        <p style={{ fontSize: 10, color: "var(--text-tertiary)", textAlign: "center", margin: "6px 0 0" }}>
+          Jobs run while this app is open.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Job form ──────────────────────────────────────────────────────────────────
+
+function ToolSection({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ borderTop: "1px solid var(--border-light)", marginTop: 6 }}>
+      <button className="job-trace-toggle" onClick={() => setOpen(o => !o)}>
+        <span style={{ fontSize: 11, fontWeight: 600 }}>{title}</span>
+        <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{open ? "▲" : "▼"}</span>
+      </button>
+      {open && <div style={{ paddingLeft: 4, paddingTop: 4 }}>{children}</div>}
+    </div>
+  );
+}
+
+function MCPServerToolToggle({ srv, checked, disabledTools, onToggleServer, onToggleTool }: {
+  srv: StoredMCPServer; checked: boolean; disabledTools: string[];
+  onToggleServer: (c: boolean) => void; onToggleTool: (name: string, enabled: boolean) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const toolNames = Object.keys(srv.enabledTools ?? {});
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <input type="checkbox" checked={checked} onChange={e => onToggleServer(e.target.checked)} style={{ accentColor: "var(--purple)" }} />
+        <span style={{ fontSize: 12, fontWeight: 600, flex: 1 }}>🖧 {srv.name}</span>
+        {checked && toolNames.length > 0 && (
+          <button style={{ fontSize: 10, background: "none", border: "none", color: "var(--text-tertiary)", cursor: "pointer" }}
+            onClick={() => setExpanded(o => !o)}>
+            {toolNames.length} tools {expanded ? "▲" : "▼"}
+          </button>
+        )}
+      </div>
+      {checked && expanded && toolNames.map(name => (
+        <label key={name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, paddingLeft: 20, cursor: "pointer", marginTop: 2 }}>
+          <input type="checkbox" checked={!disabledTools.includes(name)}
+            onChange={e => onToggleTool(name, e.target.checked)} style={{ accentColor: "var(--purple)" }} />
+          <span style={{ fontFamily: "monospace" }}>{name}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
+  job: ScheduledJob; models: string[]; profiles: Profile[];
+  onSave: (j: ScheduledJob) => void; onCancel: () => void;
+}) {
+  const [job, setJob] = useState<ScheduledJob>({ ...initial, model: initial.model || models[0] || "" });
+  const set = (patch: Partial<ScheduledJob>) => setJob(j => ({ ...j, ...patch }));
+  const setSched = (patch: Partial<JobSchedule>) => set({ schedule: { ...job.schedule, ...patch } });
+
+  const selectedProfile = profiles.find(p => p.id === job.profile_id) ?? null;
+
+  // Tool selection state — seeded from existing snapshot or freshly from profile
+  const seedSpecIds  = () => job.profile_context?.openapi_specs.map(s => s.id) ?? (selectedProfile?.openapiSpecs ?? []).filter(s => s.enabled !== false).map(s => s.id);
+  const seedMcpIds   = () => job.profile_context?.mcp_servers.map(s => s.id)   ?? (selectedProfile?.mcpServers ?? []).map(s => s.id);
+  const seedDisabled = () => job.profile_context?.disabled_mcp_tools ?? (selectedProfile?.mcpServers ?? []).flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n));
+
+  const [selSpecIds,  setSelSpecIds]  = useState<string[]>(seedSpecIds);
+  const [selMcpIds,   setSelMcpIds]   = useState<string[]>(seedMcpIds);
+  const [disabledMcp, setDisabledMcp] = useState<string[]>(seedDisabled);
+
+  const toggleTool = (name: string) => {
+    const has = job.enabled_builtin_tools.includes(name);
+    set({ enabled_builtin_tools: has ? job.enabled_builtin_tools.filter(t => t !== name) : [...job.enabled_builtin_tools, name] });
+  };
+
+  const refreshSnapshot = (p: Profile) => {
+    setSelSpecIds((p.openapiSpecs ?? []).filter(s => s.enabled !== false).map(s => s.id));
+    setSelMcpIds((p.mcpServers ?? []).map(s => s.id));
+    setDisabledMcp((p.mcpServers ?? []).flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n)));
+  };
+
+  const pickOutputFile = async () => {
+    const ext = job.output_file?.split(".").pop() ?? "txt";
+    const filters = ext === "docx" ? [{ name: "Word", extensions: ["docx"] }] : ext === "pdf" ? [{ name: "PDF", extensions: ["pdf"] }] : [{ name: "Text / Markdown", extensions: ["txt", "md"] }];
+    const path = await save({ title: "Job output file", filters });
+    if (path) set({ output_file: path });
+  };
+
+  const canSave = job.name.trim() && job.prompt.trim() && job.model;
+
+  const handleSave = () => {
+    const contextualJob: ScheduledJob = {
+      ...job,
+      profile_context: selectedProfile
+        ? resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp)
+        : null,
+    };
+    onSave(contextualJob);
+  };
+
+  return (
+    <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <span style={{ fontWeight: 700, fontSize: 14 }}>{initial.name || "New Job"}</span>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginLeft: "auto" }}>
+          <input type="checkbox" checked={job.enabled} onChange={e => set({ enabled: e.target.checked })} style={{ accentColor: "var(--accent)" }} />
+          Enabled
+        </label>
+      </div>
+
+      {/* Name */}
+      <div className="field">
+        <label>Job Name</label>
+        <input className="admin-input" value={job.name} onChange={e => set({ name: e.target.value })} placeholder="e.g. Morning briefing" />
+      </div>
+
+      {/* Profile */}
+      {profiles.length > 0 && (
+        <div className="field">
+          <label>Profile</label>
+          <select className="admin-input" value={job.profile_id ?? ""}
+            onChange={e => {
+              const p = profiles.find(x => x.id === e.target.value) ?? null;
+              set({
+                profile_id: p?.id ?? null,
+                profile_name: p?.name ?? null,
+                model: p?.model ?? job.model,
+                enabled_builtin_tools: p ? Object.entries(p.enabledTools ?? {}).filter(([,v]) => v !== false).map(([k]) => k) : job.enabled_builtin_tools,
+              });
+              if (p) refreshSnapshot(p);
+            }}>
+            <option value="">Global (uses active profile at run time)</option>
+            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          {selectedProfile && job.profile_context && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+              <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+                Snapshot: {new Date(job.profile_context.snapshot_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              </span>
+              <button className="btn" style={{ fontSize: 10, padding: "2px 7px" }} onClick={() => refreshSnapshot(selectedProfile)}>
+                Refresh snapshot
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Schedule */}
+      <div className="field">
+        <label>Schedule</label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select className="admin-input" style={{ width: "auto" }} value={job.schedule.type} onChange={e => setSched({ type: e.target.value as JobSchedule["type"] })}>
+            <option value="Daily">Daily at a time</option>
+            <option value="Interval">Every N hours</option>
+            <option value="Weekly">Weekly</option>
+            <option value="Manual">Manual only</option>
+          </select>
+          {(job.schedule.type === "Daily" || job.schedule.type === "Weekly") && <>
+            {job.schedule.type === "Weekly" && (
+              <select className="admin-input" style={{ width: "auto" }} value={job.schedule.weekday ?? 0} onChange={e => setSched({ weekday: Number(e.target.value) })}>
+                {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+              </select>
+            )}
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>at</span>
+            <input type="number" className="admin-input" style={{ width: 56 }} min={0} max={23} value={job.schedule.hour ?? 9} onChange={e => setSched({ hour: Number(e.target.value) })} />
+            <span style={{ fontSize: 12 }}>:</span>
+            <input type="number" className="admin-input" style={{ width: 56 }} min={0} max={59} value={job.schedule.minute ?? 0} onChange={e => setSched({ minute: Number(e.target.value) })} />
+          </>}
+          {job.schedule.type === "Interval" && <>
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>every</span>
+            <input type="number" className="admin-input" style={{ width: 64 }} min={1} value={job.schedule.hours ?? 4} onChange={e => setSched({ hours: Number(e.target.value) })} />
+            <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>hours</span>
+          </>}
+        </div>
+      </div>
+
+      {/* Model */}
+      <div className="field">
+        <label>Model</label>
+        <select className="admin-input" value={job.model} onChange={e => set({ model: e.target.value })}>
+          {models.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </div>
+
+      {/* Prompt */}
+      <div className="field">
+        <label>Prompt</label>
+        <textarea className="admin-input" value={job.prompt} onChange={e => set({ prompt: e.target.value })}
+          placeholder="What should Lexi do each time this runs?" style={{ minHeight: 90, resize: "vertical" }} />
+      </div>
+
+      {/* System prompt override */}
+      <div className="field">
+        <label>System Prompt Override <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
+        <textarea className="admin-input" value={job.system_prompt ?? ""} onChange={e => set({ system_prompt: e.target.value || null })}
+          placeholder="Leave blank to use the default assistant prompt"
+          style={{ minHeight: 60, resize: "vertical", fontSize: 11, fontFamily: "monospace" }} />
+      </div>
+
+      {/* Tools — profile-aware three-section panel, or flat fallback */}
+      <div className="field">
+        <label>Tools for this job</label>
+        {selectedProfile ? (
+          <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", marginTop: 4 }}>
+            {/* Built-in */}
+            <ToolSection title="Built-in tools" defaultOpen>
+              <div className="job-tool-grid">
+                {BUILTIN_TOOLS.filter(t => (selectedProfile.enabledTools ?? {})[t.name] !== false).map(t => (
+                  <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                    <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)} onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
+                    {t.icon} {t.label}
+                  </label>
+                ))}
+              </div>
+            </ToolSection>
+
+            {/* OpenAPI specs */}
+            {(selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false).length > 0 && (
+              <ToolSection title="OpenAPI / REST services" defaultOpen>
+                {(selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false).map(sp => (
+                  <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", padding: "3px 0" }}>
+                    <input type="checkbox" checked={selSpecIds.includes(sp.id)}
+                      onChange={e => setSelSpecIds(prev => e.target.checked ? [...prev, sp.id] : prev.filter(x => x !== sp.id))}
+                      style={{ accentColor: "var(--accent)" }} />
+                    <span style={{ fontWeight: 600 }}>{sp.title}</span>
+                    <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{sp.base_url}</span>
+                  </label>
+                ))}
+              </ToolSection>
+            )}
+
+            {/* MCP servers */}
+            {(selectedProfile.mcpServers ?? []).length > 0 && (
+              <ToolSection title="MCP servers">
+                {(selectedProfile.mcpServers ?? []).map(srv => (
+                  <MCPServerToolToggle key={srv.id} srv={srv}
+                    checked={selMcpIds.includes(srv.id)}
+                    disabledTools={disabledMcp}
+                    onToggleServer={c => setSelMcpIds(prev => c ? [...prev, srv.id] : prev.filter(x => x !== srv.id))}
+                    onToggleTool={(n, en) => setDisabledMcp(prev => en ? prev.filter(x => x !== n) : [...prev, n])}
+                  />
+                ))}
+              </ToolSection>
+            )}
+          </div>
+        ) : (
+          <div className="job-tool-grid" style={{ marginTop: 4 }}>
+            {BUILTIN_TOOLS.map(t => (
+              <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)} onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
+                <span>{t.icon}</span><span>{t.label}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Output file */}
+      <div className="field">
+        <label>Save output to file <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input className="admin-input" style={{ flex: 1, fontFamily: "monospace", fontSize: 11 }}
+            value={job.output_file ?? ""} onChange={e => set({ output_file: e.target.value || null })} placeholder="/path/to/output.md" />
+          <button className="btn" style={{ flexShrink: 0 }} onClick={pickOutputFile}>Browse…</button>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: 8, paddingTop: 4 }}>
+        <button className="btn" onClick={onCancel}>Cancel</button>
+        <button className="btn primary" disabled={!canSave} onClick={handleSave}>Save Job</button>
+      </div>
+    </div>
+  );
+}
+
+// ── History tab ───────────────────────────────────────────────────────────────
+
+function HistoryTab({ runs, jobs, filterJobId, onFilterChange, onClear }: {
+  runs: JobRun[];
+  jobs: ScheduledJob[];
+  filterJobId: string | null;
+  onFilterChange: (id: string | null) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Controls bar */}
+      <div style={{ padding: "8px 16px", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid var(--border-light)", flexShrink: 0 }}>
+        <select className="admin-input" style={{ flex: 1 }} value={filterJobId ?? ""}
+          onChange={e => onFilterChange(e.target.value || null)}>
+          <option value="">All jobs</option>
+          {jobs.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+        </select>
+        <button className="btn" style={{ fontSize: 11, padding: "3px 8px", color: "#f87171" }} onClick={onClear}>
+          Clear
+        </button>
+      </div>
+
+      {/* Runs list */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {runs.length === 0 && (
+          <div className="admin-empty">No run history yet. Run a job to see results here.</div>
+        )}
+        {runs.map(run => <RunRow key={run.id} run={run} />)}
+      </div>
+    </div>
+  );
+}
+
+function RunRow({ run }: { run: JobRun }) {
+  const [expanded,  setExpanded]  = useState(false);
+  const [showTrace, setShowTrace] = useState(false);
+  const [copied,    setCopied]    = useState(false);
+  const toolCount = run.trace.reduce((n, s) => n + s.tool_calls.length, 0);
+  const stepCount = run.trace.length;
+  const preview   = run.output.slice(0, 120) + (run.output.length > 120 ? "…" : "");
+  const isSuccess = run.status === "Success";
+
+  const copyOutput = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(run.output);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="job-run-row">
+      {/* ── Header ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}
+           onClick={() => setExpanded(e => !e)}>
+        {/* Status badge */}
+        <span style={{
+          fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 8, flexShrink: 0,
+          background: isSuccess ? "rgba(74,222,128,0.12)" : "rgba(248,113,113,0.12)",
+          color: isSuccess ? "#4ade80" : "#f87171",
+          border: `1px solid ${isSuccess ? "rgba(74,222,128,0.25)" : "rgba(248,113,113,0.25)"}`,
+        }}>
+          {isSuccess ? "✓ OK" : "✕ Error"}
+        </span>
+
+        {/* Job name */}
+        <span style={{ fontSize: 12, fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {run.job_name}
+        </span>
+
+        {/* Profile badge */}
+        {run.profile_name && (
+          <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 8, background: "var(--surface2)", color: "var(--text-secondary)", flexShrink: 0 }}>
+            {run.profile_name}
+          </span>
+        )}
+
+        {/* Timing */}
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>{formatDateTime(run.started_at)}</div>
+          <div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+            → {formatDateTime(run.finished_at)} · {formatDuration(run.duration_ms)}
+          </div>
+        </div>
+
+        <span style={{ fontSize: 10, opacity: 0.4, flexShrink: 0 }}>{expanded ? "▲" : "▼"}</span>
+      </div>
+
+      {/* ── Collapsed: output preview ── */}
+      {!expanded && run.output && (
+        <div className="job-run-preview">{preview}</div>
+      )}
+
+      {/* ── Expanded ── */}
+      {expanded && (
+        <div style={{ paddingTop: 8 }} onClick={e => e.stopPropagation()}>
+
+          {/* Error */}
+          {run.error && <div className="job-run-error">{run.error}</div>}
+
+          {/* Debug trace — collapsible section */}
+          {stepCount > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <button
+                className="job-trace-toggle"
+                onClick={() => setShowTrace(t => !t)}
+              >
+                <span>🔍 Debug trace</span>
+                <span style={{ fontSize: 10, color: "var(--text-tertiary)", marginLeft: 6 }}>
+                  {stepCount} step{stepCount !== 1 ? "s" : ""} · {toolCount} tool call{toolCount !== 1 ? "s" : ""}
+                </span>
+                <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>
+                  {showTrace ? "▲" : "▼"}
+                </span>
+              </button>
+              {showTrace && (
+                <div className="job-trace" style={{ marginTop: 6 }}>
+                  {run.trace.map(step => <TraceStepView key={step.step} step={step} />)}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Final output — always shown */}
+          <div className="job-trace-label">Output</div>
+          <div className="job-run-expanded">
+            {run.output
+              ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{run.output}</ReactMarkdown>
+              : <span style={{ color: "var(--text-tertiary)", fontStyle: "italic" }}>No text output recorded.</span>
+            }
+          </div>
+          {run.output && (
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+              <button
+                className={`copy-btn${copied ? " copied" : ""}`}
+                onClick={copyOutput}
+              >
+                {copied ? "✓ Copied" : "⧉ Copy output"}
+              </button>
+            </div>
+          )}
+
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TraceStepView({ step }: { step: TraceStep }) {
+  const [openTool, setOpenTool] = useState<number | null>(null);
+
+  return (
+    <div className="job-trace-step">
+      <div className="job-trace-step-header">
+        <span className="job-trace-step-num">Step {step.step + 1}</span>
+      </div>
+
+      {/* LLM text */}
+      {step.llm_text && (
+        <div className="job-trace-llm">
+          <span className="job-trace-tag llm">LLM</span>
+          <span className="job-trace-llm-text">{step.llm_text}</span>
+        </div>
+      )}
+
+      {/* Tool calls */}
+      {step.tool_calls.map((tc, i) => (
+        <div key={i} className="job-trace-tool">
+          <div className="job-trace-tool-header"
+               onClick={e => { e.stopPropagation(); setOpenTool(openTool === i ? null : i); }}>
+            <span className="job-trace-tag tool">TOOL</span>
+            <span className="job-trace-tool-name">{tc.name}</span>
+            <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{openTool === i ? "▲" : "▼"}</span>
+          </div>
+          {openTool === i && (
+            <div className="job-trace-tool-body">
+              {tc.args && tc.args !== "{}" && (
+                <div className="job-trace-section">
+                  <div className="job-trace-section-label">Args</div>
+                  <pre className="job-trace-pre">{tc.args}</pre>
+                </div>
+              )}
+              {tc.result && (
+                <div className="job-trace-section">
+                  <div className="job-trace-section-label">Result</div>
+                  <pre className="job-trace-pre">
+                    {tc.result.slice(0, 1500)}{tc.result.length > 1500 ? "\n…[truncated]" : ""}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}

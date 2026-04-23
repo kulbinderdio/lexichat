@@ -738,16 +738,18 @@ export default function App() {
 
       // Also patch any scheduled jobs whose profile_context contains the refreshed spec/server
       invoke<import("./jobTypes").ScheduledJob[]>("get_jobs").then(jobs => {
+        type JS = import("./jobTypes").JobOpenAPISpec;
+        type JM = import("./jobTypes").JobMCPServer;
         const affected = jobs.flatMap(job => {
           if (!job.profile_context) return [];
-          const inSpec = job.profile_context.openapi_specs.some(s => s.id === spec_id);
-          const inMcp  = job.profile_context.mcp_servers.some(s => s.id === spec_id);
+          const inSpec = job.profile_context.openapi_specs.some((s: JS) => s.id === spec_id);
+          const inMcp  = job.profile_context.mcp_servers.some((s: JM) => s.id === spec_id);
           if (!inSpec && !inMcp) return [];
           const patchedCtx = {
             ...job.profile_context,
-            openapi_specs: job.profile_context.openapi_specs.map(s =>
+            openapi_specs: job.profile_context.openapi_specs.map((s: JS) =>
               s.id === spec_id ? { ...s, auth: { ...(s.auth ?? { type: "none" as const }), access_token } } : s),
-            mcp_servers: job.profile_context.mcp_servers.map(s =>
+            mcp_servers: job.profile_context.mcp_servers.map((s: JM) =>
               s.id === spec_id ? { ...s, auth: { ...(s.auth ?? { type: "none" as const }), access_token } } : s),
           };
           return [{ ...job, profile_context: patchedCtx }];

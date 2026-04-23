@@ -8,6 +8,11 @@
     "opener:default",
     "opener:allow-open-url",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "core:tray:default",
+    "core:tray:allow-new",
+    "core:tray:allow-set-tooltip",
+    "core:tray:allow-set-icon",
+    "core:tray:allow-set-menu"
   ]
 }

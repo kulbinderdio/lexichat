@@ -123,6 +123,7 @@ const BUILTIN_TOOLS = [
   { name: "delete_file",         label: "Delete File",          icon: "🗑️" },
   { name: "find_old_files",      label: "Find Old Files",       icon: "🗂️" },
   { name: "web_search",          label: "Web Search",           icon: "🌐" },
+  { name: "get_current_datetime", label: "Get Date / Time",      icon: "🕐" },
 ];
 
 const DEFAULT_SYSTEM_PROMPT = `You are Lexi, a personal AI assistant running locally for a single authorised user.
