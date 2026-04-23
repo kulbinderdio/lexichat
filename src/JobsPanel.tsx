@@ -144,12 +144,16 @@ interface Props {
   models: string[];
   profiles: Profile[];
   activeProfileId: string | null;
+  globalOpenapiSpecs: import("./AdminPanel").StoredOpenAPISpec[];
+  globalMcpServers: import("./AdminPanel").StoredMCPServer[];
+  globalEnabledTools: Record<string, boolean>;
+  globalAllowedDirs: string[];
   onClose: () => void;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function JobsPanel({ models, profiles, activeProfileId, onClose }: Props) {
+export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpecs, globalMcpServers, globalEnabledTools, globalAllowedDirs, onClose }: Props) {
   const [tab, setTab]               = useState<"jobs" | "history">("jobs");
   const [jobs, setJobs]             = useState<ScheduledJob[]>([]);
   const [runs, setRuns]             = useState<JobRun[]>([]);
@@ -249,6 +253,10 @@ export function JobsPanel({ models, profiles, activeProfileId, onClose }: Props)
               jobs={jobs}
               models={models}
               profiles={profiles}
+              globalOpenapiSpecs={globalOpenapiSpecs}
+              globalMcpServers={globalMcpServers}
+              globalEnabledTools={globalEnabledTools}
+              globalAllowedDirs={globalAllowedDirs}
               editingJob={editingJob}
               runningIds={runningIds}
               error={error}
@@ -282,10 +290,14 @@ export function JobsPanel({ models, profiles, activeProfileId, onClose }: Props)
 
 // ── Jobs tab ──────────────────────────────────────────────────────────────────
 
-function JobsTab({ jobs, models, profiles, editingJob, runningIds, error, onEdit, onSave, onCancel, onDelete, onRunNow, onNew, onToggle }: {
+function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers, globalEnabledTools, globalAllowedDirs, editingJob, runningIds, error, onEdit, onSave, onCancel, onDelete, onRunNow, onNew, onToggle }: {
   jobs: ScheduledJob[];
   models: string[];
   profiles: Profile[];
+  globalOpenapiSpecs: import("./AdminPanel").StoredOpenAPISpec[];
+  globalMcpServers: import("./AdminPanel").StoredMCPServer[];
+  globalEnabledTools: Record<string, boolean>;
+  globalAllowedDirs: string[];
   editingJob: ScheduledJob | null;
   runningIds: Set<string>;
   error: string;
@@ -298,7 +310,10 @@ function JobsTab({ jobs, models, profiles, editingJob, runningIds, error, onEdit
   onToggle: (j: ScheduledJob) => void;
 }) {
   if (editingJob) {
-    return <JobForm job={editingJob} models={models} profiles={profiles} onSave={onSave} onCancel={onCancel} />;
+    return <JobForm job={editingJob} models={models} profiles={profiles}
+      globalOpenapiSpecs={globalOpenapiSpecs} globalMcpServers={globalMcpServers}
+      globalEnabledTools={globalEnabledTools} globalAllowedDirs={globalAllowedDirs}
+      onSave={onSave} onCancel={onCancel} />;
   }
 
   return (
@@ -412,8 +427,12 @@ function MCPServerToolToggle({ srv, checked, disabledTools, onToggleServer, onTo
   );
 }
 
-function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
+function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcpServers, globalEnabledTools, globalAllowedDirs, onSave, onCancel }: {
   job: ScheduledJob; models: string[]; profiles: Profile[];
+  globalOpenapiSpecs: import("./AdminPanel").StoredOpenAPISpec[];
+  globalMcpServers: import("./AdminPanel").StoredMCPServer[];
+  globalEnabledTools: Record<string, boolean>;
+  globalAllowedDirs: string[];
   onSave: (j: ScheduledJob) => void; onCancel: () => void;
 }) {
   const [job, setJob] = useState<ScheduledJob>({ ...initial, model: initial.model || models[0] || "" });
@@ -422,10 +441,16 @@ function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
 
   const selectedProfile = profiles.find(p => p.id === job.profile_id) ?? null;
 
-  // Tool selection state — seeded from existing snapshot or freshly from profile
-  const seedSpecIds  = () => job.profile_context?.openapi_specs.map(s => s.id) ?? (selectedProfile?.openapiSpecs ?? []).filter(s => s.enabled !== false).map(s => s.id);
-  const seedMcpIds   = () => job.profile_context?.mcp_servers.map(s => s.id)   ?? (selectedProfile?.mcpServers ?? []).map(s => s.id);
-  const seedDisabled = () => job.profile_context?.disabled_mcp_tools ?? (selectedProfile?.mcpServers ?? []).flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n));
+  // When no profile is selected, show global-level tools so the user can still configure the job
+  const effectiveOpenAPI  = selectedProfile ? (selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false) : globalOpenapiSpecs.filter(s => s.enabled !== false);
+  const effectiveMcp      = selectedProfile ? (selectedProfile.mcpServers ?? []) : globalMcpServers;
+  const effectiveBuiltins = selectedProfile ? (selectedProfile.enabledTools ?? {}) : globalEnabledTools;
+  const isGlobal          = !selectedProfile;
+
+  // Tool selection state — seeded from existing snapshot, or freshly from effective (profile or global) tools
+  const seedSpecIds  = () => job.profile_context?.openapi_specs.map(s => s.id) ?? effectiveOpenAPI.map(s => s.id);
+  const seedMcpIds   = () => job.profile_context?.mcp_servers.map(s => s.id)   ?? effectiveMcp.map(s => s.id);
+  const seedDisabled = () => job.profile_context?.disabled_mcp_tools ?? effectiveMcp.flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n));
 
   const [selSpecIds,  setSelSpecIds]  = useState<string[]>(seedSpecIds);
   const [selMcpIds,   setSelMcpIds]   = useState<string[]>(seedMcpIds);
@@ -436,10 +461,12 @@ function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
     set({ enabled_builtin_tools: has ? job.enabled_builtin_tools.filter(t => t !== name) : [...job.enabled_builtin_tools, name] });
   };
 
-  const refreshSnapshot = (p: Profile) => {
-    setSelSpecIds((p.openapiSpecs ?? []).filter(s => s.enabled !== false).map(s => s.id));
-    setSelMcpIds((p.mcpServers ?? []).map(s => s.id));
-    setDisabledMcp((p.mcpServers ?? []).flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n)));
+  const refreshSnapshot = (p: Profile | null) => {
+    const specs = p ? (p.openapiSpecs ?? []).filter(s => s.enabled !== false) : globalOpenapiSpecs.filter(s => s.enabled !== false);
+    const mcps  = p ? (p.mcpServers ?? []) : globalMcpServers;
+    setSelSpecIds(specs.map(s => s.id));
+    setSelMcpIds(mcps.map(s => s.id));
+    setDisabledMcp(mcps.flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n)));
   };
 
   const pickOutputFile = async () => {
@@ -452,13 +479,25 @@ function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
   const canSave = job.name.trim() && job.prompt.trim() && job.model;
 
   const handleSave = () => {
-    const contextualJob: ScheduledJob = {
-      ...job,
-      profile_context: selectedProfile
-        ? resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp)
-        : null,
-    };
-    onSave(contextualJob);
+    let profile_context: import("./jobTypes").JobProfileContext | null = null;
+    if (selectedProfile) {
+      profile_context = resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp);
+    } else if (effectiveOpenAPI.length > 0 || effectiveMcp.length > 0) {
+      // Build context from global settings so the job carries its tool snapshot
+      profile_context = {
+        ollama_host: globalAllowedDirs.length > 0 ? "" : "",  // uses AppState host at run time
+        allowed_dirs: globalAllowedDirs,
+        openapi_specs: effectiveOpenAPI.filter(s => selSpecIds.includes(s.id)).map(s => ({
+          id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth,
+        })),
+        mcp_servers: effectiveMcp.filter(s => selMcpIds.includes(s.id)).map(s => ({
+          id: s.id, name: s.name, command: s.command, args: s.args ?? [], env: s.env ?? {}, auth: s.auth,
+        })),
+        disabled_mcp_tools: disabledMcp,
+        snapshot_at: new Date().toISOString(),
+      };
+    }
+    onSave({ ...job, profile_context });
   };
 
   return (
@@ -488,14 +527,16 @@ function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
                 profile_id: p?.id ?? null,
                 profile_name: p?.name ?? null,
                 model: p?.model ?? job.model,
-                enabled_builtin_tools: p ? Object.entries(p.enabledTools ?? {}).filter(([,v]) => v !== false).map(([k]) => k) : job.enabled_builtin_tools,
+                enabled_builtin_tools: p
+                  ? Object.entries(p.enabledTools ?? {}).filter(([,v]) => v !== false).map(([k]) => k)
+                  : Object.entries(globalEnabledTools).filter(([,v]) => v !== false).map(([k]) => k),
               });
-              if (p) refreshSnapshot(p);
+              refreshSnapshot(p);
             }}>
             <option value="">Global (uses active profile at run time)</option>
             {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          {selectedProfile && job.profile_context && (
+          {job.profile_context && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
               <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
                 Snapshot: {new Date(job.profile_context.snapshot_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
@@ -560,62 +601,54 @@ function JobForm({ job: initial, models, profiles, onSave, onCancel }: {
           style={{ minHeight: 60, resize: "vertical", fontSize: 11, fontFamily: "monospace" }} />
       </div>
 
-      {/* Tools — profile-aware three-section panel, or flat fallback */}
+      {/* Tools — always shown, using profile tools or global tools as fallback */}
       <div className="field">
-        <label>Tools for this job</label>
-        {selectedProfile ? (
-          <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", marginTop: 4 }}>
-            {/* Built-in */}
-            <ToolSection title="Built-in tools" defaultOpen>
-              <div className="job-tool-grid">
-                {BUILTIN_TOOLS.filter(t => (selectedProfile.enabledTools ?? {})[t.name] !== false).map(t => (
-                  <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                    <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)} onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
-                    {t.icon} {t.label}
-                  </label>
-                ))}
-              </div>
+        <label>
+          Tools for this job
+          {isGlobal && <span style={{ fontWeight: 400, opacity: 0.5, marginLeft: 6 }}>(from global settings)</span>}
+        </label>
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", marginTop: 4 }}>
+          {/* Built-in */}
+          <ToolSection title="Built-in tools" defaultOpen>
+            <div className="job-tool-grid">
+              {BUILTIN_TOOLS.filter(t => effectiveBuiltins[t.name] !== false).map(t => (
+                <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                  <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)} onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
+                  {t.icon} {t.label}
+                </label>
+              ))}
+            </div>
+          </ToolSection>
+
+          {/* OpenAPI specs */}
+          {effectiveOpenAPI.length > 0 && (
+            <ToolSection title="OpenAPI / REST services" defaultOpen>
+              {effectiveOpenAPI.map(sp => (
+                <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", padding: "3px 0" }}>
+                  <input type="checkbox" checked={selSpecIds.includes(sp.id)}
+                    onChange={e => setSelSpecIds(prev => e.target.checked ? [...prev, sp.id] : prev.filter(x => x !== sp.id))}
+                    style={{ accentColor: "var(--accent)" }} />
+                  <span style={{ fontWeight: 600 }}>{sp.title}</span>
+                  <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{sp.base_url}</span>
+                </label>
+              ))}
             </ToolSection>
+          )}
 
-            {/* OpenAPI specs */}
-            {(selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false).length > 0 && (
-              <ToolSection title="OpenAPI / REST services" defaultOpen>
-                {(selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false).map(sp => (
-                  <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", padding: "3px 0" }}>
-                    <input type="checkbox" checked={selSpecIds.includes(sp.id)}
-                      onChange={e => setSelSpecIds(prev => e.target.checked ? [...prev, sp.id] : prev.filter(x => x !== sp.id))}
-                      style={{ accentColor: "var(--accent)" }} />
-                    <span style={{ fontWeight: 600 }}>{sp.title}</span>
-                    <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{sp.base_url}</span>
-                  </label>
-                ))}
-              </ToolSection>
-            )}
-
-            {/* MCP servers */}
-            {(selectedProfile.mcpServers ?? []).length > 0 && (
-              <ToolSection title="MCP servers">
-                {(selectedProfile.mcpServers ?? []).map(srv => (
-                  <MCPServerToolToggle key={srv.id} srv={srv}
-                    checked={selMcpIds.includes(srv.id)}
-                    disabledTools={disabledMcp}
-                    onToggleServer={c => setSelMcpIds(prev => c ? [...prev, srv.id] : prev.filter(x => x !== srv.id))}
-                    onToggleTool={(n, en) => setDisabledMcp(prev => en ? prev.filter(x => x !== n) : [...prev, n])}
-                  />
-                ))}
-              </ToolSection>
-            )}
-          </div>
-        ) : (
-          <div className="job-tool-grid" style={{ marginTop: 4 }}>
-            {BUILTIN_TOOLS.map(t => (
-              <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)} onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
-                <span>{t.icon}</span><span>{t.label}</span>
-              </label>
-            ))}
-          </div>
-        )}
+          {/* MCP servers */}
+          {effectiveMcp.length > 0 && (
+            <ToolSection title="MCP servers">
+              {effectiveMcp.map(srv => (
+                <MCPServerToolToggle key={srv.id} srv={srv}
+                  checked={selMcpIds.includes(srv.id)}
+                  disabledTools={disabledMcp}
+                  onToggleServer={c => setSelMcpIds(prev => c ? [...prev, srv.id] : prev.filter(x => x !== srv.id))}
+                  onToggleTool={(n, en) => setDisabledMcp(prev => en ? prev.filter(x => x !== n) : [...prev, n])}
+                />
+              ))}
+            </ToolSection>
+          )}
+        </div>
       </div>
 
       {/* Output file */}

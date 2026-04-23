@@ -1124,6 +1124,10 @@ export default function App() {
           models={settings.models}
           profiles={settings.profiles}
           activeProfileId={settings.activeProfileId ?? null}
+          globalOpenapiSpecs={settings.openapiSpecs ?? []}
+          globalMcpServers={settings.mcpServers ?? []}
+          globalEnabledTools={settings.enabledTools ?? {}}
+          globalAllowedDirs={settings.allowedDirs ?? []}
           onClose={() => setShowJobs(false)}
         />
       )}
