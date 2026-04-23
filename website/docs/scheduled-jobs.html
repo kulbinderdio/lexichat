@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Scheduled Jobs — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="Learn how to create, configure, and monitor scheduled jobs in LexiChat — automate prompts on a daily, weekly, interval, or manual schedule."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .prose-code { font-family: 'SF Mono', 'Fira Code', monospace; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="configuration.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Configuration</a>
+      <a href="integrations.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Integrations</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">On this page</div>
+      <a href="#overview" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Overview</a>
+      <a href="#opening" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Opening the Jobs panel</a>
+      <a href="#creating" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Creating a job</a>
+      <a href="#schedules" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Schedule types</a>
+      <a href="#profile-tools" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Profile &amp; tools</a>
+      <a href="#snapshots" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Snapshots &amp; staleness</a>
+      <a href="#running" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Running jobs</a>
+      <a href="#history" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Run history</a>
+      <a href="#output-file" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Output files</a>
+      <a href="#background" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Background operation</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Scheduled Jobs</h1>
+    <p class="text-lg text-slate-600 mb-10">Automate any prompt to run on a schedule — daily, weekly, every N hours, or on demand — with full control over which tools and profile each job uses.</p>
+
+    <!-- Overview -->
+    <section id="overview" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">info</span> Overview
+      </h2>
+      <p class="text-slate-600 mb-4">A <strong>scheduled job</strong> is a saved prompt that runs automatically at configured times. Jobs are useful for:</p>
+      <div class="grid sm:grid-cols-2 gap-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm text-slate-600 flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">newspaper</span>Daily news briefings — fetch BBC top story, add background context, email the report</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm text-slate-600 flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">folder</span>File processing — scan a folder every few hours and summarise new files</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm text-slate-600 flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">monitoring</span>Monitoring — periodically check a website or API and write a status report</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm text-slate-600 flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">mail</span>Automated reports — compile weekly summaries and send via Gmail integration</div>
+      </div>
+      <div class="bg-blue-50 border border-blue-100 rounded-xl p-4 text-sm text-slate-700">
+        <strong>Important:</strong> Jobs only run while LexiChat is open (or hidden in the system tray). If the app is fully quit, scheduled jobs will not fire. The app is designed to run in the background — closing the window hides it rather than quitting it. See <a href="#background" class="text-accent hover:underline">Background operation</a>.
+      </div>
+    </section>
+
+    <!-- Opening -->
+    <section id="opening" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">schedule</span> Opening the Jobs Panel
+      </h2>
+      <p class="text-slate-600 mb-4">Click the <strong>clock icon</strong> in the toolbar (top right, next to the Settings gear). The Jobs panel opens as a modal with two tabs:</p>
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1">Scheduled Jobs tab</div>
+          <div class="text-sm text-slate-500">List of all your jobs with their schedule, last run time, next run time, and status. Buttons to create, edit, run, enable/disable, or delete jobs.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1">Run History tab</div>
+          <div class="text-sm text-slate-500">Every execution logged with start/finish time, duration, and status. Expand any run to see the full debug trace and output.</div>
+        </div>
+      </div>
+      <p class="text-sm text-slate-500 mt-3">When a job completes while the panel is closed, a badge on the clock icon shows the number of new runs.</p>
+    </section>
+
+    <!-- Creating -->
+    <section id="creating" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">add_circle</span> Creating a Job
+      </h2>
+      <p class="text-slate-600 mb-5">Click <strong>+ New Job</strong> at the bottom of the jobs list. The job form has these fields:</p>
+      <div class="overflow-hidden bg-white border border-slate-200 rounded-xl mb-5">
+        <table class="w-full text-sm">
+          <thead><tr class="bg-slate-50 border-b border-slate-200">
+            <th class="text-left px-4 py-3 font-semibold text-slate-700">Field</th>
+            <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+          </tr></thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="px-4 py-3 font-medium">Job Name</td><td class="px-4 py-3 text-slate-600">A short label shown in the job list and run history.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Enabled</td><td class="px-4 py-3 text-slate-600">Toggle the job on or off without deleting it.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Profile</td><td class="px-4 py-3 text-slate-600">Which profile's tools and settings this job uses. See <a href="#profile-tools" class="text-accent hover:underline">Profile &amp; tools</a>.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Schedule</td><td class="px-4 py-3 text-slate-600">When the job runs. See <a href="#schedules" class="text-accent hover:underline">Schedule types</a>.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Model</td><td class="px-4 py-3 text-slate-600">Which Ollama model to use. Auto-populated from the profile's default.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Prompt</td><td class="px-4 py-3 text-slate-600">The user message sent to the model on each run. Can reference today's date — it's injected automatically.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">System Prompt Override</td><td class="px-4 py-3 text-slate-600">Optional. Replaces the profile's system prompt for this job only.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Tools</td><td class="px-4 py-3 text-slate-600">Which tools this job can use. See <a href="#profile-tools" class="text-accent hover:underline">Profile &amp; tools</a>.</td></tr>
+            <tr><td class="px-4 py-3 font-medium">Output File</td><td class="px-4 py-3 text-slate-600">Optional path to auto-save the final output after each run. Supports .txt, .md, .pdf, and .docx.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-slate-600 text-sm">Click <strong>Save Job</strong> to save. The job is immediately added to the scheduler.</p>
+    </section>
+
+    <!-- Schedules -->
+    <section id="schedules" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">event_repeat</span> Schedule Types
+      </h2>
+      <div class="space-y-3">
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-1"><span class="font-semibold text-accent text-sm">Daily</span><span class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">HH:MM</span></div>
+          <p class="text-sm text-slate-600">Runs once per day at the specified local time. The scheduler checks every 30 seconds, so the job fires within 30 seconds of the target minute. Jobs only run once per day — if the app wasn't running at the target time, the job waits until the next day.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-1"><span class="font-semibold text-accent text-sm">Weekly</span><span class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">Day + HH:MM</span></div>
+          <p class="text-sm text-slate-600">Runs once per week on the chosen day and time. Same 30-second precision as Daily.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-1"><span class="font-semibold text-accent text-sm">Interval</span><span class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">Every N hours</span></div>
+          <p class="text-sm text-slate-600">Runs every N hours from the previous run time. A <strong>brand-new job</strong> with an Interval schedule fires within 30 seconds of being saved (it has never run before, so it's immediately due). Subsequent runs are spaced N hours apart.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-1"><span class="font-semibold text-accent text-sm">Manual</span><span class="text-xs bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">On demand</span></div>
+          <p class="text-sm text-slate-600">Never fires automatically. Run it by clicking <strong>▶ Run</strong> in the job list. Useful for ad-hoc tasks you want to repeat with the same prompt and tools each time.</p>
+        </div>
+      </div>
+      <p class="text-slate-500 text-sm mt-4">The <strong>Next run</strong> time is shown on each job row so you can verify the schedule at a glance.</p>
+    </section>
+
+    <!-- Profile & Tools -->
+    <section id="profile-tools" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">person</span> Profile &amp; Tool Selection
+      </h2>
+      <p class="text-slate-600 mb-4">When you select a profile for a job, a <strong>Tools for this job</strong> panel appears with three collapsible sections. This lets you control exactly which tools the job can use — independently of the profile's global tool settings.</p>
+
+      <div class="space-y-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1 flex items-center gap-2"><span class="material-symbols-outlined text-accent text-base">build</span> Built-in tools</div>
+          <p class="text-sm text-slate-600">Checkboxes for each built-in tool enabled in the profile (web_search, read_file, write_file, etc.). Pre-checked based on the profile's settings. Deselect tools this job doesn't need.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1 flex items-center gap-2"><span class="material-symbols-outlined text-accent text-base">hub</span> OpenAPI / REST services</div>
+          <p class="text-sm text-slate-600">One checkbox per enabled OpenAPI spec in the profile (e.g. Gmail, Wikipedia). Check only the services this job needs — unnecessary APIs add schema tokens without benefit.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1 flex items-center gap-2"><span class="material-symbols-outlined text-accent text-base">electrical_services</span> MCP servers</div>
+          <p class="text-sm text-slate-600">One row per MCP server. Check the server to include it. Click <strong>N tools ▼</strong> to expand and toggle individual tools within the server — useful when an MCP server exposes many tools and you only need a few.</p>
+        </div>
+      </div>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+        <strong>No profile selected?</strong> The job runs with whatever tools are currently active in AppState (the globally active profile). This is fine for simple jobs but means the tool environment depends on which profile is active at run time.
+      </div>
+    </section>
+
+    <!-- Snapshots -->
+    <section id="snapshots" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">camera</span> Snapshots &amp; Staleness
+      </h2>
+      <p class="text-slate-600 mb-4">When you save a job with a profile, LexiChat embeds a <strong>snapshot</strong> of the profile's tool configuration directly in the job definition. This means the job runs with exactly the tools and auth credentials you selected, regardless of future profile changes — the job is fully self-contained.</p>
+      <div class="space-y-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">If you delete the profile, the job still runs using the saved snapshot.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">A job for Profile A runs correctly even while Profile B is active in the main chat — no interference.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-amber-500 flex-shrink-0">warning</span>
+          <div class="text-sm text-slate-600"><strong>Profile changes are not automatic.</strong> If you update a profile (add a new MCP server, change credentials, etc.), existing jobs continue using the old snapshot until you refresh it.</div>
+        </div>
+      </div>
+      <h3 class="font-semibold text-slate-800 mb-2">Refreshing a snapshot</h3>
+      <p class="text-slate-600 mb-3">In the job edit form, below the profile selector, you'll see the snapshot timestamp: <em>Snapshot: Apr 22, 09:00</em>. Click <strong>Refresh snapshot</strong> to re-capture the profile's current state, then re-save the job.</p>
+      <p class="text-slate-600">After <strong>7 days</strong> without a refresh, a <span class="text-amber-600 font-semibold">⚠ stale</span> warning appears on the job row as a reminder to check whether the profile has changed.</p>
+    </section>
+
+    <!-- Running -->
+    <section id="running" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">play_circle</span> Running Jobs
+      </h2>
+      <h3 class="font-semibold text-slate-800 mb-2">Automatic execution</h3>
+      <p class="text-slate-600 mb-4">The scheduler checks every 30 seconds for due jobs. When a job is due, it runs silently in the background — no text streams into the main chat, no UI disruption. When it finishes, the clock icon badge increments by 1. Open the Jobs panel to see the result.</p>
+      <h3 class="font-semibold text-slate-800 mb-2">Manual execution</h3>
+      <p class="text-slate-600 mb-4">Click <strong>▶ Run</strong> on any job to execute it immediately. The button shows <strong>…</strong> while running. <strong>Closing the panel does not stop the job</strong> — it continues running in the background and the result appears in Run History when done. The button label changes to <em>Close (jobs keep running)</em> while a run is in progress.</p>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+        <strong>Current date &amp; time</strong> is automatically injected into the job's system prompt, including a filename-safe format like <code class="bg-slate-100 px-1 rounded text-xs">2026-04-22_09-00</code>. This lets the model include accurate timestamps in reports and output filenames without needing a separate tool call.
+      </div>
+    </section>
+
+    <!-- History -->
+    <section id="history" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">history</span> Run History
+      </h2>
+      <p class="text-slate-600 mb-4">The <strong>Run History</strong> tab shows every job execution. Each row shows:</p>
+      <div class="grid sm:grid-cols-2 gap-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-sm"><span class="font-semibold">Status badge</span> — green <span class="text-green-600 font-semibold">✓ OK</span> or red <span class="text-red-500 font-semibold">✕ Error</span></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-sm"><span class="font-semibold">Profile</span> — which profile the job ran with</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-sm"><span class="font-semibold">Start &amp; finish time</span> — exact timestamps for the run</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-3 text-sm"><span class="font-semibold">Duration</span> — total execution time (e.g. 12.4s)</div>
+      </div>
+      <h3 class="font-semibold text-slate-800 mb-2">Debug trace</h3>
+      <p class="text-slate-600 mb-3">Click any run row to expand it. Inside you'll find a collapsible <strong>Debug trace</strong> section showing every step the agent took:</p>
+      <ul class="space-y-2 mb-4 text-sm text-slate-600">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">smart_toy</span><span>Each agent <strong>step</strong> numbered sequentially</span></li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">chat</span><span>The LLM's text response at each step (what the model "thought" before calling a tool)</span></li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">build</span><span>Each <strong>tool call</strong> with its name, expandable JSON arguments, and the raw result returned</span></li>
+      </ul>
+      <p class="text-slate-600 mb-3">Below the trace, the <strong>Output</strong> section shows the final assistant response rendered as Markdown. A <strong>⧉ Copy output</strong> button copies the raw text.</p>
+      <p class="text-slate-500 text-sm">Run history is stored per-job (up to 100 entries). Use the filter dropdown to view runs for a specific job. The <strong>Clear</strong> button removes all runs for the selected filter.</p>
+    </section>
+
+    <!-- Output Files -->
+    <section id="output-file" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">save</span> Output Files
+      </h2>
+      <p class="text-slate-600 mb-4">Each job can optionally save its final output to a file after every successful run. Set the <strong>Output File</strong> path in the job form — use the <strong>Browse…</strong> button to pick the location.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mb-4">
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">.txt / .md</div><div class="text-sm text-slate-500">Plain text output, each run overwrites the previous.</div></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">.pdf</div><div class="text-sm text-slate-500">PDF document generated from the output text.</div></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">.docx</div><div class="text-sm text-slate-500">Word document with full Markdown formatting preserved — headings, bold, bullets, code blocks.</div></div>
+      </div>
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-slate-700">
+        <strong>Tip:</strong> To create a dated archive instead of overwriting, include a date token in your prompt: <em>"Write the output to ~/reports/news-{{current_date}}.md"</em>. The AI can use the <code class="bg-white px-1 rounded text-xs">get_current_datetime</code> tool to get a filename-safe timestamp, or it will use the date injected into the system prompt.
+      </div>
+    </section>
+
+    <!-- Background operation -->
+    <section id="background" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">menu_open</span> Background Operation
+      </h2>
+      <p class="text-slate-600 mb-4">LexiChat is designed to run persistently. Clicking the window's close button (✕) <strong>hides</strong> the window rather than quitting — the app continues running in the system tray / menu bar and all scheduled jobs keep firing.</p>
+      <div class="grid sm:grid-cols-3 gap-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm">
+          <div class="font-semibold mb-1">macOS</div>
+          <p class="text-slate-500">Click the Lexi icon in the menu bar to show/hide. Right-click for the menu. Clicking the dock icon also restores the window.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm">
+          <div class="font-semibold mb-1">Windows</div>
+          <p class="text-slate-500">Click the Lexi icon in the system tray notification area. Right-click for the menu.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm">
+          <div class="font-semibold mb-1">Linux</div>
+          <p class="text-slate-500">Icon in the system tray (desktop environment dependent). Same click behaviour.</p>
+        </div>
+      </div>
+      <p class="text-slate-600 mb-3"><strong>To fully quit LexiChat</strong> (and stop all scheduled jobs), right-click the tray icon and choose <em>Quit LexiChat</em>, or use the system menu on macOS.</p>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+        <strong>Note on MCP stdio servers:</strong> When a scheduled job creates a fresh MCP connection for a stdio server (a locally spawned process), that process is automatically terminated when the job completes. There is no process leak.
+      </div>
+    </section>
+
+  </article>
+</div>
+
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-200 py-10 px-6">
+  <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-6 h-6 rounded-lg"/>
+      <span class="text-sm font-semibold">LexiChat</span>
+      <span class="text-sm text-slate-400">— Free</span>
+    </div>
+    <div class="flex items-center gap-6">
+      <a href="../index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Home</a>
+      <a href="index.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Docs</a>
+      <a href="features.html" class="text-sm text-slate-500 hover:text-accent transition-colors">Features</a>
+      <a href="mailto:info@lexi-chat.com" class="text-sm text-slate-500 hover:text-accent transition-colors">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -68,6 +68,9 @@ tailwind.config = {
       <a href="#vision" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Vision / Images</a>
       <a href="#profiles" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Profiles</a>
       <a href="#model-control" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Model Control</a>
+      <a href="#tray" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">System Tray</a>
+      <a href="#scheduled-jobs" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Scheduled Jobs</a>
+      <a href="#save-as" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Save Responses</a>
       <a href="#privacy" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Privacy</a>
     </div>
   </aside>
@@ -274,6 +277,61 @@ tailwind.config = {
     </section>
 
     <!-- Privacy -->
+    <!-- System Tray -->
+    <section id="tray" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">menu_open</span> System Tray &amp; Background Operation
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">All platforms</div>
+      <p class="text-slate-600 mb-4">LexiChat runs as a persistent background application on all platforms. Closing the window hides it rather than quitting — the app continues running in the menu bar (macOS), system tray (Windows), or notification area (Linux).</p>
+      <div class="grid sm:grid-cols-3 gap-4 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">macOS</div><div class="text-sm text-slate-500">Icon in the menu bar, top right. Left-click toggles the window.</div></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">Windows</div><div class="text-sm text-slate-500">Icon in the system tray notification area. Same click behaviour.</div></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">Linux</div><div class="text-sm text-slate-500">Icon in the system tray, desktop environment permitting.</div></div>
+      </div>
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+        <strong>Why this matters for scheduled jobs:</strong> Because the app stays running when you close the window, scheduled jobs fire at their configured times even while you're doing other things. The tray icon tooltip shows how many active jobs are scheduled.
+      </div>
+    </section>
+
+    <!-- Scheduled Jobs -->
+    <section id="scheduled-jobs" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">schedule</span> Scheduled Jobs
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Automation</div>
+      <p class="text-slate-600 mb-4">The Jobs panel (clock icon in the toolbar) lets you create prompts that run automatically. Each job is profile-specific — it carries a snapshot of the profile's tools so it runs correctly regardless of which profile you have active in the main chat.</p>
+      <h3 class="font-semibold text-slate-800 mb-2">Schedule types</h3>
+      <div class="grid sm:grid-cols-2 gap-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm"><span class="font-semibold text-accent">Daily</span> — runs once per day at a specific HH:MM time.</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm"><span class="font-semibold text-accent">Weekly</span> — runs once per week on a chosen day and time.</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm"><span class="font-semibold text-accent">Interval</span> — runs every N hours. New jobs with this type trigger within 30 seconds of being saved.</div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 text-sm"><span class="font-semibold text-accent">Manual</span> — only runs when you click ▶ Run. Useful for on-demand recurring tasks.</div>
+      </div>
+      <h3 class="font-semibold text-slate-800 mb-2">Profile &amp; tool snapshot</h3>
+      <p class="text-slate-600 mb-3">When you select a profile for a job, the form shows a three-section tool panel — Built-in tools, OpenAPI services, and MCP servers. You can deselect any tool you don't want this job to use. Clicking <strong>Save Job</strong> embeds a snapshot of your selections. The snapshot timestamp is shown on each job row; an orange <strong>⚠ stale</strong> warning appears after 7 days, prompting you to refresh.</p>
+      <h3 class="font-semibold text-slate-800 mb-2">Run history &amp; debug trace</h3>
+      <p class="text-slate-600 mb-3">Every run is recorded in the History tab with its start time, finish time, duration, and status. Expanding a run reveals the full <strong>Debug trace</strong> — each agent step, every tool call with its arguments and result, and the final output rendered as Markdown. A copy button lets you grab the output directly.</p>
+      <p class="text-slate-600">
+        <a href="scheduled-jobs.html" class="text-accent hover:underline font-medium">Read the full Scheduled Jobs guide →</a>
+      </p>
+    </section>
+
+    <!-- Save Responses -->
+    <section id="save-as" class="mb-12">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">save</span> Save Responses
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Export</div>
+      <p class="text-slate-600 mb-4">Every completed assistant response has a <strong>···</strong> menu button next to the Copy button. Click it to save the response to a file in one of three formats:</p>
+      <div class="grid sm:grid-cols-3 gap-4 mb-4">
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">.txt</div><div class="text-sm text-slate-500">Plain text — the raw Markdown source as typed by the model.</div></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">.pdf</div><div class="text-sm text-slate-500">PDF document with word-wrapped text layout.</div></div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-sm font-semibold mb-1">.docx</div><div class="text-sm text-slate-500">Word document with <strong>full Markdown formatting preserved</strong> — headings, bold, italic, bullet lists, code blocks, and blockquotes all become proper Word styles.</div></div>
+      </div>
+      <p class="text-slate-600 text-sm">A native OS save dialog opens so you can choose the destination and filename. Scheduled job outputs can also be auto-saved to a file — set the path in the job's Output File field.</p>
+    </section>
+
     <section id="privacy">
       <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
         <span class="material-symbols-outlined text-accent">shield</span> Privacy by Design

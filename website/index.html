@@ -62,6 +62,11 @@ tailwind.config = {
       <a href="#support" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Support</a>
       <a href="docs/index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Docs</a>
     </div>
+    <div class="flex items-center gap-3">
+    <a href="https://www.youtube.com/@LexiChat" target="_blank" rel="noopener" title="LexiChat on YouTube"
+      class="w-9 h-9 flex items-center justify-center rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors">
+      <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+    </a>
     <div class="relative group">
       <button class="bg-accent hover:bg-accent-dark text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
         <span class="material-symbols-outlined text-base" style="font-size:16px">download</span>
@@ -88,6 +93,7 @@ tailwind.config = {
           </a>
         </div>
       </div>
+    </div>
     </div>
   </div>
 </nav>
@@ -129,6 +135,11 @@ tailwind.config = {
         class="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-8 py-4 rounded-2xl font-semibold text-lg transition-colors">
         <span class="material-symbols-outlined" style="font-size:20px">menu_book</span>
         Documentation
+      </a>
+      <a href="https://www.youtube.com/@LexiChat" target="_blank" rel="noopener"
+        class="inline-flex items-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 px-8 py-4 rounded-2xl font-semibold text-lg transition-colors border border-red-100">
+        <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+        Watch on YouTube
       </a>
     </div>
 
@@ -407,6 +418,43 @@ tailwind.config = {
         </div>
       </div>
 
+      <!-- Scheduled Jobs -->
+      <div class="md:col-span-7 bg-gradient-to-br from-violet-50 to-indigo-50 border border-violet-100 rounded-3xl p-10 card-hover">
+        <div class="w-14 h-14 bg-violet-500/15 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-violet-600" style="font-size:28px;font-variation-settings:'FILL' 1">schedule</span>
+        </div>
+        <h3 class="text-2xl font-bold text-slate-900 mb-3">Scheduled Jobs</h3>
+        <p class="text-slate-600 leading-relaxed mb-6">Define prompts that run automatically — daily, weekly, every N hours, or on demand. Each job is tied to a specific profile and its tools, so it always runs with the right context regardless of which profile you have active.</p>
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-violet-500" style="font-size:16px">history</span>Full run history with debug trace</div>
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-violet-500" style="font-size:16px">build</span>Per-job tool selection</div>
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-violet-500" style="font-size:16px">save</span>Auto-save output to file</div>
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-violet-500" style="font-size:16px">notifications</span>Badge notification on completion</div>
+        </div>
+      </div>
+
+      <!-- Tray + Save-as -->
+      <div class="md:col-span-5 bg-gradient-to-br from-cyan-50 to-teal-50 border border-cyan-100 rounded-3xl p-10 card-hover">
+        <div class="w-14 h-14 bg-cyan-500/15 rounded-2xl flex items-center justify-center mb-6">
+          <span class="material-symbols-outlined text-cyan-600" style="font-size:28px;font-variation-settings:'FILL' 1">menu_open</span>
+        </div>
+        <h3 class="text-2xl font-bold text-slate-900 mb-3">Runs in the Background</h3>
+        <p class="text-slate-600 leading-relaxed mb-4">LexiChat lives in your menu bar / system tray. Closing the window hides it — your scheduled jobs keep running. Click the icon to bring it back any time.</p>
+        <div class="flex gap-2 flex-wrap mt-4">
+          <span class="px-3 py-1 bg-white/70 border border-cyan-100 text-cyan-700 text-xs font-semibold rounded-full">macOS menu bar</span>
+          <span class="px-3 py-1 bg-white/70 border border-cyan-100 text-cyan-700 text-xs font-semibold rounded-full">Windows tray</span>
+          <span class="px-3 py-1 bg-white/70 border border-cyan-100 text-cyan-700 text-xs font-semibold rounded-full">Linux system tray</span>
+        </div>
+        <div class="mt-6 pt-6 border-t border-cyan-100">
+          <div class="text-sm font-semibold text-slate-700 mb-2">Save any response as…</div>
+          <div class="flex gap-2">
+            <span class="px-3 py-1 bg-white/70 border border-slate-200 text-slate-600 text-xs font-semibold rounded-full">.txt</span>
+            <span class="px-3 py-1 bg-white/70 border border-slate-200 text-slate-600 text-xs font-semibold rounded-full">.pdf</span>
+            <span class="px-3 py-1 bg-white/70 border border-blue-200 text-blue-700 text-xs font-semibold rounded-full">.docx (styled)</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </section>
@@ -479,7 +527,7 @@ tailwind.config = {
 <section id="support" class="py-32 px-6 bg-gradient-to-b from-slate-50 to-white">
   <div class="max-w-3xl mx-auto text-center">
     <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-6 border border-accent/20">Support the project</div>
-    <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-4">LexiChat is free.<br/>Keep it that way.</h2>
+    <h2 class="text-4xl md:text-5xl font-black tracking-tighter text-slate-900 mb-4">LexiChat is free.<br/></h2>
     <p class="text-xl text-slate-500 max-w-xl mx-auto mb-12 leading-relaxed">
       LexiChat is free and always will be. If it saves you time or sparks joy, consider supporting continued development.
     </p>
@@ -534,6 +582,10 @@ tailwind.config = {
         <a href="docs/getting-started.html" class="hover:text-accent transition-colors">Getting Started</a>
         <a href="#support" class="hover:text-accent transition-colors">Support</a>
         <a href="mailto:info@lexi-chat.com" class="hover:text-accent transition-colors">Contact</a>
+        <a href="https://www.youtube.com/@LexiChat" target="_blank" rel="noopener" class="hover:text-red-500 transition-colors flex items-center gap-1.5">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
+          YouTube
+        </a>
       </nav>
       <p class="text-slate-400 text-sm">Built with <a href="https://tauri.app" class="hover:text-accent" target="_blank">Tauri</a> &amp; <a href="https://ollama.com" class="hover:text-accent" target="_blank">Ollama</a></p>
     </div>

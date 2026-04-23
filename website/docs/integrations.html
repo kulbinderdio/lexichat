@@ -356,29 +356,33 @@ tailwind.config = {
       <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
         <span class="material-symbols-outlined text-accent">settings_applications</span> Managing Tools
       </h2>
-      <p class="text-slate-600 mb-5">All tools (built-in and custom) are listed in the Tools panel. From here you can:</p>
-      <div class="space-y-3">
+      <p class="text-slate-600 mb-5">All tools (built-in, OpenAPI, and MCP) are managed in the Admin panel. From here you can:</p>
+      <div class="space-y-3 mb-6">
         <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
           <span class="material-symbols-outlined text-accent flex-shrink-0">toggle_on</span>
           <div>
-            <div class="font-medium text-sm mb-0.5">Enable / Disable</div>
-            <div class="text-sm text-slate-600">Toggle individual tools on or off. Disabled tools are hidden from the AI — it won't call them even if relevant. Useful for reducing the schema payload sent to the model.</div>
+            <div class="font-medium text-sm mb-0.5">Enable / Disable (OpenAPI &amp; Built-in)</div>
+            <div class="text-sm text-slate-600">Toggle entire tools or services on or off. Disabled tools are hidden from the AI — it won't call them even if relevant. Useful for reducing the schema payload sent to the model.</div>
+          </div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0">checklist</span>
+          <div>
+            <div class="font-medium text-sm mb-0.5">Per-tool enable / disable (MCP servers)</div>
+            <div class="text-sm text-slate-600">MCP servers can expose dozens or hundreds of tools. Expand any MCP server in the Admin → MCP tab to see individual tool checkboxes. Use <strong>All</strong> / <strong>None</strong> buttons to bulk-select. The server badge updates to show <em>enabled / total</em> — e.g. <code class="bg-slate-100 px-1 rounded text-xs">✓ 5/112 tools</code>. Only enabled tools are sent to the model, keeping the context window focused.</div>
           </div>
         </div>
         <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
           <span class="material-symbols-outlined text-accent flex-shrink-0">delete</span>
           <div>
-            <div class="font-medium text-sm mb-0.5">Remove Custom Tools</div>
-            <div class="text-sm text-slate-600">Click the delete icon next to any custom or OpenAPI-imported tool to remove it permanently. Built-in tools cannot be removed (only disabled).</div>
+            <div class="font-medium text-sm mb-0.5">Remove Tools &amp; Servers</div>
+            <div class="text-sm text-slate-600">Click the ✕ icon next to any OpenAPI spec or MCP server to remove it permanently. Built-in tools cannot be removed, only disabled.</div>
           </div>
         </div>
-        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
-          <span class="material-symbols-outlined text-accent flex-shrink-0">source</span>
-          <div>
-            <div class="font-medium text-sm mb-0.5">View Tool Source</div>
-            <div class="text-sm text-slate-600">Hover over a tool to see its source group (Built-in / OpenAPI: &lt;title&gt; / Custom).</div>
-          </div>
-        </div>
+      </div>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
+        <strong>MCP tool selections are profile-specific.</strong> Each profile stores its own MCP server connection list and per-tool enabled state. Switching profiles swaps the entire tool environment — MCP servers, OpenAPI specs, allowed directories, and tool toggles all change together.
       </div>
     </section>
 

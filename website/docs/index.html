@@ -85,7 +85,7 @@ tailwind.config = {
 
 <!-- ── Doc Cards ───────────────────────────────────────────────────────────── -->
 <section class="pb-24 px-6">
-  <div class="max-w-5xl mx-auto grid md:grid-cols-2 gap-6">
+  <div class="max-w-5xl mx-auto grid md:grid-cols-2 lg:grid-cols-3 gap-6">
 
     <!-- Getting Started -->
     <a href="getting-started.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block">
@@ -113,11 +113,29 @@ tailwind.config = {
         </div>
         <div>
           <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">Features Overview</h2>
-          <p class="text-slate-500 text-sm leading-relaxed">Explore everything LexiChat can do — web search, file tools, multi-profile, vision, and more.</p>
+          <p class="text-slate-500 text-sm leading-relaxed">Explore everything LexiChat can do — web search, file tools, multi-profile, scheduled jobs, vision, and more.</p>
           <ul class="mt-4 space-y-1.5">
             <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Chat &amp; streaming responses</li>
-            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Web search</li>
-            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>File read &amp; write</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Save responses as txt / pdf / docx</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>System tray &amp; background operation</li>
+          </ul>
+        </div>
+      </div>
+    </a>
+
+    <!-- Scheduled Jobs -->
+    <a href="scheduled-jobs.html" class="card-hover bg-white border border-slate-200 rounded-2xl p-7 group block">
+      <div class="flex items-start gap-4">
+        <div class="w-12 h-12 bg-violet-50 rounded-xl flex items-center justify-center flex-shrink-0 group-hover:bg-violet-100 transition-colors">
+          <span class="material-symbols-outlined text-violet-500 text-2xl">schedule</span>
+        </div>
+        <div>
+          <h2 class="text-lg font-semibold mb-1.5 group-hover:text-accent transition-colors">Scheduled Jobs</h2>
+          <p class="text-slate-500 text-sm leading-relaxed">Automate prompts on a schedule — daily, weekly, every N hours, or on demand. Profile-specific with full run history.</p>
+          <ul class="mt-4 space-y-1.5">
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Creating and managing jobs</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Profile &amp; tool configuration</li>
+            <li class="text-sm text-slate-500 flex items-center gap-1.5"><span class="material-symbols-outlined text-sm text-slate-300">chevron_right</span>Run history &amp; debug trace</li>
           </ul>
         </div>
       </div>
