@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Settings, RotateCcw, Bug, Paperclip, Info } from "lucide-react";
+import { Settings, RotateCcw, Bug, Paperclip, Info, Clock } from "lucide-react";
+import { JobsPanel } from "./JobsPanel";
+import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
 import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec } from "./AdminPanel";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
@@ -24,6 +26,7 @@ interface ChatMessage {
   toolCalls?: ToolCall[];
   toolName?: string;
   toolArgs?: string;
+  imageDataUrls?: string[];  // base64 data URIs for attached images
 }
 
 interface ToolSchema {
@@ -64,8 +67,9 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "delete_file", description: "Delete a file.", parameters: { type: "object", properties: { path: { type: "string", description: "File path to delete." } }, required: ["path"] } } },
   { type: "function", function: { name: "find_old_files", description: "Find files not modified in N days.", parameters: { type: "object", properties: { directory: { type: "string", description: "Directory to search." }, older_than_days: { type: "integer", description: "Days threshold." }, pattern: { type: "string", description: "Optional glob filter." } }, required: ["directory","older_than_days"] } } },
   { type: "function", function: { name: "web_search", description: "Search the web for current information.", parameters: { type: "object", properties: { query: { type: "string", description: "Search query." } }, required: ["query"] } } },
-  { type: "function", function: { name: "compose_email", description: "Build a base64url-encoded RFC 2822 email string for the Gmail API. Call this first, then pass the result as the 'raw' field to gmail_sendmessage.", parameters: { type: "object", properties: { to: { type: "string", description: "Recipient email address(es), comma-separated." }, from: { type: "string", description: "Sender email address (optional)." }, subject: { type: "string", description: "Email subject line." }, body: { type: "string", description: "Plain text email body." }, reply_to_message_id: { type: "string", description: "Message-ID to reply to, for threading (optional)." } }, required: ["to","subject","body"] } } },
+  { type: "function", function: { name: "compose_email", description: "Build a base64url-encoded RFC 2822 email ready for the Gmail API. Returns ONLY the raw base64url string — use the entire return value as the 'raw' field in gmail_sendmessage, with no modification.", parameters: { type: "object", properties: { to: { type: "string", description: "Recipient email address(es), comma-separated." }, from: { type: "string", description: "Sender email address (optional)." }, subject: { type: "string", description: "Email subject line." }, body: { type: "string", description: "Plain text email body." }, reply_to_message_id: { type: "string", description: "Message-ID to reply to, for threading (optional)." } }, required: ["to","subject","body"] } } },
   { type: "function", function: { name: "fetch_webpage", description: "Fetch and read the full text content of a webpage by URL. Use this to read a specific URL the user provides, or to read the full article behind a web search result.", parameters: { type: "object", properties: { url: { type: "string", description: "Full URL to fetch, must start with http:// or https://" } }, required: ["url"] } } },
+  { type: "function", function: { name: "get_current_datetime", description: "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use whenever you need today's date or a timestamp for a filename.", parameters: { type: "object", properties: {}, required: [] } } },
 ];
 
 // ── Built-in OpenAPI specs ────────────────────────────────────────────────────
@@ -284,10 +288,17 @@ function SaveMenu({ text }: { text: string }) {
 
 // ── Message bubbles ───────────────────────────────────────────────────────────
 
-function UserMessage({ text }: { text: string }) {
+function UserMessage({ text, imageDataUrls }: { text: string; imageDataUrls?: string[] }) {
   return (
     <div className="msg-user">
-      <div className="user-bubble">{text}</div>
+      {imageDataUrls && imageDataUrls.length > 0 && (
+        <div className="user-image-thumbs">
+          {imageDataUrls.map((src, i) => (
+            <img key={i} src={src} className="user-image-thumb" alt="attached image" />
+          ))}
+        </div>
+      )}
+      {text && <div className="user-bubble">{text}</div>}
     </div>
   );
 }
@@ -610,6 +621,8 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showJobs,  setShowJobs]  = useState(false);
+  const [jobBadge,  setJobBadge]  = useState(0);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -694,6 +707,55 @@ export default function App() {
       });
     }).then(u => cleanup.push(u));
 
+    listen<JobRun>("job-run-done", () => {
+      setJobBadge(prev => prev + 1);
+    }).then(u => cleanup.push(u));
+
+    // Persist refreshed OAuth2 access tokens so they survive restarts.
+    // Covers both OpenAPI specs and MCP servers across global settings and all profiles.
+    listen<{ spec_id: string; access_token: string }>("openapi-token-refreshed", e => {
+      const { spec_id, access_token } = e.payload;
+      setSettings(prev => {
+        const patchAuth = (auth: import("./AdminPanel").AuthConfig) =>
+          ({ ...auth, access_token });
+        const updateSpecs = (specs: typeof prev.openapiSpecs) =>
+          specs.map(s => s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s);
+        const updateMcp = (servers: typeof prev.mcpServers) =>
+          servers.map(s => s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s);
+        const updated: typeof prev = {
+          ...prev,
+          openapiSpecs: updateSpecs(prev.openapiSpecs),
+          mcpServers:   updateMcp(prev.mcpServers ?? []),
+          profiles: prev.profiles.map(p => ({
+            ...p,
+            openapiSpecs: updateSpecs(p.openapiSpecs ?? []),
+            mcpServers:   updateMcp(p.mcpServers   ?? []),
+          })),
+        };
+        saveSettings(updated);
+        return updated;
+      });
+
+      // Also patch any scheduled jobs whose profile_context contains the refreshed spec/server
+      invoke<import("./jobTypes").ScheduledJob[]>("get_jobs").then(jobs => {
+        const affected = jobs.flatMap(job => {
+          if (!job.profile_context) return [];
+          const inSpec = job.profile_context.openapi_specs.some(s => s.id === spec_id);
+          const inMcp  = job.profile_context.mcp_servers.some(s => s.id === spec_id);
+          if (!inSpec && !inMcp) return [];
+          const patchedCtx = {
+            ...job.profile_context,
+            openapi_specs: job.profile_context.openapi_specs.map(s =>
+              s.id === spec_id ? { ...s, auth: { ...(s.auth ?? { type: "none" as const }), access_token } } : s),
+            mcp_servers: job.profile_context.mcp_servers.map(s =>
+              s.id === spec_id ? { ...s, auth: { ...(s.auth ?? { type: "none" as const }), access_token } } : s),
+          };
+          return [{ ...job, profile_context: patchedCtx }];
+        });
+        affected.forEach(job => invoke("save_job", { job }).catch(() => {}));
+      }).catch(() => {});
+    }).then(u => cleanup.push(u));
+
     return () => cleanup.forEach(u => u());
   }, []);
 
@@ -724,12 +786,17 @@ export default function App() {
       ? `${text}\n\nAttached files:\n${otherFiles.map(f => `- ${f}`).join("\n")}`
       : text;
 
-    // Build display text showing all attachments
-    const displayText = attachedFiles.length > 0
-      ? `${text}\n\nAttached: ${attachedFiles.map(f => f.split("/").pop()).join(", ")}`
+    // Build display text — only list non-image attachments (images shown as thumbnails)
+    const displayText = otherFiles.length > 0
+      ? `${text}\n\nAttached: ${otherFiles.map(f => f.split("/").pop()).join(", ")}`
       : text;
 
-    setMessages(prev => [...prev, { id: uid(), role: "user", text: displayText }]);
+    // Load image data URIs for thumbnails (fire-and-forget before send)
+    const imageDataUrls = await Promise.all(
+      imagePaths.map(p => invoke<string>("read_image_data_url", { path: p }).catch(() => ""))
+    ).then(urls => urls.filter(Boolean));
+
+    setMessages(prev => [...prev, { id: uid(), role: "user", text: displayText, imageDataUrls }]);
     setAttachedFiles([]);
     setInput("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
@@ -913,6 +980,17 @@ export default function App() {
         <button className="btn icon-only" onClick={() => setShowAdmin(true)} title="Admin">
           <Settings size={13} />
         </button>
+        <button
+          className="btn icon-only"
+          onClick={() => { setShowJobs(true); setJobBadge(0); }}
+          title="Scheduled Jobs"
+          style={{ position: "relative" }}
+        >
+          <Clock size={13} />
+          {jobBadge > 0 && (
+            <span className="job-badge">{jobBadge > 9 ? "9+" : jobBadge}</span>
+          )}
+        </button>
       </div>
 
       {/* Main content: chat + optional debug panel */}
@@ -942,7 +1020,7 @@ export default function App() {
         ) : (
           <div className="messages">
             {messages.map(msg => {
-              if (msg.role === "user")        return <UserMessage key={msg.id} text={msg.text} />;
+              if (msg.role === "user")        return <UserMessage key={msg.id} text={msg.text} imageDataUrls={msg.imageDataUrls} />;
               if (msg.role === "assistant")   return <AssistantMessage key={msg.id} msg={msg} />;
               if (msg.role === "tool-result") return (
                 <ToolResultRow
@@ -1039,6 +1117,15 @@ export default function App() {
         />
       )}
 
+      {showJobs && (
+        <JobsPanel
+          models={settings.models}
+          profiles={settings.profiles}
+          activeProfileId={settings.activeProfileId ?? null}
+          onClose={() => setShowJobs(false)}
+        />
+      )}
+
       {showAbout && (
         <div className="modal-overlay" onClick={() => setShowAbout(false)}>
           <div className="about-modal" onClick={e => e.stopPropagation()}>
@@ -1049,7 +1136,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 0.1.4</div>
+            <div className="about-version">Version 0.1.5</div>
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>

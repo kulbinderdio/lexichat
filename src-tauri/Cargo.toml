@@ -1,6 +1,6 @@
 [package]
 name = "lexichat"
-version = "0.1.4"
+version = "0.1.5"
 description = "LexiChat — Local AI Agent"
 authors = ["you"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +35,7 @@ base64 = "0.22"
 url = { version = "2", features = ["serde"] }
 zip = "2"
 printpdf = "0.6"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"
