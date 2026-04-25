@@ -483,6 +483,44 @@ html, body, #root { height: 100%; overflow: hidden; }
   max-height: 200px; overflow-y: auto; margin: 0;
 }
 
+/* ── Step Builder ────────────────────────────────────────────────────────────── */
+.step-mode-toggle { display:flex; gap:2px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:3px; margin-bottom:8px; width:fit-content; }
+.step-mode-btn { padding:4px 12px; border-radius:6px; border:none; background:transparent; font-size:12px; font-weight:500; color:var(--text-secondary); cursor:pointer; transition:background .12s,color .12s; }
+.step-mode-btn.active { background:var(--surface3); color:var(--text); }
+.step-mode-btn:hover:not(.active) { color:var(--text); }
+.step-builder { display:flex; flex-direction:column; gap:8px; }
+.step-builder-empty { font-size:12px; color:var(--text-tertiary); font-style:italic; padding:6px 0; }
+.step-row { display:flex; gap:10px; background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:10px 10px 10px 8px; }
+.step-row-left { display:flex; flex-direction:column; align-items:center; gap:4px; flex-shrink:0; padding-top:2px; }
+.step-num-badge { width:22px; height:22px; border-radius:50%; background:var(--accent-light); color:var(--accent); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.step-move-buttons { display:flex; flex-direction:column; gap:2px; }
+.step-move-btn { background:none; border:none; color:var(--text-tertiary); cursor:pointer; font-size:9px; padding:1px 4px; border-radius:3px; line-height:1; }
+.step-move-btn:hover:not(:disabled) { color:var(--text); background:var(--surface3); }
+.step-move-btn:disabled { opacity:.2; cursor:default; }
+.step-row-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+.step-type-row { display:flex; align-items:center; gap:6px; }
+.step-type-chip { display:flex; align-items:center; gap:5px; font-size:11px; padding:3px 9px; border-radius:12px; border:1px solid var(--border); background:transparent; color:var(--text-secondary); cursor:pointer; transition:background .1s,color .1s,border-color .1s; }
+.step-type-chip input[type="radio"] { display:none; }
+.step-type-chip.active { background:var(--accent-light); color:var(--accent); border-color:rgba(99,102,241,.3); font-weight:600; }
+.step-delete-btn { margin-left:auto; background:none; border:none; color:var(--text-tertiary); cursor:pointer; font-size:11px; padding:3px 6px; border-radius:4px; transition:color .1s,background .1s; }
+.step-delete-btn:hover { color:#f87171; background:rgba(248,113,113,.1); }
+.step-tool-search-wrap { display:flex; align-items:center; gap:6px; }
+.step-tool-search { flex:1; font-size:11px; }
+.step-tool-selected-name { font-size:11px; font-family:monospace; color:var(--purple); background:var(--purple-bg); border:1px solid var(--purple-border); border-radius:5px; padding:2px 7px; white-space:nowrap; flex-shrink:0; }
+.step-tool-dropdown { position:absolute; top:calc(100% + 4px); left:0; right:0; background:var(--surface); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.4); z-index:200; max-height:220px; overflow-y:auto; }
+.step-tool-group-label { font-size:9px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-tertiary); padding:6px 10px 3px; border-top:1px solid var(--border-light); }
+.step-tool-group-label:first-child { border-top:none; }
+.step-tool-option { display:flex; flex-direction:column; width:100%; text-align:left; background:none; border:none; padding:5px 10px; cursor:pointer; transition:background .1s; }
+.step-tool-option:hover { background:var(--surface2); }
+.step-tool-option-name { font-size:11px; font-weight:600; font-family:monospace; color:var(--text); }
+.step-tool-option-desc { font-size:10px; color:var(--text-tertiary); margin-top:1px; }
+.step-tool-empty { font-size:11px; color:var(--text-tertiary); padding:8px 10px; font-style:italic; }
+.step-hint-area { font-size:11px; font-family:monospace; resize:vertical; }
+.step-instruction-area { font-size:12px; resize:vertical; }
+.step-add-btn { align-self:flex-start; font-size:11px; }
+.step-preview-section { margin-top:4px; }
+.step-preview-pre { font-family:monospace; font-size:11px; line-height:1.6; color:var(--text-secondary); white-space:pre-wrap; word-break:break-word; background:var(--surface2); border:1px solid var(--border); border-radius:6px; padding:10px 12px; margin-top:6px; max-height:280px; overflow-y:auto; }
+
 /* Tool result row */
 .msg-tool-result {
   display: flex;

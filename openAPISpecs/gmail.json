@@ -1,0 +1,269 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Gmail API",
+    "version": "3.0.0",
+    "description": "Read, send, and manage Gmail email. Requires OAuth2."
+  },
+  "servers": [
+    { "url": "https://gmail.googleapis.com" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://accounts.google.com/o/oauth2/auth",
+            "tokenUrl": "https://oauth2.googleapis.com/token",
+            "scopes": {
+              "https://www.googleapis.com/auth/gmail.readonly": "Read-only Gmail access",
+              "https://www.googleapis.com/auth/gmail.send": "Send email",
+              "https://www.googleapis.com/auth/gmail.modify": "Read, compose, send",
+              "https://mail.google.com/": "Full Gmail access"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/gmail/v1/users/me/messages": {
+      "get": {
+        "summary": "List Gmail email messages in inbox",
+        "operationId": "listMessages",
+        "description": "List Gmail email messages. Use to check Gmail inbox, search email, find messages from a sender, or list recent emails. Use q to filter (same syntax as Gmail search box). Returns message IDs only — you MUST call getMessageDetails with each messageId to read the actual email body and content.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Gmail search query. Examples: \"from:someone@example.com\", \"subject:invoice\", \"is:unread\", \"after:2024/01/01\", \"has:attachment\"",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "description": "Maximum number of messages to return (default 10, max 500). Keep low to avoid large responses.",
+            "schema": { "type": "integer", "default": 10 }
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "description": "Token for the next page of results from a previous call",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "labelIds",
+            "in": "query",
+            "description": "Filter by label. Common values: INBOX, SENT, DRAFT, SPAM, TRASH, UNREAD, STARRED",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Limit fields returned to reduce response size. Use \"messages(id,threadId),nextPageToken\" to get only IDs.",
+            "schema": { "type": "string", "default": "messages(id,threadId),nextPageToken,resultSizeEstimate" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "List of message IDs. Call getMessageDetails with each messageId to read content." }
+        }
+      }
+    },
+    "/gmail/v1/users/me/messages/{messageId}": {
+      "get": {
+        "summary": "Get full Gmail email content by message ID",
+        "operationId": "getMessageDetails",
+        "description": "Read a specific Gmail email. Returns full email including From, To, Subject, Date and decoded body text. Use this after listMessages to read each email. Always use format=full to get the body content. The messageId comes from listMessages.",
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "description": "The message ID returned by listMessages",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Format: 'full' (default, includes decoded body), 'metadata' (headers only), 'minimal' (IDs only)",
+            "schema": { "type": "string", "enum": ["full", "metadata", "minimal"], "default": "full" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Full email message with headers and decoded body content" }
+        }
+      },
+      "delete": {
+        "summary": "Permanently delete a Gmail email",
+        "operationId": "deleteMessage",
+        "description": "Permanently deletes a Gmail email. This cannot be undone. Use trashMessage to move to Trash instead.",
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "description": "The message ID to delete",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "Message permanently deleted" }
+        }
+      }
+    },
+    "/gmail/v1/users/me/messages/{messageId}/trash": {
+      "post": {
+        "summary": "Move a Gmail email to Trash",
+        "operationId": "trashMessage",
+        "description": "Moves a Gmail email to Trash. Automatically deleted after 30 days. Safer than deleteMessage.",
+        "parameters": [
+          {
+            "name": "messageId",
+            "in": "path",
+            "required": true,
+            "description": "The message ID to trash",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Message moved to Trash" }
+        }
+      }
+    },
+    "/gmail/v1/users/me/messages/send": {
+      "post": {
+        "summary": "Send an email via Gmail",
+        "operationId": "sendMessage",
+        "description": "Send an email from Gmail. The message must be a base64url-encoded RFC 2822 string in the 'raw' field. Build the raw string as: 'From: you@gmail.com\\nTo: recipient@example.com\\nSubject: Hello\\n\\nBody text' then base64url-encode it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "raw": {
+                    "type": "string",
+                    "description": "Base64url-encoded RFC 2822 email message"
+                  }
+                },
+                "required": ["raw"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Email sent, returns message ID and thread ID" }
+        }
+      }
+    },
+    "/gmail/v1/users/me/threads": {
+      "get": {
+        "summary": "List Gmail email threads and conversations",
+        "operationId": "listThreads",
+        "description": "List Gmail email threads (conversations). Use to browse inbox or find email chains. Returns thread IDs and short snippets only — you MUST call getThread with each threadId to read the actual email content. Use q to filter with Gmail search syntax. Keep maxResults low (5-10) to avoid large responses.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Gmail search query (same syntax as Gmail search box). Examples: \"is:unread\", \"from:boss@company.com\", \"subject:meeting\"",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "maxResults",
+            "in": "query",
+            "description": "Maximum number of threads to return. Default 5 to keep response small — increase only if needed.",
+            "schema": { "type": "integer", "default": 5 }
+          },
+          {
+            "name": "labelIds",
+            "in": "query",
+            "description": "Filter by label ID (e.g. INBOX, SENT, UNREAD)",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Limit fields to reduce response size. Use \"threads(id,snippet),nextPageToken\" to get only IDs and preview text.",
+            "schema": { "type": "string", "default": "threads(id,snippet),nextPageToken,resultSizeEstimate" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "List of thread IDs and snippet previews. Call getThread with each threadId to read full content." }
+        }
+      }
+    },
+    "/gmail/v1/users/me/threads/{threadId}": {
+      "get": {
+        "summary": "Get a full Gmail email thread (conversation) with all messages",
+        "operationId": "getThread",
+        "description": "Returns all messages in a Gmail thread/conversation including full email bodies. Use this after listThreads to read actual email content. Always use format=full to get message bodies. The threadId comes from listThreads.",
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "description": "The thread ID from listThreads",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "Message format: 'full' (with decoded bodies, default), 'metadata' (headers only), 'minimal'",
+            "schema": { "type": "string", "enum": ["full", "metadata", "minimal"], "default": "full" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Thread with all messages and full decoded body content" }
+        }
+      }
+    },
+    "/gmail/v1/users/me/labels": {
+      "get": {
+        "summary": "List Gmail labels and folders",
+        "operationId": "listLabels",
+        "description": "Returns all Gmail labels including system labels (INBOX, SENT, DRAFT, SPAM, TRASH) and user-created labels. Use to discover available label IDs for filtering.",
+        "parameters": [],
+        "responses": {
+          "200": { "description": "List of labels with IDs, names, and types" }
+        }
+      }
+    },
+    "/gmail/v1/users/me/drafts": {
+      "get": {
+        "summary": "List Gmail drafts",
+        "operationId": "listDrafts",
+        "description": "Lists all draft emails in the Gmail mailbox.",
+        "parameters": [
+          {
+            "name": "maxResults",
+            "in": "query",
+            "description": "Maximum number of drafts to return",
+            "schema": { "type": "integer", "default": 10 }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search query to filter drafts",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "List of draft IDs" }
+        }
+      }
+    },
+    "/gmail/v1/users/me/profile": {
+      "get": {
+        "summary": "Get Gmail account profile and stats",
+        "operationId": "getProfile",
+        "description": "Returns the Gmail account email address, total message count, thread count, and history ID. Use to get the user's Gmail address.",
+        "parameters": [],
+        "responses": {
+          "200": { "description": "Gmail profile including email address and mailbox stats" }
+        }
+      }
+    }
+  }
+}

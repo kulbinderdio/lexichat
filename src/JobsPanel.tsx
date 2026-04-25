@@ -5,7 +5,21 @@ import type { Profile, StoredMCPServer } from "./AdminPanel";
 import { save } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ScheduledJob, JobRun, JobSchedule, TraceStep } from "./jobTypes";
+import type { ScheduledJob, JobRun, JobSchedule, TraceStep, JobStep } from "./jobTypes";
+
+// Backend response shapes for tool discovery
+interface SpecInfoLocal {
+  id: string; title: string; tool_count: number;
+  tools: { name: string; description: string; method: string; path: string }[];
+}
+interface MCPServerInfoLocal {
+  id: string; name: string; connected: boolean;
+  tools: { name: string; description: string }[];
+}
+interface ToolOption {
+  name: string; label: string; description: string;
+  category: "builtin" | "openapi" | "mcp"; service?: string;
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -27,6 +41,45 @@ const BUILTIN_TOOLS = [
 ];
 
 const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+
+function buildToolOptions(
+  enabledBuiltins: string[],
+  specs: SpecInfoLocal[],
+  mcpServers: MCPServerInfoLocal[],
+): ToolOption[] {
+  const opts: ToolOption[] = [];
+  for (const bt of BUILTIN_TOOLS)
+    if (enabledBuiltins.includes(bt.name))
+      opts.push({ name: bt.name, label: bt.label, description: bt.label, category: "builtin" });
+  for (const sp of specs)
+    for (const t of sp.tools)
+      opts.push({ name: t.name, label: t.name, description: t.description, category: "openapi", service: sp.title });
+  for (const srv of mcpServers)
+    for (const t of srv.tools)
+      opts.push({ name: t.name, label: t.name, description: t.description, category: "mcp", service: srv.name });
+  return opts;
+}
+
+function compileStepsPreview(steps: JobStep[]): string {
+  if (!steps.length) return "";
+  const n = steps.length;
+  const lines = [
+    `Execute the following ${n} step${n === 1 ? "" : "s"} IN ORDER. Do not skip any step.`,
+    `After each step output: ✓ Step N complete: [one line summary]`,
+    "",
+  ];
+  steps.forEach((step, i) => {
+    const instr = (step.instruction ?? "").trim();
+    lines.push(`STEP ${i + 1} — ${instr}`);
+    if (step.step_type === "tool") {
+      if (step.tool_name) lines.push(`Call tool: ${step.tool_name}`);
+      const hint = (step.tool_hint ?? "").trim();
+      if (hint) lines.push(`Arguments hint: ${hint}`);
+    }
+    lines.push("");
+  });
+  return lines.join("\n").trimEnd();
+}
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -98,6 +151,7 @@ function blankJob(profile: Profile | null = null): ScheduledJob {
     profile_id: profile?.id ?? null,
     profile_name: profile?.name ?? null,
     profile_context: null,
+    steps: [],
   };
 }
 
@@ -383,6 +437,158 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
   );
 }
 
+// ── Step Builder ──────────────────────────────────────────────────────────────
+
+function StepBuilder({ steps, onChange, toolOptions, toolsLoading }: {
+  steps: JobStep[];
+  onChange: (steps: JobStep[]) => void;
+  toolOptions: ToolOption[];
+  toolsLoading: boolean;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [searchState, setSearchState] = useState<Record<string, string>>({});
+  const [dropdownOpen, setDropdownOpen] = useState<string | null>(null);
+
+  const addStep = () => onChange([...steps, { id: uid(), step_type: "text", instruction: "", tool_name: undefined, tool_hint: undefined }]);
+  const deleteStep = (id: string) => onChange(steps.filter(s => s.id !== id));
+  const updateStep = (id: string, patch: Partial<JobStep>) => onChange(steps.map(s => s.id === id ? { ...s, ...patch } : s));
+  const moveStep = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= steps.length) return;
+    const c = [...steps]; [c[i], c[j]] = [c[j], c[i]]; onChange(c);
+  };
+
+  // Group filtered options for display
+  const getGroups = (id: string) => {
+    const q = (searchState[id] ?? "").toLowerCase();
+    const filtered = q
+      ? toolOptions.filter(t => t.name.toLowerCase().includes(q) || (t.service ?? "").toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+      : toolOptions;
+    const groups: Record<string, ToolOption[]> = {};
+    for (const t of filtered) {
+      const key = t.category === "builtin" ? "Built-in" : (t.service ?? t.category);
+      (groups[key] ??= []).push(t);
+    }
+    return groups;
+  };
+
+  return (
+    <div className="step-builder">
+      {steps.length === 0 && (
+        <div className="step-builder-empty">No steps yet — add one below to build your job.</div>
+      )}
+
+      {steps.map((step, i) => {
+        const groups = getGroups(step.id);
+        const isOpen = dropdownOpen === step.id;
+
+        return (
+          <div key={step.id} className="step-row">
+            <div className="step-row-left">
+              <span className="step-num-badge">{i + 1}</span>
+              <div className="step-move-buttons">
+                <button className="step-move-btn" onClick={() => moveStep(i, -1)} disabled={i === 0}>▲</button>
+                <button className="step-move-btn" onClick={() => moveStep(i, 1)} disabled={i === steps.length - 1}>▼</button>
+              </div>
+            </div>
+
+            <div className="step-row-body">
+              {/* Type + delete row */}
+              <div className="step-type-row">
+                <label className={`step-type-chip${step.step_type === "text" ? " active" : ""}`}>
+                  <input type="radio" name={`t-${step.id}`} checked={step.step_type === "text"}
+                    onChange={() => updateStep(step.id, { step_type: "text", tool_name: undefined, tool_hint: undefined })} />
+                  Text instruction
+                </label>
+                <label className={`step-type-chip${step.step_type === "tool" ? " active" : ""}`}>
+                  <input type="radio" name={`t-${step.id}`} checked={step.step_type === "tool"}
+                    onChange={() => updateStep(step.id, { step_type: "tool" })} />
+                  Tool call
+                </label>
+                <button className="step-delete-btn" onClick={() => deleteStep(step.id)}>✕</button>
+              </div>
+
+              {/* Tool selector */}
+              {step.step_type === "tool" && (
+                <div className="step-tool-select" style={{ position: "relative" }}>
+                  <div className="step-tool-search-wrap">
+                    <input
+                      className="admin-input step-tool-search"
+                      placeholder={toolsLoading ? "Loading tools…" : "Search tools…"}
+                      value={searchState[step.id] ?? ""}
+                      onFocus={() => setDropdownOpen(step.id)}
+                      onChange={e => setSearchState(prev => ({ ...prev, [step.id]: e.target.value }))}
+                    />
+                    {step.tool_name && (
+                      <span className="step-tool-selected-name">{step.tool_name}</span>
+                    )}
+                  </div>
+                  {isOpen && (
+                    <div className="step-tool-dropdown">
+                      {Object.entries(groups).map(([group, opts]) => (
+                        <div key={group}>
+                          <div className="step-tool-group-label">{group}</div>
+                          {opts.map(opt => (
+                            <button key={opt.name} className="step-tool-option"
+                              onMouseDown={e => { e.preventDefault();
+                                updateStep(step.id, { tool_name: opt.name });
+                                setSearchState(prev => ({ ...prev, [step.id]: "" }));
+                                setDropdownOpen(null);
+                              }}>
+                              <span className="step-tool-option-name">{opt.name}</span>
+                              {opt.description && <span className="step-tool-option-desc">{opt.description.slice(0, 70)}{opt.description.length > 70 ? "…" : ""}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                      {Object.keys(groups).length === 0 && (
+                        <div className="step-tool-empty">No matching tools</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Arg hints */}
+              {step.step_type === "tool" && (
+                <textarea className="admin-input step-hint-area"
+                  value={step.tool_hint ?? ""}
+                  onChange={e => updateStep(step.id, { tool_hint: e.target.value || undefined })}
+                  placeholder="Argument hints (e.g. url: https://bbc.co.uk/news)"
+                  rows={2}
+                />
+              )}
+
+              {/* Instruction */}
+              <textarea className="admin-input step-instruction-area"
+                value={step.instruction ?? ""}
+                onChange={e => updateStep(step.id, { instruction: e.target.value || undefined })}
+                placeholder={step.step_type === "tool"
+                  ? "Context for this step (e.g. extract the headline and article URL)"
+                  : "Instruction for the LLM (e.g. Write a report using the information gathered above)"}
+                rows={2}
+                onClick={() => setDropdownOpen(null)}
+              />
+            </div>
+          </div>
+        );
+      })}
+
+      <button className="btn step-add-btn" onClick={addStep}>+ Add step</button>
+
+      {steps.length > 0 && (
+        <div className="step-preview-section">
+          <button className="job-trace-toggle" onClick={() => setPreviewOpen(o => !o)}>
+            <span style={{ fontSize: 11, fontWeight: 600 }}>Preview compiled prompt</span>
+            <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{previewOpen ? "▲" : "▼"}</span>
+          </button>
+          {previewOpen && <pre className="step-preview-pre">{compileStepsPreview(steps)}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Job form ──────────────────────────────────────────────────────────────────
 
 function ToolSection({ title, defaultOpen = false, children }: { title: string; defaultOpen?: boolean; children: React.ReactNode }) {
@@ -435,9 +641,18 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
   globalAllowedDirs: string[];
   onSave: (j: ScheduledJob) => void; onCancel: () => void;
 }) {
-  const [job, setJob] = useState<ScheduledJob>({ ...initial, model: initial.model || models[0] || "" });
+  const [job, setJob] = useState<ScheduledJob>({ ...initial, model: initial.model || models[0] || "", steps: initial.steps ?? [] });
   const set = (patch: Partial<ScheduledJob>) => setJob(j => ({ ...j, ...patch }));
   const setSched = (patch: Partial<JobSchedule>) => set({ schedule: { ...job.schedule, ...patch } });
+
+  // Step builder mode — auto-detect from initial data
+  const [promptMode, setPromptMode] = useState<"freeform" | "steps">(
+    (initial.steps?.length ?? 0) > 0 ? "steps" : "freeform"
+  );
+
+  // Tool discovery for step builder
+  const [toolOptions, setToolOptions] = useState<ToolOption[]>([]);
+  const [toolsLoading, setToolsLoading] = useState(false);
 
   const selectedProfile = profiles.find(p => p.id === job.profile_id) ?? null;
 
@@ -445,7 +660,23 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
   const effectiveOpenAPI  = selectedProfile ? (selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false) : globalOpenapiSpecs.filter(s => s.enabled !== false);
   const effectiveMcp      = selectedProfile ? (selectedProfile.mcpServers ?? []) : globalMcpServers;
   const effectiveBuiltins = selectedProfile ? (selectedProfile.enabledTools ?? {}) : globalEnabledTools;
-  const isGlobal          = !selectedProfile;
+  const isGlobal = !selectedProfile;
+
+  const loadToolOptions = async () => {
+    setToolsLoading(true);
+    try {
+      const [specs, mcpServers] = await Promise.all([
+        invoke<SpecInfoLocal[]>("list_openapi_specs"),
+        invoke<MCPServerInfoLocal[]>("list_mcp_servers"),
+      ]);
+      const enabledNames = Object.entries(effectiveBuiltins)
+        .filter(([, v]) => v !== false).map(([k]) => k);
+      setToolOptions(buildToolOptions(enabledNames, specs, mcpServers));
+    } catch { /* ignore */ }
+    setToolsLoading(false);
+  };
+
+  useEffect(() => { loadToolOptions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tool selection state — seeded from existing snapshot, or freshly from effective (profile or global) tools
   const seedSpecIds  = () => job.profile_context?.openapi_specs.map(s => s.id) ?? effectiveOpenAPI.map(s => s.id);
@@ -476,7 +707,9 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
     if (path) set({ output_file: path });
   };
 
-  const canSave = job.name.trim() && job.prompt.trim() && job.model;
+  const canSave = job.name.trim() && job.model && (
+    promptMode === "freeform" ? job.prompt.trim().length > 0 : (job.steps ?? []).length > 0
+  );
 
   const handleSave = () => {
     let profile_context: import("./jobTypes").JobProfileContext | null = null;
@@ -497,7 +730,13 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
         snapshot_at: new Date().toISOString(),
       };
     }
-    onSave({ ...job, profile_context });
+    onSave({
+      ...job,
+      profile_context,
+      // Exclusive: only persist the active mode's data so Rust execution is deterministic
+      prompt: promptMode === "freeform" ? job.prompt : "",
+      steps:  promptMode === "steps"    ? (job.steps ?? []) : [],
+    });
   };
 
   return (
@@ -532,6 +771,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
                   : Object.entries(globalEnabledTools).filter(([,v]) => v !== false).map(([k]) => k),
               });
               refreshSnapshot(p);
+              loadToolOptions();
             }}>
             <option value="">Global (uses active profile at run time)</option>
             {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -586,11 +826,33 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
         </select>
       </div>
 
-      {/* Prompt */}
+      {/* Prompt / Step builder */}
       <div className="field">
-        <label>Prompt</label>
-        <textarea className="admin-input" value={job.prompt} onChange={e => set({ prompt: e.target.value })}
-          placeholder="What should Lexi do each time this runs?" style={{ minHeight: 90, resize: "vertical" }} />
+        <div className="step-mode-toggle">
+          <button className={`step-mode-btn${promptMode === "freeform" ? " active" : ""}`}
+            onClick={() => setPromptMode("freeform")}>Free-form prompt</button>
+          <button className={`step-mode-btn${promptMode === "steps" ? " active" : ""}`}
+            onClick={() => setPromptMode("steps")}>Step builder</button>
+        </div>
+
+        {promptMode === "freeform" ? (
+          <textarea className="admin-input" value={job.prompt} onChange={e => set({ prompt: e.target.value })}
+            placeholder="What should Lexi do each time this runs?" style={{ minHeight: 90, resize: "vertical" }} />
+        ) : (
+          <>
+            {job.profile_id && (
+              <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginBottom: 4 }}>
+                Tool list reflects the currently active profile. Ensure the target profile is active when creating this job.
+              </div>
+            )}
+            <StepBuilder
+              steps={job.steps ?? []}
+              onChange={s => set({ steps: s })}
+              toolOptions={toolOptions}
+              toolsLoading={toolsLoading}
+            />
+          </>
+        )}
       </div>
 
       {/* System prompt override */}

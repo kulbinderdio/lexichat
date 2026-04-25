@@ -1,0 +1,229 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Google Drive API",
+    "version": "3.0.0",
+    "description": "Access and manage files in Google Drive. Requires OAuth2 with drive.readonly or drive scope."
+  },
+  "servers": [
+    { "url": "https://www.googleapis.com" }
+  ],
+  "security": [
+    { "oauth2": ["https://www.googleapis.com/auth/drive"] }
+  ],
+  "components": {
+    "securitySchemes": {
+      "oauth2": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://accounts.google.com/o/oauth2/auth",
+            "tokenUrl": "https://oauth2.googleapis.com/token",
+            "scopes": {
+              "https://www.googleapis.com/auth/drive": "Full Drive access",
+              "https://www.googleapis.com/auth/drive.readonly": "Read-only Drive access",
+              "https://www.googleapis.com/auth/drive.file": "Access files created by this app"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/drive/v3/files": {
+      "get": {
+        "summary": "List files and folders in Google Drive",
+        "operationId": "listFiles",
+        "description": "List files and folders stored in Google Drive (cloud storage). Use this for any question about Google Drive files, documents, spreadsheets, or folders. IMPORTANT: the search parameter is named 'q' (not 'query'). To find PDFs use q=\"mimeType='application/pdf'\". Returns file IDs, names, MIME types, and modified times.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Drive search query — parameter name is 'q'. Use Drive query syntax (NOT SQL or natural language). PDF files: mimeType='application/pdf'. Folders: mimeType='application/vnd.google-apps.folder'. Google Docs: mimeType='application/vnd.google-apps.document'. Name search: name contains 'report'. Combined: mimeType='application/pdf' and trashed=false. Note: 'name ends with' is NOT valid — use mimeType for file type filtering.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "pageSize",
+            "in": "query",
+            "description": "Maximum number of files to return (1-1000, default 100)",
+            "schema": { "type": "integer", "default": 100 }
+          },
+          {
+            "name": "pageToken",
+            "in": "query",
+            "description": "Token for the next page of results, from a previous call's nextPageToken",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Fields to include. Default: \"files(id,name,mimeType,modifiedTime,size,parents)\"",
+            "schema": { "type": "string", "default": "files(id,name,mimeType,modifiedTime,size,parents),nextPageToken" }
+          },
+          {
+            "name": "orderBy",
+            "in": "query",
+            "description": "Sort order. E.g. \"modifiedTime desc\", \"name\", \"createdTime desc\"",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "spaces",
+            "in": "query",
+            "description": "Comma-separated list of spaces to query: drive, appDataFolder, photos",
+            "schema": { "type": "string", "default": "drive" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of files matching the query"
+          }
+        }
+      }
+    },
+    "/drive/v3/files/{fileId}": {
+      "get": {
+        "summary": "Get a file from Google Drive",
+        "operationId": "getFile",
+        "description": "Get metadata or download content of a Google Drive file or document. Use alt=media to download the file content. Use fields to specify which metadata to return.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the file. Get IDs from listFiles.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "alt",
+            "in": "query",
+            "description": "Use 'media' to download the file content instead of metadata",
+            "schema": { "type": "string", "enum": ["json", "media"] }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Fields to return, e.g. \"id,name,mimeType,size,modifiedTime,webViewLink,description\"",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File metadata or binary content"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a file from Google Drive",
+        "operationId": "deleteFile",
+        "description": "Permanently deletes a file from Google Drive. Use with caution — this cannot be undone.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the file to delete",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "204": { "description": "File deleted successfully" }
+        }
+      }
+    },
+    "/drive/v3/files/{fileId}/export": {
+      "get": {
+        "summary": "Export a Google Workspace document",
+        "operationId": "exportFile",
+        "description": "Exports a Google Docs, Sheets, or Slides file to a standard format. Use mimeType to specify the export format.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the Google Workspace file to export",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "mimeType",
+            "in": "query",
+            "required": true,
+            "description": "The MIME type to export to. Docs→'text/plain' or 'application/pdf'; Sheets→'text/csv'; Slides→'application/pdf'",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Exported file content" }
+        }
+      }
+    },
+    "/drive/v3/about": {
+      "get": {
+        "summary": "Get Drive storage quota and user info",
+        "operationId": "getAbout",
+        "description": "Returns information about the user's Drive storage quota (used, total) and their account details.",
+        "parameters": [
+          {
+            "name": "fields",
+            "in": "query",
+            "required": true,
+            "description": "Fields to return. Use \"user,storageQuota\" to get account info and quota.",
+            "schema": { "type": "string", "default": "user,storageQuota" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Drive account info and storage quota" }
+        }
+      }
+    },
+    "/drive/v3/files/{fileId}/permissions": {
+      "get": {
+        "summary": "List permissions for a file",
+        "operationId": "listPermissions",
+        "description": "Returns the list of sharing permissions for a file or folder, including who has access and their role.",
+        "parameters": [
+          {
+            "name": "fileId",
+            "in": "path",
+            "required": true,
+            "description": "The ID of the file or folder",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Fields to return, e.g. \"permissions(id,role,type,emailAddress,displayName)\"",
+            "schema": { "type": "string", "default": "permissions(id,role,type,emailAddress,displayName)" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "List of permissions" }
+        }
+      }
+    },
+    "/drive/v3/changes": {
+      "get": {
+        "summary": "List recent changes to files in Drive",
+        "operationId": "listChanges",
+        "description": "Returns a list of recent changes to files in the user's Drive. Requires a pageToken from getStartPageToken.",
+        "parameters": [
+          {
+            "name": "pageToken",
+            "in": "query",
+            "required": true,
+            "description": "The token for continuing a previous list request or use getStartPageToken to start fresh",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "description": "Fields to return",
+            "schema": { "type": "string", "default": "changes(fileId,removed,time,file(id,name,mimeType,modifiedTime)),newStartPageToken,nextPageToken" }
+          }
+        ],
+        "responses": {
+          "200": { "description": "List of changes" }
+        }
+      }
+    }
+  }
+}

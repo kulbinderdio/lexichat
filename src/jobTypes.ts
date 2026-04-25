@@ -25,6 +25,14 @@ export interface JobMCPServer {
   auth?: import("./AdminPanel").AuthConfig;
 }
 
+export interface JobStep {
+  id: string;
+  step_type: "text" | "tool";
+  instruction?: string;
+  tool_name?: string;
+  tool_hint?: string;
+}
+
 export interface JobProfileContext {
   ollama_host: string;
   allowed_dirs: string[];
@@ -49,6 +57,7 @@ export interface ScheduledJob {
   profile_id: string | null;
   profile_name: string | null;
   profile_context: JobProfileContext | null;
+  steps?: JobStep[];
 }
 
 export interface TraceToolCall {

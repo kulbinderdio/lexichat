@@ -1,0 +1,332 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Companies House Public Data API (LLM Optimised)",
+    "version": "1.2.0",
+    "description": "Tool-optimized OpenAPI specification designed for LLM routing. Each endpoint includes intent guidance so the model can correctly choose the right operation."
+  },
+  "servers": [
+    {
+      "url": "https://api.company-information.service.gov.uk"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "HTTP Basic or API key as required by Companies House API."
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKeyAuth": []
+    }
+  ],
+  "paths": {
+    "/search/companies": {
+      "get": {
+        "operationId": "search_companies",
+        "summary": "Search companies by name or keyword",
+        "description": "LLM INTENT ROUTING:\nUse this when the user provides a company name, partial name, or keyword but does NOT provide a company number.\n\nDo NOT use when a company number is present — use get_company_profile instead.\n\nExamples:\n- 'Find companies called Tesla'\n- 'Search for bionic AI startups'\n- 'What companies match OpenAI?'\n\nReturns a ranked list of matching companies.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Search query string (company name or keyword)"
+          },
+          {
+            "name": "items_per_page",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "default": 20 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}": {
+      "get": {
+        "operationId": "get_company_profile",
+        "summary": "Get company profile by company number",
+        "description": "LLM INTENT ROUTING:\nUse this when the user provides a company number OR explicitly asks for detailed company information.\n\nDo NOT use for name searches — use search_companies instead.\n\nExamples:\n- 'What is company 01234567?'\n- 'Get details for company 09876543'\n- 'Tell me about this company (with number provided)'\n\nReturns core company metadata: status, incorporation date, address, SIC codes.",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Unique company number identifier"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Company profile",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}/officers": {
+      "get": {
+        "operationId": "list_company_officers",
+        "summary": "List company officers",
+        "description": "LLM INTENT ROUTING:\nUse when user asks about directors, officers, secretaries, or leadership of a company.\n\nExamples:\n- 'Who are the directors of Apple UK?'\n- 'List officers of company 01234567'\n\nDo NOT use for ownership — use PSC endpoint instead.",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Officer list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}/persons-with-significant-control": {
+      "get": {
+        "operationId": "list_company_psc",
+        "summary": "List persons with significant control",
+        "description": "LLM INTENT ROUTING:\nUse when user asks WHO OWNS or CONTROLS a company.\n\nExamples:\n- 'Who owns this company?'\n- 'Beneficial owners of company 01234567'\n\nThis is different from officers (directors).",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PSC list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}/filing-history": {
+      "get": {
+        "operationId": "list_filing_history",
+        "summary": "Get filing history",
+        "description": "LLM INTENT ROUTING:\nUse when user asks for company filings, documents, accounts, confirmation statements, or historical filings.\n\nExamples:\n- 'Show company filings'\n- 'Latest accounts for company 01234567'\n\nIf user wants a document, return links from results.",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filing history list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}/charges": {
+      "get": {
+        "operationId": "list_company_charges",
+        "summary": "List company charges (mortgages/secured loans)",
+        "description": "LLM INTENT ROUTING:\nUse when user asks about debt, loans, mortgages, or security interests registered against a company.\n\nExamples:\n- 'Does this company have debt?'\n- 'Show charges on company 01234567'",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Charges list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}/insolvency": {
+      "get": {
+        "operationId": "get_company_insolvency",
+        "summary": "Get insolvency information",
+        "description": "LLM INTENT ROUTING:\nUse when user asks if a company is insolvent, dissolved due to insolvency, or in liquidation/administration.\n\nExamples:\n- 'Is this company bankrupt?'\n- 'Is company 01234567 insolvent?'",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Insolvency data",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/search/companies/advanced": {
+      "get": {
+        "operationId": "advanced_search_companies",
+        "summary": "Advanced structured company search",
+        "description": "LLM INTENT ROUTING:\nUse when user requests filtering beyond name search (status, SIC code, incorporation date range).\n\nExamples:\n- 'Find active fintech companies incorporated after 2020'\n- 'Search tech companies in SIC 62020'",
+        "parameters": [
+          {
+            "name": "company_name_includes",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "company_status",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "sic_codes",
+            "in": "query",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Advanced search results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/alphabetical-search/companies": {
+      "get": {
+        "operationId": "alphabetical_search_companies",
+        "summary": "Alphabetical browsing search",
+        "description": "LLM INTENT ROUTING:\nUse when user is browsing companies alphabetically or using prefix-based navigation (A-Z style exploration).",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alphabetical results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/disqualified-officers/natural/{officer_id}": {
+      "get": {
+        "operationId": "get_disqualified_officer",
+        "summary": "Get disqualified officer details",
+        "description": "LLM INTENT ROUTING:\nUse when user asks if a person is banned from being a director or has disqualification history.",
+        "parameters": [
+          {
+            "name": "officer_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disqualification details",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/company/{company_number}/uk-establishments": {
+      "get": {
+        "operationId": "get_uk_establishments",
+        "summary": "Get UK establishments",
+        "description": "LLM INTENT ROUTING:\nUse when user asks about UK branches or establishments of overseas companies.",
+        "parameters": [
+          {
+            "name": "company_number",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UK establishments",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

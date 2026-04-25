@@ -15,6 +15,19 @@ pub enum JobSchedule {
     Manual,
 }
 
+/// A single step in a structured job. Compiles to one numbered section in the prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStep {
+    pub id: String,
+    pub step_type: String,             // "text" or "tool"
+    #[serde(default)]
+    pub instruction: Option<String>,   // LLM instruction for this step
+    #[serde(default)]
+    pub tool_name: Option<String>,     // exact tool name (tool steps only)
+    #[serde(default)]
+    pub tool_hint: Option<String>,     // argument hints (tool steps only)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledJob {
     pub id: String,
@@ -34,6 +47,8 @@ pub struct ScheduledJob {
     pub profile_name: Option<String>,
     #[serde(default)]
     pub profile_context: Option<JobProfileContext>,
+    #[serde(default)]
+    pub steps: Vec<JobStep>,
 }
 
 /// NOTE: serialised into scheduled_jobs.json — may contain API keys/tokens from the
@@ -157,6 +172,32 @@ pub fn build_trace(conv: &[crate::ollama::WireMessage]) -> Vec<TraceStep> {
     steps
 }
 
+/// Compile a steps list into a structured numbered prompt the LLM reliably follows.
+pub fn compile_steps(steps: &[JobStep]) -> String {
+    if steps.is_empty() { return String::new(); }
+    let n = steps.len();
+    let mut out = format!(
+        "Execute the following {} step{} IN ORDER. Do not skip any step.\n\
+         After each step output: checkmark Step N complete: [one line summary]\n\n",
+        n, if n == 1 { "" } else { "s" }
+    );
+    for (i, step) in steps.iter().enumerate() {
+        let instr = step.instruction.as_deref().unwrap_or("").trim();
+        out.push_str(&format!("STEP {} — {}\n", i + 1, instr));
+        if step.step_type == "tool" {
+            if let Some(ref name) = step.tool_name {
+                out.push_str(&format!("Call tool: {}\n", name));
+            }
+            if let Some(ref hint) = step.tool_hint {
+                let h = hint.trim();
+                if !h.is_empty() { out.push_str(&format!("Arguments hint: {}\n", h)); }
+            }
+        }
+        out.push('\n');
+    }
+    out.trim_end().to_string()
+}
+
 // ── Persistence ────────────────────────────────────────────────────────────────
 
 pub fn jobs_path() -> std::path::PathBuf { crate::dirs_path().join("scheduled_jobs.json") }
@@ -245,10 +286,17 @@ pub async fn execute_job(
 
     let started_at = Utc::now();
 
+    // If the job has structured steps, compile them into a deterministic prompt.
+    let effective_prompt = if !job.steps.is_empty() {
+        compile_steps(&job.steps)
+    } else {
+        job.prompt.clone()
+    };
+
     // Isolated conversation — never touches AppState::conversation
     let conversation: Mutex<Vec<WireMessage>> = Mutex::new(vec![WireMessage {
         role: "user".into(),
-        content: Some(job.prompt.clone()),
+        content: Some(effective_prompt),
         tool_calls: None,
         tool_call_id: None,
         name: None,
