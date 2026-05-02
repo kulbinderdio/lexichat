@@ -241,8 +241,6 @@ async fn stream_chat(
 
 // ── Agent loop ────────────────────────────────────────────────────────────────
 
-const MAX_STEPS: usize = 10;
-
 pub async fn agent_loop(
     host: &str,
     model: &str,
@@ -257,10 +255,13 @@ pub async fn agent_loop(
     web_search_results: usize,
     app: &AppHandle,
     silent: bool,
+    max_steps: usize,
 ) -> anyhow::Result<()> {
     let run_start = std::time::Instant::now();
     let mut nudged = false;
-    for step in 0..MAX_STEPS {
+    let mut continuations = 0usize;
+    let mut consecutive_text_without_tools = 0usize; // detect "I'm done" loops
+    for step in 0..max_steps {
         let step_start = std::time::Instant::now();
         let schema_names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
         if !silent { let _ = app.emit("debug-step-start", DebugStepEvent { step, schema_names }); }
@@ -317,19 +318,38 @@ pub async fn agent_loop(
         }
 
         if tool_calls.is_empty() {
-            // Model returned nothing. Nudge once regardless of step so the user always
-            // gets a response (step 0 = model gave no reply at all; step > 0 = silent
-            // finish after tool results).
+            // Model returned nothing. Nudge once so the user always gets a response.
             if full_text.is_empty() && !nudged {
                 nudged = true;
                 let mut conv = conversation.lock().unwrap();
                 conv.push(WireMessage {
                     role: "user".into(),
                     content: Some("Please respond to my previous request.".into()),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                    images: None,
+                    tool_calls: None, tool_call_id: None, name: None, images: None,
+                });
+                continue;
+            }
+
+            // In silent (job) mode the model often outputs a step-completion note
+            // and stops, expecting a human to say "continue". There's no human here —
+            // push a continuation prompt so the remaining workflow steps execute.
+            // BUT: if the model responds to two consecutive continuations with only
+            // text (no tool calls), it has genuinely finished — stop the loop.
+            if silent && !full_text.is_empty() {
+                consecutive_text_without_tools += 1;
+                if consecutive_text_without_tools >= 2 || continuations >= 20 {
+                    // Model is done — two text-only responses in a row = workflow complete
+                    if !silent {
+                        let _ = app.emit("agent-done", DoneEvent { error: None });
+                    }
+                    return Ok(());
+                }
+                continuations += 1;
+                let mut conv = conversation.lock().unwrap();
+                conv.push(WireMessage {
+                    role: "user".into(),
+                    content: Some("Continue executing the workflow. Call the next tool now. Do not output text — call the tool directly.".into()),
+                    tool_calls: None, tool_call_id: None, name: None, images: None,
                 });
                 continue;
             }
@@ -342,6 +362,11 @@ pub async fn agent_loop(
             }
             return Ok(());
         }
+
+        // Tool call received — reset both detectors so the next empty/text response
+        // after this tool's result is handled correctly (can nudge again if needed)
+        consecutive_text_without_tools = 0;
+        nudged = false;
 
         // Dispatch each tool call
         for call in &tool_calls {
@@ -423,28 +448,86 @@ async fn dispatch_tool(
         "move_file","delete_file","find_old_files","web_search","fetch_webpage","compose_email",
         "get_current_datetime"];
     if builtin_names.contains(&name) {
-        return crate::tools::dispatch_builtin(name, args, allowed_dirs, web_search_results).await;
+        let result = crate::tools::dispatch_builtin(name, args, allowed_dirs, web_search_results).await;
+
+        // In silent (job) mode, compose_email returns a large base64 string that
+        // overwhelms the context window and causes the model to skip the send step.
+        // Store the full result and return a short acknowledgment instead so the
+        // model can proceed to the send step without needing to handle the raw value.
+        if name == "compose_email" && !result.starts_with("Error") {
+            use tauri::Manager;
+            if let Some(state) = app.try_state::<crate::AppState>() {
+                *state.pending_email_raw.lock().unwrap() = Some(result);
+            }
+            return "Email composed and ready to send. Call the email send tool now to deliver it — the encoded message will be supplied automatically.".into();
+        }
+
+        return result;
     }
 
     // 2. Try OpenAPI tools
     for spec in openapi_specs.iter() {
         if let Some(tool) = spec.tools.iter().find(|t| t.name == name) {
-            // Auto-encode the 'raw' field for Gmail sendMessage if the model passes
-            // plain text instead of going through compose_email first.
-            let patched;
-            let effective_args = if let Some(raw) = args["raw"].as_str() {
+            use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+            // For any tool whose name contains "sendmessage", supply the raw field
+            // automatically from the stored compose_email result when:
+            //   a) raw is absent, OR
+            //   b) raw is a placeholder/empty string
+            let pending_raw: Option<String> = {
+                use tauri::Manager;
+                if let Some(state) = app.try_state::<crate::AppState>() {
+                    state.pending_email_raw.lock().unwrap().clone()
+                } else {
+                    None
+                }
+            };
+
+            let patched_for_send;
+            let patched_for_encode;
+            let effective_args = if name.to_lowercase().contains("sendmessage") {
+                let raw_val = args["raw"].as_str().unwrap_or("");
+                let use_pending = raw_val.is_empty()
+                    || raw_val.len() < 20          // placeholder / incomplete
+                    || raw_val.contains('[')        // model pasted template text
+                    || raw_val.contains("PASTE");
+                if use_pending {
+                    if let Some(ref stored) = pending_raw {
+                        let mut obj = args.clone();
+                        if let Some(map) = obj.as_object_mut() {
+                            map.insert("raw".into(), serde_json::Value::String(stored.clone()));
+                        }
+                        patched_for_send = obj;
+                        // Clear the stored value — it's been consumed
+                        use tauri::Manager;
+                        if let Some(state) = app.try_state::<crate::AppState>() {
+                            *state.pending_email_raw.lock().unwrap() = None;
+                        }
+                        &patched_for_send
+                    } else { args }
+                } else if needs_base64url_encoding(raw_val) {
+                    let mut obj = args.clone();
+                    if let Some(map) = obj.as_object_mut() {
+                        map.insert("raw".into(), serde_json::Value::String(
+                            URL_SAFE_NO_PAD.encode(raw_val.as_bytes())
+                        ));
+                    }
+                    patched_for_encode = obj;
+                    &patched_for_encode
+                } else { args }
+            } else if let Some(raw) = args["raw"].as_str() {
                 if needs_base64url_encoding(raw) {
-                    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
                     let mut obj = args.clone();
                     if let Some(map) = obj.as_object_mut() {
                         map.insert("raw".into(), serde_json::Value::String(
                             URL_SAFE_NO_PAD.encode(raw.as_bytes())
                         ));
                     }
-                    patched = obj;
-                    &patched
+                    patched_for_encode = obj;
+                    &patched_for_encode
                 } else { args }
             } else { args };
+
             return crate::openapi::execute(spec, tool, effective_args, Some(app)).await;
         }
     }

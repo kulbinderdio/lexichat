@@ -38,19 +38,21 @@ const BUILTIN_TOOLS = [
   { name: "web_search",          label: "Web Search",         icon: "🌐" },
   { name: "fetch_webpage",       label: "Fetch Webpage",      icon: "🔗" },
   { name: "get_current_datetime", label: "Get Date / Time",   icon: "🕐" },
+  { name: "compose_email",        label: "Compose Email",      icon: "✉️" },
 ];
 
 const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 
 function buildToolOptions(
-  enabledBuiltins: string[],
+  _enabledBuiltins: string[],  // kept for API compat but unused — step builder shows all tools
   specs: SpecInfoLocal[],
   mcpServers: MCPServerInfoLocal[],
 ): ToolOption[] {
   const opts: ToolOption[] = [];
+  // Show every built-in tool — the step builder is explicit about which tools to call,
+  // so the profile's "enabled" filter doesn't apply here.
   for (const bt of BUILTIN_TOOLS)
-    if (enabledBuiltins.includes(bt.name))
-      opts.push({ name: bt.name, label: bt.label, description: bt.label, category: "builtin" });
+    opts.push({ name: bt.name, label: bt.label, description: bt.label, category: "builtin" });
   for (const sp of specs)
     for (const t of sp.tools)
       opts.push({ name: t.name, label: t.name, description: t.description, category: "openapi", service: sp.title });
@@ -117,10 +119,15 @@ function resolveProfileContext(
   selectedSpecIds: string[],
   selectedMcpIds: string[],
   disabledMcpTools: string[],
+  globalAllowedDirs: string[] = [],
 ): import("./jobTypes").JobProfileContext {
+  // Mirror syncServers fallback: profile dirs → global dirs → empty
+  const allowed_dirs = (profile.allowedDirs?.length ?? 0) > 0
+    ? profile.allowedDirs!
+    : globalAllowedDirs;
   return {
     ollama_host: profile.host ?? "http://localhost:11434",
-    allowed_dirs: profile.allowedDirs ?? [],
+    allowed_dirs,
     openapi_specs: (profile.openapiSpecs ?? [])
       .filter(s => s.enabled !== false && selectedSpecIds.includes(s.id))
       .map(s => ({ id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth })),
@@ -269,26 +276,24 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
   const filteredRuns = filterJobId ? runs.filter(r => r.job_id === filterJobId) : runs;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="admin-modal" onClick={e => e.stopPropagation()}>
+    <div className="jobs-page">
 
-        {/* Header */}
-        <div className="admin-header">
-          <span className="admin-title">
-            Scheduled Jobs
-            {runningIds.size > 0 && (
-              <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 8, fontWeight: 400 }}>
-                · {runningIds.size} running…
-              </span>
-            )}
-          </span>
-          <button className="btn primary" onClick={onClose}>
-            {runningIds.size > 0 ? "Close (jobs keep running)" : "Done"}
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="admin-tabbar">
+      {/* Page header — back button + title + running indicator */}
+      <div className="jobs-page-header">
+        <button className="btn icon-only" onClick={onClose} title="Back to chat"
+          style={{ marginRight: 4 }}>
+          ← Chat
+        </button>
+        <span className="jobs-page-title">
+          Scheduled Jobs
+          {runningIds.size > 0 && (
+            <span style={{ fontSize: 11, color: "var(--accent)", marginLeft: 8, fontWeight: 400 }}>
+              · {runningIds.size} running…
+            </span>
+          )}
+        </span>
+        {/* Tabs sit in the header row on the right */}
+        <div className="jobs-page-tabs">
           <button className={`admin-tab ${tab === "jobs" ? "active" : ""}`} onClick={() => setTab("jobs")}>
             Scheduled Jobs
             {jobs.length > 0 && <span className="tab-count">{jobs.length}</span>}
@@ -298,46 +303,46 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
             {runs.length > 0 && <span className="tab-count">{runs.length}</span>}
           </button>
         </div>
-        <div className="admin-divider" />
-
-        {/* Content */}
-        <div className="admin-content" style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-          {tab === "jobs" && (
-            <JobsTab
-              jobs={jobs}
-              models={models}
-              profiles={profiles}
-              globalOpenapiSpecs={globalOpenapiSpecs}
-              globalMcpServers={globalMcpServers}
-              globalEnabledTools={globalEnabledTools}
-              globalAllowedDirs={globalAllowedDirs}
-              editingJob={editingJob}
-              runningIds={runningIds}
-              error={error}
-              onEdit={setEditingJob}
-              onSave={saveJob}
-              onCancel={() => setEditingJob(null)}
-              onDelete={deleteJob}
-              onRunNow={runNow}
-              onNew={() => {
-                const ap = profiles.find(p => p.id === activeProfileId) ?? null;
-                setEditingJob(blankJob(ap ?? null));
-              }}
-              onToggle={j => saveJob({ ...j, enabled: !j.enabled })}
-            />
-          )}
-          {tab === "history" && (
-            <HistoryTab
-              runs={filteredRuns}
-              jobs={jobs}
-              filterJobId={filterJobId}
-              onFilterChange={setFilterJobId}
-              onClear={clearRuns}
-            />
-          )}
-        </div>
-
       </div>
+      <div className="admin-divider" />
+
+      {/* Content — fills remaining height */}
+      <div className="jobs-page-content">
+        {tab === "jobs" && (
+          <JobsTab
+            jobs={jobs}
+            models={models}
+            profiles={profiles}
+            globalOpenapiSpecs={globalOpenapiSpecs}
+            globalMcpServers={globalMcpServers}
+            globalEnabledTools={globalEnabledTools}
+            globalAllowedDirs={globalAllowedDirs}
+            editingJob={editingJob}
+            runningIds={runningIds}
+            error={error}
+            onEdit={setEditingJob}
+            onSave={saveJob}
+            onCancel={() => setEditingJob(null)}
+            onDelete={deleteJob}
+            onRunNow={runNow}
+            onNew={() => {
+              const ap = profiles.find(p => p.id === activeProfileId) ?? null;
+              setEditingJob(blankJob(ap ?? null));
+            }}
+            onToggle={j => saveJob({ ...j, enabled: !j.enabled })}
+          />
+        )}
+        {tab === "history" && (
+          <HistoryTab
+            runs={filteredRuns}
+            jobs={jobs}
+            filterJobId={filterJobId}
+            onFilterChange={setFilterJobId}
+            onClear={clearRuns}
+          />
+        )}
+      </div>
+
     </div>
   );
 }
@@ -364,10 +369,14 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
   onToggle: (j: ScheduledJob) => void;
 }) {
   if (editingJob) {
-    return <JobForm job={editingJob} models={models} profiles={profiles}
-      globalOpenapiSpecs={globalOpenapiSpecs} globalMcpServers={globalMcpServers}
-      globalEnabledTools={globalEnabledTools} globalAllowedDirs={globalAllowedDirs}
-      onSave={onSave} onCancel={onCancel} />;
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+        <JobForm job={editingJob} models={models} profiles={profiles}
+          globalOpenapiSpecs={globalOpenapiSpecs} globalMcpServers={globalMcpServers}
+          globalEnabledTools={globalEnabledTools} globalAllowedDirs={globalAllowedDirs}
+          onSave={onSave} onCancel={onCancel} />
+      </div>
+    );
   }
 
   return (
@@ -554,8 +563,9 @@ function StepBuilder({ steps, onChange, toolOptions, toolsLoading }: {
                 <textarea className="admin-input step-hint-area"
                   value={step.tool_hint ?? ""}
                   onChange={e => updateStep(step.id, { tool_hint: e.target.value || undefined })}
-                  placeholder="Argument hints (e.g. url: https://bbc.co.uk/news)"
-                  rows={2}
+                  placeholder={"Argument hints, one per line:\nsearch_query: cat:cs.AI AND all:transformer\nmax_results: 5"}
+                  rows={4}
+                  style={{ resize: "vertical" }}
                 />
               )}
 
@@ -647,7 +657,8 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
 
   // Step builder mode — auto-detect from initial data
   const [promptMode, setPromptMode] = useState<"freeform" | "steps">(
-    (initial.steps?.length ?? 0) > 0 ? "steps" : "freeform"
+    // Default to steps for new jobs; existing jobs with a prompt but no steps stay freeform
+    initial.steps?.length ? "steps" : (initial.prompt ? "freeform" : "steps")
   );
 
   // Tool discovery for step builder
@@ -660,27 +671,55 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
   const effectiveOpenAPI  = selectedProfile ? (selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false) : globalOpenapiSpecs.filter(s => s.enabled !== false);
   const effectiveMcp      = selectedProfile ? (selectedProfile.mcpServers ?? []) : globalMcpServers;
   const effectiveBuiltins = selectedProfile ? (selectedProfile.enabledTools ?? {}) : globalEnabledTools;
-  const isGlobal = !selectedProfile;
+  void !selectedProfile; // isGlobal — no longer directly used in JSX
 
   const loadToolOptions = async () => {
     setToolsLoading(true);
     try {
-      const [specs, mcpServers] = await Promise.all([
-        invoke<SpecInfoLocal[]>("list_openapi_specs"),
-        invoke<MCPServerInfoLocal[]>("list_mcp_servers"),
-      ]);
-      const enabledNames = Object.entries(effectiveBuiltins)
-        .filter(([, v]) => v !== false).map(([k]) => k);
-      setToolOptions(buildToolOptions(enabledNames, specs, mcpServers));
+      // Aggregate ALL OpenAPI specs across global settings + every profile, deduplicated by id
+      const allSpecsMap = new Map<string, import("./AdminPanel").StoredOpenAPISpec>();
+      for (const s of (globalOpenapiSpecs ?? [])) allSpecsMap.set(s.id, s);
+      for (const p of profiles) for (const s of (p.openapiSpecs ?? [])) allSpecsMap.set(s.id, s);
+      const allSpecs = [...allSpecsMap.values()].filter(s => s.enabled !== false);
+
+      // Aggregate ALL MCP servers across global settings + every profile, deduplicated by id
+      const allMcpMap = new Map<string, import("./AdminPanel").StoredMCPServer>();
+      for (const s of (globalMcpServers ?? [])) allMcpMap.set(s.id, s);
+      for (const p of profiles) for (const s of (p.mcpServers ?? [])) allMcpMap.set(s.id, s);
+      const allMcp = [...allMcpMap.values()];
+
+      // Parse OpenAPI tools via the stateless command (no AppState mutation)
+      const specs: SpecInfoLocal[] = allSpecs.length > 0
+        ? await invoke<SpecInfoLocal[]>("get_spec_tools", { specs: allSpecs })
+        : [];
+
+      // MCP tools: merge stored tool names (from enabledTools map) with any
+      // live tool lists from currently connected servers
+      const connectedMcp = await invoke<MCPServerInfoLocal[]>("list_mcp_servers").catch(() => [] as MCPServerInfoLocal[]);
+      const connectedById = new Map(connectedMcp.map(s => [s.id, s]));
+
+      const mcpTools: MCPServerInfoLocal[] = allMcp.map(srv => {
+        const live = connectedById.get(srv.id);
+        // Prefer live tool list (has descriptions); fall back to stored enabledTools keys
+        if (live && live.tools.length > 0) return live;
+        return {
+          id: srv.id, name: srv.name, connected: false,
+          tools: Object.keys(srv.enabledTools ?? {}).map(name => ({ name, description: "" })),
+        };
+      });
+
+      setToolOptions(buildToolOptions([], specs, mcpTools));
     } catch { /* ignore */ }
     setToolsLoading(false);
   };
 
   useEffect(() => { loadToolOptions(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Tool selection state — seeded from existing snapshot, or freshly from effective (profile or global) tools
-  const seedSpecIds  = () => job.profile_context?.openapi_specs.map(s => s.id) ?? effectiveOpenAPI.map(s => s.id);
-  const seedMcpIds   = () => job.profile_context?.mcp_servers.map(s => s.id)   ?? effectiveMcp.map(s => s.id);
+  // Seed tool selections from the current profile's effective tools.
+  // Always start from the full current profile list so newly-added specs/servers
+  // are included by default — the old snapshot IDs might be a stale subset.
+  const seedSpecIds  = () => effectiveOpenAPI.map(s => s.id);
+  const seedMcpIds   = () => effectiveMcp.map(s => s.id);
   const seedDisabled = () => job.profile_context?.disabled_mcp_tools ?? effectiveMcp.flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n));
 
   const [selSpecIds,  setSelSpecIds]  = useState<string[]>(seedSpecIds);
@@ -714,7 +753,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
   const handleSave = () => {
     let profile_context: import("./jobTypes").JobProfileContext | null = null;
     if (selectedProfile) {
-      profile_context = resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp);
+      profile_context = resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp, globalAllowedDirs);
     } else if (effectiveOpenAPI.length > 0 || effectiveMcp.length > 0) {
       // Build context from global settings so the job carries its tool snapshot
       profile_context = {
@@ -739,26 +778,53 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
     });
   };
 
+  const [advancedOpen, setAdvancedOpen] = useState(
+    !!(job.output_file || (promptMode === "freeform" && job.system_prompt))
+  );
+
+  // In steps mode, derive the tool list from the steps themselves
+  const stepsToolNames = promptMode === "steps"
+    ? [...new Set((job.steps ?? []).filter(s => s.step_type === "tool" && s.tool_name).map(s => s.tool_name!))]
+    : null;
+
+  // Summary shown in the Advanced accordion header
+  const toolSummary = (() => {
+    if (stepsToolNames !== null) {
+      return stepsToolNames.length > 0 ? stepsToolNames.join(", ") : "derived from steps";
+    }
+    const nb = job.enabled_builtin_tools.length;
+    const ns = selSpecIds.length;
+    const nm = selMcpIds.length;
+    const parts = [];
+    if (nb > 0) parts.push(`${nb} built-in`);
+    if (ns > 0) parts.push(`${ns} API`);
+    if (nm > 0) parts.push(`${nm} MCP`);
+    return parts.length ? parts.join(" · ") : "none";
+  })();
+
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <span style={{ fontWeight: 700, fontSize: 14 }}>{initial.name || "New Job"}</span>
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginLeft: "auto" }}>
+    <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+    <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+      {/* ── Row 1: Name + Enabled ── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <input className="admin-input" style={{ flex: 1, fontWeight: 600 }}
+          value={job.name} onChange={e => set({ name: e.target.value })} placeholder="Job name…" />
+        <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, flexShrink: 0, cursor: "pointer" }}>
           <input type="checkbox" checked={job.enabled} onChange={e => set({ enabled: e.target.checked })} style={{ accentColor: "var(--accent)" }} />
           Enabled
         </label>
       </div>
 
-      {/* Name */}
-      <div className="field">
-        <label>Job Name</label>
-        <input className="admin-input" value={job.name} onChange={e => set({ name: e.target.value })} placeholder="e.g. Morning briefing" />
-      </div>
-
-      {/* Profile */}
-      {profiles.length > 0 && (
-        <div className="field">
-          <label>Profile</label>
+      {/* ── Row 2: Profile + Model side by side ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, alignItems: "start" }}>
+        <div className="field" style={{ margin: 0 }}>
+          <label>
+            Tool connections
+            <span style={{ fontWeight: 400, opacity: 0.5, marginLeft: 5, fontSize: 10 }}>
+              (provides Gmail, MCP, etc.)
+            </span>
+          </label>
           <select className="admin-input" value={job.profile_id ?? ""}
             onChange={e => {
               const p = profiles.find(x => x.id === e.target.value) ?? null;
@@ -773,68 +839,71 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
               refreshSnapshot(p);
               loadToolOptions();
             }}>
-            <option value="">Global (uses active profile at run time)</option>
+            <option value="">Global</option>
             {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           {job.profile_context && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
-              <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
-                Snapshot: {new Date(job.profile_context.snapshot_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+              <span style={{ fontSize: 9, color: "var(--text-tertiary)" }}>
+                Snapshot {new Date(job.profile_context.snapshot_at).toLocaleDateString([], { month: "short", day: "numeric" })}
               </span>
-              <button className="btn" style={{ fontSize: 10, padding: "2px 7px" }} onClick={() => refreshSnapshot(selectedProfile)}>
-                Refresh snapshot
+              <button className="btn" style={{ fontSize: 9, padding: "1px 5px" }} onClick={() => refreshSnapshot(selectedProfile)}>
+                Refresh
               </button>
             </div>
           )}
         </div>
-      )}
+        <div className="field" style={{ margin: 0 }}>
+          <label>Model</label>
+          <select className="admin-input" value={job.model} onChange={e => set({ model: e.target.value })}>
+            {models.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+      </div>
 
-      {/* Schedule */}
-      <div className="field">
+      {/* ── Row 3: Schedule ── */}
+      <div className="field" style={{ margin: 0 }}>
         <label>Schedule</label>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select className="admin-input" style={{ width: "auto" }} value={job.schedule.type} onChange={e => setSched({ type: e.target.value as JobSchedule["type"] })}>
-            <option value="Daily">Daily at a time</option>
+          <select className="admin-input" style={{ width: "auto" }} value={job.schedule.type}
+            onChange={e => setSched({ type: e.target.value as JobSchedule["type"] })}>
+            <option value="Daily">Daily</option>
             <option value="Interval">Every N hours</option>
             <option value="Weekly">Weekly</option>
             <option value="Manual">Manual only</option>
           </select>
           {(job.schedule.type === "Daily" || job.schedule.type === "Weekly") && <>
             {job.schedule.type === "Weekly" && (
-              <select className="admin-input" style={{ width: "auto" }} value={job.schedule.weekday ?? 0} onChange={e => setSched({ weekday: Number(e.target.value) })}>
+              <select className="admin-input" style={{ width: "auto" }} value={job.schedule.weekday ?? 0}
+                onChange={e => setSched({ weekday: Number(e.target.value) })}>
                 {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
               </select>
             )}
             <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>at</span>
-            <input type="number" className="admin-input" style={{ width: 56 }} min={0} max={23} value={job.schedule.hour ?? 9} onChange={e => setSched({ hour: Number(e.target.value) })} />
+            <input type="number" className="admin-input" style={{ width: 52 }} min={0} max={23}
+              value={job.schedule.hour ?? 9} onChange={e => setSched({ hour: Number(e.target.value) })} />
             <span style={{ fontSize: 12 }}>:</span>
-            <input type="number" className="admin-input" style={{ width: 56 }} min={0} max={59} value={job.schedule.minute ?? 0} onChange={e => setSched({ minute: Number(e.target.value) })} />
+            <input type="number" className="admin-input" style={{ width: 52 }} min={0} max={59}
+              value={job.schedule.minute ?? 0} onChange={e => setSched({ minute: Number(e.target.value) })} />
           </>}
           {job.schedule.type === "Interval" && <>
             <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>every</span>
-            <input type="number" className="admin-input" style={{ width: 64 }} min={1} value={job.schedule.hours ?? 4} onChange={e => setSched({ hours: Number(e.target.value) })} />
+            <input type="number" className="admin-input" style={{ width: 60 }} min={1}
+              value={job.schedule.hours ?? 4} onChange={e => setSched({ hours: Number(e.target.value) })} />
             <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>hours</span>
           </>}
         </div>
       </div>
 
-      {/* Model */}
-      <div className="field">
-        <label>Model</label>
-        <select className="admin-input" value={job.model} onChange={e => set({ model: e.target.value })}>
-          {models.map(m => <option key={m} value={m}>{m}</option>)}
-        </select>
-      </div>
+      {/* ── Divider ── */}
+      <div style={{ borderTop: "1px solid var(--border-light)", margin: "2px 0" }} />
 
-      {/* Prompt / Step builder */}
-      <div className="field">
+      {/* ── Prompt / Step builder (main content) ── */}
+      <div className="field" style={{ margin: 0 }}>
         <div className="step-mode-toggle">
-          <button className={`step-mode-btn${promptMode === "freeform" ? " active" : ""}`}
-            onClick={() => setPromptMode("freeform")}>Free-form prompt</button>
           <button className={`step-mode-btn${promptMode === "steps" ? " active" : ""}`}
             onClick={() => setPromptMode("steps")}>Step builder</button>
         </div>
-
         {promptMode === "freeform" ? (
           <textarea className="admin-input" value={job.prompt} onChange={e => set({ prompt: e.target.value })}
             placeholder="What should Lexi do each time this runs?" style={{ minHeight: 90, resize: "vertical" }} />
@@ -842,92 +911,127 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
           <>
             {job.profile_id && (
               <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginBottom: 4 }}>
-                Tool list reflects the currently active profile. Ensure the target profile is active when creating this job.
+                Tool dropdown reflects the currently active profile's connections. Ensure the target profile is active when creating this job.
               </div>
             )}
-            <StepBuilder
-              steps={job.steps ?? []}
-              onChange={s => set({ steps: s })}
-              toolOptions={toolOptions}
-              toolsLoading={toolsLoading}
-            />
+            <StepBuilder steps={job.steps ?? []} onChange={s => set({ steps: s })}
+              toolOptions={toolOptions} toolsLoading={toolsLoading} />
           </>
         )}
       </div>
 
-      {/* System prompt override */}
-      <div className="field">
-        <label>System Prompt Override <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
-        <textarea className="admin-input" value={job.system_prompt ?? ""} onChange={e => set({ system_prompt: e.target.value || null })}
-          placeholder="Leave blank to use the default assistant prompt"
-          style={{ minHeight: 60, resize: "vertical", fontSize: 11, fontFamily: "monospace" }} />
-      </div>
+      {/* ── Advanced (collapsible) ── */}
+      <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+        <button
+          onClick={() => setAdvancedOpen(o => !o)}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px",
+            background: "var(--surface2)", border: "none", cursor: "pointer", textAlign: "left" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Advanced</span>
+          <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontWeight: 400 }}>
+            Tools: {toolSummary}{job.output_file ? " · output file set" : ""}{promptMode === "freeform" && job.system_prompt ? " · custom system prompt" : ""}
+          </span>
+          <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{advancedOpen ? "▲" : "▼"}</span>
+        </button>
 
-      {/* Tools — always shown, using profile tools or global tools as fallback */}
-      <div className="field">
-        <label>
-          Tools for this job
-          {isGlobal && <span style={{ fontWeight: 400, opacity: 0.5, marginLeft: 6 }}>(from global settings)</span>}
-        </label>
-        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", marginTop: 4 }}>
-          {/* Built-in */}
-          <ToolSection title="Built-in tools" defaultOpen>
-            <div className="job-tool-grid">
-              {BUILTIN_TOOLS.filter(t => effectiveBuiltins[t.name] !== false).map(t => (
-                <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                  <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)} onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
-                  {t.icon} {t.label}
-                </label>
-              ))}
+        {advancedOpen && (
+          <div style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+            {/* Tools — read-only summary in steps mode, full selector in freeform */}
+            <div className="field" style={{ margin: 0 }}>
+              <label>Tools</label>
+              {stepsToolNames !== null ? (
+                // Steps mode: tools are derived automatically from step tool_names
+                <div style={{ marginTop: 4 }}>
+                  {stepsToolNames.length > 0 ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 4 }}>
+                      {stepsToolNames.map(n => (
+                        <span key={n} style={{ fontSize: 10, fontFamily: "monospace", fontWeight: 600, padding: "2px 7px", borderRadius: 5, background: "var(--purple-bg)", color: "var(--purple)", border: "1px solid var(--purple-border)" }}>{n}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "var(--text-tertiary)", fontStyle: "italic" }}>Add tool call steps above to specify tools.</div>
+                  )}
+                  <div style={{ fontSize: 10, color: "var(--text-tertiary)" }}>
+                    Tools are derived automatically from the steps above — only tools named in steps are sent to the model.
+                  </div>
+                </div>
+              ) : (
+                // Freeform mode: full manual tool selector
+                <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: "6px 10px", marginTop: 4 }}>
+                  <ToolSection title="Built-in tools" defaultOpen>
+                    <div className="job-tool-grid">
+                      {BUILTIN_TOOLS.filter(t => effectiveBuiltins[t.name] !== false).map(t => (
+                        <label key={t.name} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                          <input type="checkbox" checked={job.enabled_builtin_tools.includes(t.name)}
+                            onChange={() => toggleTool(t.name)} style={{ accentColor: "var(--purple)" }} />
+                          {t.icon} {t.label}
+                        </label>
+                      ))}
+                    </div>
+                  </ToolSection>
+                  {effectiveOpenAPI.length > 0 && (
+                    <ToolSection title="OpenAPI / REST services" defaultOpen>
+                      {effectiveOpenAPI.map(sp => (
+                        <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", padding: "3px 0" }}>
+                          <input type="checkbox" checked={selSpecIds.includes(sp.id)}
+                            onChange={e => setSelSpecIds(prev => e.target.checked ? [...prev, sp.id] : prev.filter(x => x !== sp.id))}
+                            style={{ accentColor: "var(--accent)" }} />
+                          <span style={{ fontWeight: 600 }}>{sp.title}</span>
+                          <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{sp.base_url}</span>
+                        </label>
+                      ))}
+                    </ToolSection>
+                  )}
+                  {effectiveMcp.length > 0 && (
+                    <ToolSection title="MCP servers">
+                      {effectiveMcp.map(srv => (
+                        <MCPServerToolToggle key={srv.id} srv={srv}
+                          checked={selMcpIds.includes(srv.id)} disabledTools={disabledMcp}
+                          onToggleServer={c => setSelMcpIds(prev => c ? [...prev, srv.id] : prev.filter(x => x !== srv.id))}
+                          onToggleTool={(n, en) => setDisabledMcp(prev => en ? prev.filter(x => x !== n) : [...prev, n])}
+                        />
+                      ))}
+                    </ToolSection>
+                  )}
+                </div>
+              )}
             </div>
-          </ToolSection>
 
-          {/* OpenAPI specs */}
-          {effectiveOpenAPI.length > 0 && (
-            <ToolSection title="OpenAPI / REST services" defaultOpen>
-              {effectiveOpenAPI.map(sp => (
-                <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: "pointer", padding: "3px 0" }}>
-                  <input type="checkbox" checked={selSpecIds.includes(sp.id)}
-                    onChange={e => setSelSpecIds(prev => e.target.checked ? [...prev, sp.id] : prev.filter(x => x !== sp.id))}
-                    style={{ accentColor: "var(--accent)" }} />
-                  <span style={{ fontWeight: 600 }}>{sp.title}</span>
-                  <span style={{ fontSize: 10, color: "var(--text-tertiary)" }}>{sp.base_url}</span>
-                </label>
-              ))}
-            </ToolSection>
-          )}
+            {/* System prompt — only shown in freeform mode; steps use the built-in executor prompt */}
+            {promptMode === "freeform" && (
+              <div className="field" style={{ margin: 0 }}>
+                <label>System Prompt Override <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
+                <textarea className="admin-input" value={job.system_prompt ?? ""} onChange={e => set({ system_prompt: e.target.value || null })}
+                  placeholder="Leave blank to use the default assistant prompt"
+                  style={{ minHeight: 55, resize: "vertical", fontSize: 11, fontFamily: "monospace" }} />
+              </div>
+            )}
+            {promptMode === "steps" && (
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", padding: "2px 0" }}>
+                Step jobs use a built-in executor prompt that enforces strict step-by-step execution.
+              </div>
+            )}
 
-          {/* MCP servers */}
-          {effectiveMcp.length > 0 && (
-            <ToolSection title="MCP servers">
-              {effectiveMcp.map(srv => (
-                <MCPServerToolToggle key={srv.id} srv={srv}
-                  checked={selMcpIds.includes(srv.id)}
-                  disabledTools={disabledMcp}
-                  onToggleServer={c => setSelMcpIds(prev => c ? [...prev, srv.id] : prev.filter(x => x !== srv.id))}
-                  onToggleTool={(n, en) => setDisabledMcp(prev => en ? prev.filter(x => x !== n) : [...prev, n])}
-                />
-              ))}
-            </ToolSection>
-          )}
-        </div>
+            {/* Output file */}
+            <div className="field" style={{ margin: 0 }}>
+              <label>Save output to file <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input className="admin-input" style={{ flex: 1, fontFamily: "monospace", fontSize: 11 }}
+                  value={job.output_file ?? ""} onChange={e => set({ output_file: e.target.value || null })} placeholder="/path/to/output.md" />
+                <button className="btn" style={{ flexShrink: 0 }} onClick={pickOutputFile}>Browse…</button>
+              </div>
+            </div>
+
+          </div>
+        )}
       </div>
 
-      {/* Output file */}
-      <div className="field">
-        <label>Save output to file <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input className="admin-input" style={{ flex: 1, fontFamily: "monospace", fontSize: 11 }}
-            value={job.output_file ?? ""} onChange={e => set({ output_file: e.target.value || null })} placeholder="/path/to/output.md" />
-          <button className="btn" style={{ flexShrink: 0 }} onClick={pickOutputFile}>Browse…</button>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 8, paddingTop: 4 }}>
+      {/* ── Actions ── */}
+      <div style={{ display: "flex", gap: 8, paddingTop: 2 }}>
         <button className="btn" onClick={onCancel}>Cancel</button>
         <button className="btn primary" disabled={!canSave} onClick={handleSave}>Save Job</button>
       </div>
+    </div>
     </div>
   );
 }
@@ -966,10 +1070,58 @@ function HistoryTab({ runs, jobs, filterJobId, onFilterChange, onClear }: {
   );
 }
 
+function buildDebugReport(run: JobRun): string {
+  const lines: string[] = [];
+  lines.push("=== Job Run Debug Report ===");
+  lines.push(`Job:      ${run.job_name}`);
+  lines.push(`Status:   ${run.status}`);
+  lines.push(`Profile:  ${run.profile_name ?? "Global"}`);
+  lines.push(`Started:  ${run.started_at}`);
+  lines.push(`Finished: ${run.finished_at}`);
+  lines.push(`Duration: ${run.duration_ms}ms`);
+  lines.push("");
+
+  if (run.trace.length > 0) {
+    lines.push("=== EXECUTION TRACE ===");
+    for (const step of run.trace) {
+      lines.push("");
+      lines.push(`STEP ${step.step + 1}`);
+      if (step.llm_text) {
+        lines.push("  LLM:");
+        for (const l of step.llm_text.split("\n")) lines.push(`    ${l}`);
+      }
+      for (const tc of step.tool_calls) {
+        lines.push(`  TOOL: ${tc.name}`);
+        if (tc.args && tc.args !== "{}") {
+          lines.push("  ARGS:");
+          for (const l of tc.args.split("\n")) lines.push(`    ${l}`);
+        }
+        if (tc.result) {
+          lines.push("  RESULT:");
+          for (const l of tc.result.split("\n")) lines.push(`    ${l}`);
+        }
+      }
+    }
+    lines.push("");
+  }
+
+  lines.push("=== FINAL OUTPUT ===");
+  lines.push(run.output || "(no output)");
+
+  if (run.error) {
+    lines.push("");
+    lines.push("=== ERROR ===");
+    lines.push(run.error);
+  }
+
+  return lines.join("\n");
+}
+
 function RunRow({ run }: { run: JobRun }) {
   const [expanded,  setExpanded]  = useState(false);
   const [showTrace, setShowTrace] = useState(false);
   const [copied,    setCopied]    = useState(false);
+  const [copiedDebug, setCopiedDebug] = useState(false);
   const toolCount = run.trace.reduce((n, s) => n + s.tool_calls.length, 0);
   const stepCount = run.trace.length;
   const preview   = run.output.slice(0, 120) + (run.output.length > 120 ? "…" : "");
@@ -980,6 +1132,13 @@ function RunRow({ run }: { run: JobRun }) {
     await navigator.clipboard.writeText(run.output);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const copyDebugReport = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(buildDebugReport(run));
+    setCopiedDebug(true);
+    setTimeout(() => setCopiedDebug(false), 2000);
   };
 
   return (
@@ -1028,6 +1187,17 @@ function RunRow({ run }: { run: JobRun }) {
       {/* ── Expanded ── */}
       {expanded && (
         <div style={{ paddingTop: 8 }} onClick={e => e.stopPropagation()}>
+
+          {/* Copy full debug report — prominent, always visible when expanded */}
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+            <button
+              className={`copy-btn${copiedDebug ? " copied" : ""}`}
+              style={{ fontSize: 11, gap: 5 }}
+              onClick={copyDebugReport}
+            >
+              {copiedDebug ? "✓ Copied" : "⧉ Copy debug report"}
+            </button>
+          </div>
 
           {/* Error */}
           {run.error && <div className="job-run-error">{run.error}</div>}

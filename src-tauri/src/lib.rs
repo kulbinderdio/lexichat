@@ -14,15 +14,19 @@ use mcp::{MCPServerConfig, MCPConnection, AuthConfig};
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct AppState {
-    pub ollama_host:     Mutex<String>,
-    pub conversation:    Mutex<Vec<ollama::WireMessage>>,
-    pub openapi_specs:   Mutex<Vec<RegisteredSpec>>,
-    pub mcp_servers:     Mutex<Vec<MCPServerConfig>>,
-    pub mcp_connections: tokio::sync::Mutex<HashMap<String, MCPConnection>>,
-    pub allowed_dirs:    Mutex<Vec<String>>,
-    pub jobs:            Mutex<Vec<jobs::ScheduledJob>>,
-    pub job_runs:        Mutex<Vec<jobs::JobRun>>,
-    pub tray:            Mutex<Option<tauri::tray::TrayIcon<tauri::Wry>>>,
+    pub ollama_host:          Mutex<String>,
+    pub conversation:         Mutex<Vec<ollama::WireMessage>>,
+    pub openapi_specs:        Mutex<Vec<RegisteredSpec>>,
+    pub mcp_servers:          Mutex<Vec<MCPServerConfig>>,
+    pub mcp_connections:      tokio::sync::Mutex<HashMap<String, MCPConnection>>,
+    pub allowed_dirs:         Mutex<Vec<String>>,
+    pub jobs:                 Mutex<Vec<jobs::ScheduledJob>>,
+    pub job_runs:             Mutex<Vec<jobs::JobRun>>,
+    pub tray:                 Mutex<Option<tauri::tray::TrayIcon<tauri::Wry>>>,
+    /// Stores the last compose_email result during silent job runs so the
+    /// subsequent sendmessage call can retrieve it without the model needing
+    /// to pass the full base64 string through its context window.
+    pub pending_email_raw:    Mutex<Option<String>>,
 }
 
 impl Default for AppState {
@@ -41,6 +45,7 @@ impl Default for AppState {
             jobs:            Mutex::new(jobs::load_jobs()),
             job_runs:        Mutex::new(jobs::load_runs()),
             tray:            Mutex::new(None),
+            pending_email_raw: Mutex::new(None),
         }
     }
 }
@@ -210,6 +215,7 @@ async fn send_message(
         args.web_search_results,
         &app,
         false, // silent = false for interactive chat
+        10,    // max_steps for interactive chat
     )
     .await
     .map_err(|e| e.to_string())
@@ -286,6 +292,33 @@ fn read_image_data_url(path: String) -> Result<String, String> {
 fn set_allowed_dirs(dirs: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
     *state.allowed_dirs.lock().unwrap() = dirs;
     Ok(())
+}
+
+/// Parse a set of OpenAPI specs and return their tool lists without touching AppState.
+/// Used by the step builder to show tools for a specific profile's specs regardless
+/// of which profile is currently active in the main chat.
+#[tauri::command]
+fn get_spec_tools(specs: Vec<serde_json::Value>) -> Vec<SpecInfo> {
+    specs.iter().filter_map(|s| {
+        let id    = s["id"].as_str().unwrap_or("").to_string();
+        let title = s["title"].as_str().unwrap_or("").to_string();
+        let base  = s["base_url"].as_str().unwrap_or("").to_string();
+        let json  = s["spec_json"].as_str().unwrap_or("");
+        if json.is_empty() { return None; }
+        let tools = openapi::parse_spec(&title, &base, json).ok()?;
+        Some(SpecInfo {
+            id,
+            title,
+            base_url: base,
+            tool_count: tools.len(),
+            tools: tools.iter().map(|t| ToolInfo {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                method: t.method.clone(),
+                path: t.path.clone(),
+            }).collect(),
+        })
+    }).collect()
 }
 
 // ── Built-in tool schemas ─────────────────────────────────────────────────────
@@ -956,6 +989,7 @@ pub fn run() {
             reset_conversation,
             send_message,
             get_builtin_schemas,
+            get_spec_tools,
             register_openapi_spec,
             remove_openapi_spec,
             list_openapi_specs,

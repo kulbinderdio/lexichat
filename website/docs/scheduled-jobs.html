@@ -62,6 +62,7 @@ tailwind.config = {
       <a href="#overview" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Overview</a>
       <a href="#opening" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Opening the Jobs panel</a>
       <a href="#creating" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Creating a job</a>
+      <a href="#step-builder" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Step Builder (workflows)</a>
       <a href="#schedules" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Schedule types</a>
       <a href="#profile-tools" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Profile &amp; tools</a>
       <a href="#snapshots" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Snapshots &amp; staleness</a>
@@ -81,7 +82,7 @@ tailwind.config = {
     </div>
 
     <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Scheduled Jobs</h1>
-    <p class="text-lg text-slate-600 mb-10">Automate any prompt to run on a schedule — daily, weekly, every N hours, or on demand — with full control over which tools and profile each job uses.</p>
+    <p class="text-lg text-slate-600 mb-10">Automate any prompt to run on a schedule — daily, weekly, every N hours, or on demand — with full control over which tools and profile each job uses. Use the <strong>Step Builder</strong> to design custom multi-step workflows that chain tool calls into precise, repeatable sequences.</p>
 
     <!-- Overview -->
     <section id="overview" class="mb-12">
@@ -144,7 +145,70 @@ tailwind.config = {
           </tbody>
         </table>
       </div>
-      <p class="text-slate-600 text-sm">Click <strong>Save Job</strong> to save. The job is immediately added to the scheduler.</p>
+      <p class="text-slate-600 text-sm mb-3">Click <strong>Save Job</strong> to save. The job is immediately added to the scheduler.</p>
+      <p class="text-slate-600 text-sm">Want to define a precise sequence of tool calls? Click <strong>Step builder</strong> to open the visual workflow editor. See <a href="#step-builder" class="text-accent hover:underline">Step Builder</a> below.</p>
+    </section>
+
+    <!-- Step Builder -->
+    <section id="step-builder" class="mb-12">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">account_tree</span> Step Builder — Build Your Own Workflow
+      </h2>
+      <p class="text-slate-600 mb-4">The <strong>Step Builder</strong> lets you design a precise, repeatable multi-step workflow for a job. Instead of writing a single prompt and letting the agent decide how to proceed, you choreograph each step yourself — specifying both the instruction and the exact tool call to make at every stage.</p>
+      <p class="text-slate-600 mb-6">Click <strong>Step builder</strong> in the job form to open the visual workflow editor. Each step has two parts:</p>
+
+      <div class="space-y-3 mb-6">
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1 flex items-center gap-2"><span class="material-symbols-outlined text-accent text-base">text_fields</span> Text Instruction</div>
+          <p class="text-sm text-slate-600">The natural-language instruction for this step — what the agent should do or consider before calling the tool. For example: <em>"Get the current date and time. Note the filename-safe format for use in the output filename and the report header."</em></p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4">
+          <div class="font-semibold text-sm mb-1 flex items-center gap-2"><span class="material-symbols-outlined text-accent text-base">build</span> Tool Call</div>
+          <p class="text-sm text-slate-600">Select the specific tool this step must invoke (e.g. <code class="bg-slate-100 px-1 rounded text-xs">get_current_datetime</code>, <code class="bg-slate-100 px-1 rounded text-xs">web_search</code>, <code class="bg-slate-100 px-1 rounded text-xs">read_file</code>). You can also supply argument hints — the model will use them as defaults. A step with no tool selected is a pure reasoning step.</p>
+        </div>
+      </div>
+
+      <h3 class="font-semibold text-slate-800 mb-3">Example workflow: Daily AI Research Brief</h3>
+      <div class="space-y-3 mb-6">
+        <div class="bg-slate-50 border border-slate-200 rounded-xl overflow-hidden">
+          <div class="px-4 py-2 bg-white border-b border-slate-200 flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            <span class="w-5 h-5 bg-accent text-white rounded-full flex items-center justify-center text-xs">1</span> Step 1
+          </div>
+          <div class="p-4 text-sm text-slate-600">
+            <div class="mb-2"><strong>Text instruction:</strong> Get the current date and time. Note the filename-safe format (e.g. 2026-04-26_08-00) for use in the output filename and the human-readable format for the report header.</div>
+            <div class="flex items-center gap-2"><span class="material-symbols-outlined text-violet-500 text-base">build</span><strong>Tool:</strong> <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs">get_current_datetime</code></div>
+          </div>
+        </div>
+        <div class="bg-slate-50 border border-slate-200 rounded-xl overflow-hidden">
+          <div class="px-4 py-2 bg-white border-b border-slate-200 flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+            <span class="w-5 h-5 bg-accent text-white rounded-full flex items-center justify-center text-xs">2</span> Step 2
+          </div>
+          <div class="p-4 text-sm text-slate-600">
+            <div class="mb-2"><strong>Text instruction:</strong> Search for today's top AI technology news stories.</div>
+            <div class="flex items-center gap-2 mb-1"><span class="material-symbols-outlined text-violet-500 text-base">build</span><strong>Tool:</strong> <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs">web_search</code></div>
+            <div class="text-xs text-slate-400 ml-6">Argument hint: <code class="bg-slate-100 px-1 rounded">query: top AI technology news today site:bbc.co.uk</code>, <code class="bg-slate-100 px-1 rounded">max_results: 5</code></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid sm:grid-cols-2 gap-3 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">Steps execute in order — the output of each step feeds naturally into the next, building a coherent chain of context.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">Argument hints guide the model without being mandatory — the agent can still adapt if conditions differ from expectations.</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-green-500 flex-shrink-0">check_circle</span>
+          <div class="text-sm text-slate-600">A workflow job can still use the standard <strong>Prompt</strong> field as a final step instruction (e.g. "Compile the above into a formatted report and save it").</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-blue-500 flex-shrink-0">info</span>
+          <div class="text-sm text-slate-600">Tools used in steps must be enabled for the job in the <strong>Tools</strong> panel — step builder tool hints are ignored if the tool is not selected.</div>
+        </div>
+      </div>
     </section>
 
     <!-- Schedules -->

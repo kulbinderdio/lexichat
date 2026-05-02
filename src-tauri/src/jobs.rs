@@ -309,11 +309,22 @@ pub async fn execute_job(
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| state.ollama_host.lock().unwrap().clone());
 
-    // Built-in tools — always job-specific
+    // When using steps, derive the active tool set from step tool_names — only those
+    // tools are sent to the LLM, keeping the context tight and reducing token usage.
+    // In free-form mode, use job.enabled_builtin_tools as before.
+    let step_tool_names: std::collections::HashSet<String> = job.steps.iter()
+        .filter(|s| s.step_type == "tool")
+        .filter_map(|s| s.tool_name.clone())
+        .collect();
+    let use_step_tools = !step_tool_names.is_empty();
+
     let mut all_tools: Vec<ToolSchema> = crate::tools::all_builtin_schemas()
         .iter()
         .filter_map(|s| serde_json::from_value::<ToolSchema>(s.clone()).ok())
-        .filter(|t| job.enabled_builtin_tools.contains(&t.function.name))
+        .filter(|t| {
+            if use_step_tools { step_tool_names.contains(&t.function.name) }
+            else              { job.enabled_builtin_tools.contains(&t.function.name) }
+        })
         .collect();
 
     // Inject current date/time
@@ -323,11 +334,40 @@ pub async fn execute_job(
         now_local.format("%A, %d %B %Y at %H:%M"),
         now_local.format("%Y-%m-%d_%H-%M")
     );
+    // Resolve allowed dirs early so we can inject them into the system prompt
+    let allowed_dirs_for_prompt: Vec<String> = if let Some(ref ctx) = job.profile_context {
+        ctx.allowed_dirs.clone()
+    } else {
+        state.allowed_dirs.lock().unwrap().clone()
+    };
+
     let base_prompt = job.system_prompt.clone().unwrap_or_else(|| {
-        "You are a helpful assistant. Complete the user's request thoroughly.".into()
+        if !job.steps.is_empty() {
+            "You are a fully autonomous automated job executor. There is no human present — do not ask for confirmation, permission, or input at any point.\n\
+             Rules:\n\
+             - Execute ALL steps in order, one after another, without stopping or waiting.\n\
+             - NEVER ask for confirmation. NEVER say 'please confirm' or 'shall I continue'. Just continue.\n\
+             - After each step output: checkmark Step N complete: [one line summary] — then immediately proceed to the next step.\n\
+             - When a tool returns a value you must pass to the next step, copy it EXACTLY as returned — no paraphrasing or modification.\n\
+             - If a step fails, output: X Step N failed: [reason] — then continue with the remaining steps.\n\
+             - Keep going until all steps are done.".into()
+        } else {
+            "You are a helpful assistant. Complete the user's request thoroughly.".into()
+        }
     });
+
+    let dirs_note = if !allowed_dirs_for_prompt.is_empty() {
+        format!(
+            "\n\nYou have access to these folders on the user's computer: {}. \
+             Always use full absolute paths when accessing files. Never use '.' or '~'.",
+            allowed_dirs_for_prompt.join(", ")
+        )
+    } else {
+        String::new()
+    };
+
     let system_prompt = format!(
-        "{date_prefix}{base_prompt}\n\nIMPORTANT: Always finish with a written summary or report of what you found or did. Never end on a tool call alone — always produce a final text response."
+        "{date_prefix}{base_prompt}{dirs_note}\n\nIMPORTANT: Always finish with a written summary or report of what you found or did. Never end on a tool call alone — always produce a final text response."
     );
 
     let result = if let Some(ref ctx) = job.profile_context {
@@ -339,6 +379,7 @@ pub async fn execute_job(
         for sp in &ctx.openapi_specs {
             if let Ok(tools) = crate::openapi::parse_spec(&sp.title, &sp.base_url, &sp.spec_json) {
                 let extra: Vec<ToolSchema> = tools.iter()
+                    .filter(|t| !use_step_tools || step_tool_names.contains(&t.name))
                     .filter_map(|t| serde_json::from_value::<ToolSchema>(t.schema.clone()).ok())
                     .collect();
                 all_tools.extend(extra);
@@ -367,6 +408,7 @@ pub async fn execute_job(
             if let Ok(conn) = crate::mcp::MCPConnection::connect(cfg).await {
                 let extra: Vec<ToolSchema> = conn.tools.iter()
                     .filter(|t| !ctx.disabled_mcp_tools.contains(&t.name))
+                    .filter(|t| !use_step_tools || step_tool_names.contains(&t.name))
                     .filter_map(|t| serde_json::from_value::<ToolSchema>(t.schema.clone()).ok())
                     .collect();
                 all_tools.extend(extra);
@@ -379,7 +421,7 @@ pub async fn execute_job(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
             registered_specs, &temp_mcp, ctx.allowed_dirs.clone(),
-            10, app, true,
+            10, app, true, 25, // 25 steps — enough headroom for multi-step workflows
         ).await;
         // temp_mcp drops here → MCPConnections drop → kill_on_drop kills stdio processes
         r
@@ -403,7 +445,7 @@ pub async fn execute_job(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
             specs, &state.mcp_connections, allowed_dirs,
-            10, app, true,
+            10, app, true, 25, // 25 steps — enough headroom for multi-step workflows
         ).await
     };
 

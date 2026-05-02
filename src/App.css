@@ -774,6 +774,43 @@ html, body, #root { height: 100%; overflow: hidden; }
 .field input:focus { outline: none; border-color: var(--accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
+/* ── Jobs page (full-window view) ───────────────────────────────────────────── */
+.jobs-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  background: var(--surface);
+}
+.jobs-page-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  flex-shrink: 0;
+  background: var(--surface);
+}
+.jobs-page-title {
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+}
+.jobs-page-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.jobs-page-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 /* ── Admin panel ────────────────────────────────────────────────────────────── */
 .admin-modal {
   background: var(--surface);

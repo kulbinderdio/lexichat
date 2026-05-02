@@ -621,8 +621,8 @@ export default function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
-  const [showJobs,  setShowJobs]  = useState(false);
-  const [jobBadge,  setJobBadge]  = useState(0);
+  const [view,     setView]     = useState<"chat" | "jobs">("chat");
+  const [jobBadge, setJobBadge] = useState(0);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -708,7 +708,8 @@ export default function App() {
     }).then(u => cleanup.push(u));
 
     listen<JobRun>("job-run-done", () => {
-      setJobBadge(prev => prev + 1);
+      // Only badge if not already viewing the jobs panel
+      setView(v => { if (v !== "jobs") setJobBadge(prev => prev + 1); return v; });
     }).then(u => cleanup.push(u));
 
     // Persist refreshed OAuth2 access tokens so they survive restarts.
@@ -733,6 +734,11 @@ export default function App() {
           })),
         };
         saveSettings(updated);
+        // Re-sync AppState so the Admin panel's tool dropdowns reflect the
+        // updated token immediately — without this, state.openapi_specs can
+        // get out of sync when a job refreshes a token while a different
+        // profile is loaded in the main chat.
+        syncServers(updated).catch(() => {});
         return updated;
       });
 
@@ -984,19 +990,33 @@ export default function App() {
         </button>
         <button
           className="btn icon-only"
-          onClick={() => { setShowJobs(true); setJobBadge(0); }}
-          title="Scheduled Jobs"
-          style={{ position: "relative" }}
+          onClick={() => { setView(v => v === "jobs" ? "chat" : "jobs"); setJobBadge(0); }}
+          title={view === "jobs" ? "Back to chat" : "Scheduled Jobs"}
+          style={{ position: "relative", opacity: view === "jobs" ? 1 : undefined }}
         >
           <Clock size={13} />
-          {jobBadge > 0 && (
+          {jobBadge > 0 && view !== "jobs" && (
             <span className="job-badge">{jobBadge > 9 ? "9+" : jobBadge}</span>
           )}
         </button>
       </div>
 
+      {/* Jobs view — full page, replaces chat when active */}
+      {view === "jobs" && (
+        <JobsPanel
+          models={settings.models}
+          profiles={settings.profiles}
+          activeProfileId={settings.activeProfileId ?? null}
+          globalOpenapiSpecs={settings.openapiSpecs ?? []}
+          globalMcpServers={settings.mcpServers ?? []}
+          globalEnabledTools={settings.enabledTools ?? {}}
+          globalAllowedDirs={settings.allowedDirs ?? []}
+          onClose={() => setView("chat")}
+        />
+      )}
+
       {/* Main content: chat + optional debug panel */}
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      <div style={{ display: view === "jobs" ? "none" : "flex", flex: 1, overflow: "hidden" }}>
       <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
       {/* Chat area */}
       <div className="chat-scroll">
@@ -1119,18 +1139,6 @@ export default function App() {
         />
       )}
 
-      {showJobs && (
-        <JobsPanel
-          models={settings.models}
-          profiles={settings.profiles}
-          activeProfileId={settings.activeProfileId ?? null}
-          globalOpenapiSpecs={settings.openapiSpecs ?? []}
-          globalMcpServers={settings.mcpServers ?? []}
-          globalEnabledTools={settings.enabledTools ?? {}}
-          globalAllowedDirs={settings.allowedDirs ?? []}
-          onClose={() => setShowJobs(false)}
-        />
-      )}
 
       {showAbout && (
         <div className="modal-overlay" onClick={() => setShowAbout(false)}>
@@ -1142,7 +1150,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 0.1.5</div>
+            <div className="about-version">Version 0.1.6</div>
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>
