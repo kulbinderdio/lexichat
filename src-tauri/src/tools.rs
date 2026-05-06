@@ -32,6 +32,15 @@ pub async fn dispatch_builtin(name: &str, args: &Value, allowed_dirs: &[String],
         },
         "compose_email"         => compose_email(args),
         "get_current_datetime"  => get_current_datetime(),
+        // Wiki memory tools
+        "wiki_list"             => crate::wiki::wiki_list(),
+        "wiki_search"           => crate::wiki::wiki_search(args),
+        "wiki_read"             => crate::wiki::wiki_read(args),
+        "wiki_write"            => crate::wiki::wiki_write(args),
+        "wiki_patch"            => crate::wiki::wiki_patch(args),
+        "wiki_delete"           => crate::wiki::wiki_delete(args),
+        "wiki_append"           => crate::wiki::wiki_append(args),
+        "wiki_lint"             => crate::wiki::wiki_lint(),
         _                       => format!("Unknown tool: {name}"),
     }
 }
@@ -221,100 +230,359 @@ fn write_file(args: &Value, allowed_dirs: &[String]) -> String {
     }
 }
 
+fn pdf_draw_line(layer: &printpdf::PdfLayerReference, x1: f32, y1: f32, x2: f32, y2: f32) {
+    use printpdf::*;
+    layer.set_outline_color(Color::Rgb(Rgb::new(0.35, 0.35, 0.35, None)));
+    layer.set_outline_thickness(0.4);
+    layer.add_line(Line {
+        points: vec![
+            (Point::new(Mm(x1), Mm(y1)), false),
+            (Point::new(Mm(x2), Mm(y2)), false),
+        ],
+        is_closed: false,
+    });
+}
+
 fn write_pdf(path: &str, content: &str) -> String {
     use printpdf::*;
     use std::io::BufWriter;
 
-    const PAGE_W: f32 = 210.0; // A4 mm
-    const PAGE_H: f32 = 297.0;
-    const MARGIN_X: f32 = 20.0;
-    const MARGIN_Y: f32 = 22.0;
-    const FONT_SIZE: f32 = 11.0;
-    const LINE_H: f32 = 6.2; // mm per line
+    const W: f32 = 210.0_f32;
+    const H: f32 = 297.0_f32;
+    const ML: f32 = 22.0_f32;
+    const MT: f32 = 22.0_f32;
+    const MB: f32 = 20.0_f32;
 
-    // Helvetica 11pt: available width ≈ 170mm ≈ 481pt, avg char ≈ 5.8pt → ~83 chars
-    // Use 80 to be safe with wider characters (W, M, etc.)
-    const MAX_CHARS: usize = 80;
+    let (doc, mut pg, mut ly) = PdfDocument::new("Document", Mm(W), Mm(H), "text");
+    let fn_ = match doc.add_builtin_font(BuiltinFont::Helvetica)    { Ok(f) => f, Err(e) => return format!("PDF font error: {e}") };
+    let fb  = match doc.add_builtin_font(BuiltinFont::HelveticaBold) { Ok(f) => f, Err(e) => return format!("PDF font error: {e}") };
+    let fc  = match doc.add_builtin_font(BuiltinFont::Courier)       { Ok(f) => f, Err(e) => return format!("PDF font error: {e}") };
 
-    // Word-wrap all lines to fit within the printable width
-    let wrapped: Vec<String> = content
-        .lines()
-        .flat_map(|line| pdf_wrap(line, MAX_CHARS))
-        .collect();
+    let mut y: f32 = H - MT;
+    let mut pages: usize = 1;
+    let mut total_lines: usize = 0;
+    let mut in_code = false;
+    // Buffered table rows: Vec<(is_header, cells)>
+    let mut table_buf: Vec<(bool, Vec<String>)> = Vec::new();
 
-    let (doc, first_page, first_layer) =
-        PdfDocument::new("Document", Mm(PAGE_W), Mm(PAGE_H), "text");
+    // Helper: advance y, starting a new page at the bottom margin.
+    macro_rules! adv {
+        ($h:expr) => {{
+            y -= $h as f32;
+            if y < MB {
+                let (p, l) = doc.add_page(Mm(W), Mm(H), "text");
+                pg = p; ly = l; y = H - MT; pages += 1;
+            }
+        }};
+    }
+    macro_rules! put {
+        ($text:expr, $x:expr, $sz:expr, $font:expr) => {
+            if !($text as &str).is_empty() {
+                doc.get_page(pg).get_layer(ly).use_text($text as &str, $sz as f32, Mm($x as f32), Mm(y), &$font);
+            }
+        };
+    }
 
-    let font = match doc.add_builtin_font(BuiltinFont::Helvetica) {
-        Ok(f) => f,
-        Err(e) => return format!("PDF font error: {e}"),
+    // Flush buffered table rows to PDF with borders.
+    // Uses a macro so it can access pg/ly/y/pages/doc in scope.
+    macro_rules! flush_table {
+        () => {
+            if !table_buf.is_empty() {
+                let avail: f32 = W - ML - 22.0;
+                let n_cols = table_buf.iter().map(|(_, r)| r.len()).max().unwrap_or(1).max(1);
+
+                // Proportional column widths based on max cell char count
+                let col_widths: Vec<usize> = (0..n_cols).map(|c| {
+                    table_buf.iter()
+                        .map(|(_, r)| r.get(c).map(|s| s.chars().count()).unwrap_or(0))
+                        .max().unwrap_or(1).max(3)
+                }).collect();
+                let total_w: usize = col_widths.iter().sum::<usize>().max(1);
+
+                // Column left-edge x positions (mm) and char wrap limits
+                // Helvetica 10pt ≈ 0.55 * 10 * 0.353 mm/char ≈ 1.94 mm/char; use 2.0 conservatively
+                let mut col_x: Vec<f32> = Vec::with_capacity(n_cols);
+                let mut col_maxc: Vec<usize> = Vec::with_capacity(n_cols);
+                let mut cx = ML;
+                for &cw in &col_widths {
+                    let mm = (avail * cw as f32 / total_w as f32).max(18.0);
+                    col_x.push(cx);
+                    let pad = 3.0_f32; // 1.5mm padding each side
+                    col_maxc.push(((mm - pad).max(8.0) / 2.0_f32 as f32) as usize);
+                    cx += mm;
+                }
+                let table_right = cx;
+
+                adv!(3.0); // space before table
+
+                for (is_hdr, cells) in table_buf.iter() {
+                    let font = if *is_hdr { &fb } else { &fn_ };
+                    let size: f32 = if *is_hdr { 10.5 } else { 10.0 };
+                    let line_h: f32 = 5.5; // mm per text line
+                    let pad_top: f32 = 4.5; // baseline sits 4.5mm below top border (cap height ~2.5mm leaves 2mm clearance)
+                    let pad_bot: f32 = 2.0;
+
+                    let cell_lines: Vec<Vec<String>> = (0..n_cols).map(|c| {
+                        let cell = cells.get(c).map(String::as_str).unwrap_or("");
+                        pdf_word_wrap(cell, *col_maxc.get(c).unwrap_or(&20))
+                    }).collect();
+                    let row_h_lines = cell_lines.iter().map(|l| l.len()).max().unwrap_or(1);
+                    let row_h: f32 = row_h_lines as f32 * line_h + pad_top + pad_bot;
+
+                    if y - row_h < MB {
+                        let (p, l) = doc.add_page(Mm(W), Mm(H), "text");
+                        pg = p; ly = l; y = H - MT; pages += 1;
+                    }
+
+                    let row_top = y;
+                    let row_bot = y - row_h;
+
+                    // Top border of this row (also serves as table top for first row)
+                    pdf_draw_line(&doc.get_page(pg).get_layer(ly), ML, row_top, table_right, row_top);
+
+                    // Cell text, 1.5mm left padding, pad_top below top border
+                    for (ci, lines) in cell_lines.iter().enumerate() {
+                        let cx = col_x.get(ci).copied().unwrap_or(ML);
+                        let mut cy = row_top - pad_top;
+                        for line in lines {
+                            if !line.is_empty() {
+                                doc.get_page(pg).get_layer(ly)
+                                   .use_text(line.as_str(), size, Mm(cx + 1.5), Mm(cy), font);
+                            }
+                            cy -= line_h;
+                        }
+                    }
+
+                    // Bottom border
+                    pdf_draw_line(&doc.get_page(pg).get_layer(ly), ML, row_bot, table_right, row_bot);
+                    // Left, column dividers, right border
+                    pdf_draw_line(&doc.get_page(pg).get_layer(ly), ML, row_top, ML, row_bot);
+                    for &vx in col_x.iter().skip(1) {
+                        pdf_draw_line(&doc.get_page(pg).get_layer(ly), vx, row_top, vx, row_bot);
+                    }
+                    pdf_draw_line(&doc.get_page(pg).get_layer(ly), table_right, row_top, table_right, row_bot);
+
+                    total_lines += row_h_lines;
+                    y = row_bot;
+                }
+                adv!(4.0); // space after table
+                table_buf.clear();
+            }
+        };
+    }
+
+    // Returns true if `line` is a Markdown table row (starts/ends with | or contains |)
+    let is_table_row = |line: &str| -> bool {
+        let t = line.trim();
+        t.starts_with('|') && t.len() > 1
+    };
+    // Returns true if `line` is a separator row like |---|---|
+    let is_table_sep = |line: &str| -> bool {
+        line.trim().trim_matches('|').split('|')
+            .all(|c| c.trim().chars().all(|ch| ch == '-' || ch == ':' || ch == ' '))
+    };
+    // Parse cells from a | cell | cell | row
+    let parse_row = |line: &str| -> Vec<String> {
+        let t = line.trim().trim_matches('|');
+        t.split('|').map(|c| md_strip_inline(c.trim())).collect()
     };
 
-    let mut current_page  = first_page;
-    let mut current_layer = first_layer;
-    let mut y: f32 = PAGE_H - MARGIN_Y;
+    for raw in content.lines() {
+        // ── Code fence ───────────────────────────────────────────────────────
+        if raw.trim_start().starts_with("```") {
+            flush_table!();
+            in_code = !in_code;
+            adv!(if in_code { 2.0 } else { 3.0 });
+            continue;
+        }
+        if in_code {
+            flush_table!();
+            for part in pdf_word_wrap(raw, 90) {
+                put!(&part, ML, 9.5, fc);
+                adv!(5.5);
+                total_lines += 1;
+            }
+            continue;
+        }
 
-    for line in &wrapped {
-        if y < MARGIN_Y + LINE_H {
-            let (new_page, new_layer) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "text");
-            current_page  = new_page;
-            current_layer = new_layer;
-            y = PAGE_H - MARGIN_Y;
+        // ── Table rows ───────────────────────────────────────────────────────
+        if is_table_row(raw) {
+            if is_table_sep(raw) {
+                // Mark the previous row as header if this is the first separator
+                if let Some(last) = table_buf.last_mut() {
+                    last.0 = true;
+                }
+            } else {
+                table_buf.push((false, parse_row(raw)));
+            }
+            continue;
         }
-        if !line.is_empty() {
-            doc.get_page(current_page)
-               .get_layer(current_layer)
-               .use_text(line.as_str(), FONT_SIZE, Mm(MARGIN_X), Mm(y), &font);
+        // Non-table line: flush any buffered table first
+        flush_table!();
+
+        // ── Headings ─────────────────────────────────────────────────────────
+        let heading = if let Some(r) = raw.strip_prefix("# ")    { Some((r, 22.0_f32, 11.5_f32, 40_usize, 5.0_f32)) }
+                 else if let Some(r) = raw.strip_prefix("## ")   { Some((r, 17.0_f32,  9.0_f32, 52_usize, 4.0_f32)) }
+                 else if let Some(r) = raw.strip_prefix("### ")  { Some((r, 13.5_f32,  7.5_f32, 65_usize, 3.0_f32)) }
+                 else if let Some(r) = raw.strip_prefix("#### ") { Some((r, 11.5_f32,  6.5_f32, 75_usize, 2.0_f32)) }
+                 else { None };
+        if let Some((rest, size, lh, max_c, before)) = heading {
+            adv!(before);
+            let text = md_strip_inline(rest);
+            for part in pdf_word_wrap(&text, max_c) {
+                put!(&part, ML, size, fb);
+                adv!(lh);
+                total_lines += 1;
+            }
+            adv!(2.0);
+            continue;
         }
-        y -= LINE_H;
+
+        // ── Horizontal rule ───────────────────────────────────────────────────
+        if matches!(raw.trim(), "---" | "***" | "___" | "- - -") {
+            adv!(3.0);
+            put!("-----------------------------------------------------------------------", ML, 8.0, fn_);
+            adv!(5.0);
+            continue;
+        }
+
+        // ── Blank line ────────────────────────────────────────────────────────
+        if raw.trim().is_empty() { adv!(3.5); continue; }
+
+        // ── Blockquote ────────────────────────────────────────────────────────
+        if let Some(rest) = raw.strip_prefix("> ") {
+            let text = md_strip_inline(rest);
+            for part in pdf_word_wrap(&text, 76) {
+                let prefixed = format!("  | {part}");
+                put!(&prefixed, ML, 10.5, fn_);
+                adv!(6.0);
+                total_lines += 1;
+            }
+            continue;
+        }
+
+        // ── Bullet list ───────────────────────────────────────────────────────
+        let bullet = raw.strip_prefix("    - ").or_else(|| raw.strip_prefix("    * ")).map(|r| (r, ML + 8.0_f32))
+            .or_else(|| raw.strip_prefix("  - ").or_else(|| raw.strip_prefix("  * ")).map(|r| (r, ML + 4.0_f32)))
+            .or_else(|| raw.strip_prefix("- ").or_else(|| raw.strip_prefix("* ").or_else(|| raw.strip_prefix("+ "))).map(|r| (r, ML)));
+        if let Some((rest, bx)) = bullet {
+            let tx = bx + 5.0;
+            let text = md_strip_inline(rest);
+            let max_c = (76.0_f32 * (W - ML - 20.0 - (tx - ML)) / (W - ML - 20.0)) as usize;
+            put!("-", bx, 11.0, fn_);
+            let parts = pdf_word_wrap(&text, max_c.max(30));
+            for (i, part) in parts.iter().enumerate() {
+                if i > 0 { adv!(6.0); }
+                doc.get_page(pg).get_layer(ly).use_text(part.as_str(), 11.0, Mm(tx), Mm(y), &fn_);
+                total_lines += 1;
+            }
+            adv!(6.0);
+            continue;
+        }
+
+        // ── Numbered list ─────────────────────────────────────────────────────
+        let numbered = {
+            let t = raw.trim_start();
+            t.find(". ").and_then(|dot| {
+                if dot > 0 && dot <= 3 && t[..dot].chars().all(|c| c.is_ascii_digit()) {
+                    Some((&t[..dot+2], t[dot+2..].trim()))
+                } else { None }
+            })
+        };
+        if let Some((marker, rest)) = numbered {
+            let tx = ML + 8.0;
+            put!(marker, ML, 11.0, fn_);
+            for (i, part) in pdf_word_wrap(&md_strip_inline(rest), 74).iter().enumerate() {
+                if i > 0 { adv!(6.0); }
+                doc.get_page(pg).get_layer(ly).use_text(part.as_str(), 11.0, Mm(tx), Mm(y), &fn_);
+                total_lines += 1;
+            }
+            adv!(6.0);
+            continue;
+        }
+
+        // ── Normal / bold line ────────────────────────────────────────────────
+        let trimmed = raw.trim();
+        let (text, font) =
+            if (trimmed.starts_with("**") && trimmed.ends_with("**") && trimmed.len() > 4)
+            || (trimmed.starts_with("__") && trimmed.ends_with("__") && trimmed.len() > 4) {
+                (md_strip_inline(&trimmed[2..trimmed.len()-2]), true)
+            } else {
+                (md_strip_inline(trimmed), false)
+            };
+        for part in pdf_word_wrap(&text, 82) {
+            if font { put!(&part, ML, 11.0, fb); } else { put!(&part, ML, 11.0, fn_); }
+            adv!(6.0);
+            total_lines += 1;
+        }
     }
+
+    flush_table!(); // flush any table at end of document
 
     let file = match fs::File::create(path) {
         Ok(f) => f,
         Err(e) => return format!("Error creating '{path}': {e}"),
     };
     match doc.save(&mut BufWriter::new(file)) {
-        Ok(_)  => format!("Written PDF '{path}' ({} lines, {} pages)",
-                          wrapped.len(),
-                          1 + wrapped.len() * LINE_H as usize / (PAGE_H - MARGIN_Y * 2.0) as usize),
+        Ok(_)  => format!("Written PDF '{path}' ({total_lines} lines, {pages} page(s))"),
         Err(e) => format!("Error writing PDF '{path}': {e}"),
     }
 }
 
-/// Word-wrap a single line into segments of at most `max_chars` characters.
-fn pdf_wrap(line: &str, max_chars: usize) -> Vec<String> {
-    if line.is_empty() {
-        return vec![String::new()];
-    }
-    // Detect leading indent (spaces/dashes/bullets) to preserve on continuation lines
-    let indent_len = line.len() - line.trim_start_matches(|c: char| c == ' ' || c == '\t').len();
-    let indent = if indent_len > 0 && indent_len < 8 {
-        "  ".to_string() // continuation indent
-    } else {
-        String::new()
-    };
-
-    let mut segments = Vec::new();
+/// Word-wrap text into segments of at most `max_chars` characters.
+fn pdf_word_wrap(text: &str, max_chars: usize) -> Vec<String> {
+    if text.is_empty() { return vec![String::new()]; }
+    if text.chars().count() <= max_chars { return vec![text.to_string()]; }
+    let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
-
-    for word in line.split_whitespace() {
+    for word in text.split_whitespace() {
         if current.is_empty() {
             current.push_str(word);
         } else if current.len() + 1 + word.len() <= max_chars {
             current.push(' ');
             current.push_str(word);
         } else {
-            segments.push(current);
-            current = format!("{indent}{word}");
+            lines.push(std::mem::replace(&mut current, word.to_string()));
         }
     }
-    if !current.is_empty() {
-        segments.push(current);
+    if !current.is_empty() { lines.push(current); }
+    if lines.is_empty() { lines.push(String::new()); }
+    lines
+}
+
+/// Remove common inline Markdown markers, returning clean display text.
+fn md_strip_inline(s: &str) -> String {
+    // Remove paired bold/italic markers (**..** __..__ *.* _._ `..`)
+    let mut r = s.trim().to_string();
+    for marker in &["**", "__", "*", "`"] {
+        let m = *marker;
+        let ml = m.len();
+        loop {
+            if let Some(start) = r.find(m) {
+                if let Some(rel) = r[start + ml..].find(m) {
+                    let inner = r[start + ml .. start + ml + rel].to_string();
+                    let tail  = r[start + ml + rel + ml..].to_string();
+                    r = format!("{}{}{}", &r[..start], inner, tail);
+                } else { break; }
+            } else { break; }
+        }
     }
-    if segments.is_empty() {
-        segments.push(String::new());
+    // Convert simple [text](url) links → just the text
+    loop {
+        if let Some(ob) = r.find('[') {
+            if let Some(rel_cb) = r[ob..].find("](") {
+                let cb = ob + rel_cb;
+                let text = r[ob+1..cb].to_string();
+                if let Some(rel_cp) = r[cb+2..].find(')') {
+                    let cp = cb + 2 + rel_cp;
+                    r = format!("{}{}{}", &r[..ob], text, &r[cp+1..]);
+                    continue;
+                }
+            }
+        }
+        break;
     }
-    segments
+    r.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
 }
 
 // ── DOCX markdown rendering helpers ──────────────────────────────────────────

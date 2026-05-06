@@ -178,7 +178,9 @@ async fn stream_chat(
     silent: bool,
 ) -> anyhow::Result<(String, Vec<WireToolCall>)> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        // Only time out the initial TCP connection — not the streaming duration.
+        // Long multi-tool responses can take many minutes; a global timeout kills them.
+        .connect_timeout(std::time::Duration::from_secs(30))
         .build()?;
     let url = format!("{}/api/chat", host);
 
@@ -202,9 +204,24 @@ async fn stream_chat(
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk?;
-        // Ollama sends one JSON object per line
-        for line in std::str::from_utf8(&bytes)?.lines() {
+        // A mid-stream network error (e.g. "error decoding response body") should not
+        // discard a response that's already been partially received — break and return
+        // what we have rather than propagating the error.
+        let bytes = match chunk {
+            Ok(b) => b,
+            Err(e) => {
+                if full_text.is_empty() && tool_calls.is_empty() {
+                    return Err(anyhow::anyhow!("{e}"));
+                }
+                break;
+            }
+        };
+        // Ollama sends one JSON object per line; skip chunks with invalid UTF-8
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for line in text.lines() {
             let line = line.trim();
             if line.is_empty() { continue; }
             // Check for inline error (can appear mid-stream on some Ollama versions)
@@ -237,6 +254,117 @@ async fn stream_chat(
     }
 
     Ok((full_text, tool_calls))
+}
+
+// ── Tool discovery pre-flight ─────────────────────────────────────────────────
+
+/// Minimum number of tools that triggers a pre-flight discovery call.
+/// Below this threshold all tools are used directly.
+const DISCOVERY_THRESHOLD: usize = 12;
+
+/// Run a silent pre-flight call to let the model pick which tools it actually
+/// needs for the given request. Returns the filtered [`ToolSchema`] slice.
+/// Falls back to returning all tools on any error or empty selection.
+pub async fn discover_tools(
+    host: &str,
+    model: &str,
+    user_message: &str,
+    all_tools: &[ToolSchema],
+) -> Vec<ToolSchema> {
+    if all_tools.len() <= DISCOVERY_THRESHOLD {
+        return all_tools.to_vec();
+    }
+
+    // Build compact tool list: name + description only (no parameters schema)
+    let compact: Vec<serde_json::Value> = all_tools
+        .iter()
+        .map(|t| serde_json::json!({ "name": t.function.name, "description": t.function.description }))
+        .collect();
+    let compact_json = serde_json::to_string(&compact).unwrap_or_default();
+
+    let system = "You are a tool selection assistant. \
+        Given a user request and a list of available tools (name + description only), \
+        select the minimum set of tools needed to fulfil the request. \
+        Reply with ONLY a valid JSON array of tool name strings, e.g. [\"tool_a\",\"tool_b\"]. \
+        If no tools are needed, reply with []. \
+        Do not call any tools. Do not explain. Output only the JSON array.";
+
+    let user_msg = format!("User request: {user_message}\n\nAvailable tools: {compact_json}");
+
+    let messages = vec![
+        WireMessage { role: "system".into(), content: Some(system.into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None },
+        WireMessage { role: "user".into(), content: Some(user_msg),
+            tool_calls: None, tool_call_id: None, name: None, images: None },
+    ];
+
+    #[derive(Serialize)]
+    struct DiscoverReq<'a> {
+        model: &'a str,
+        messages: &'a [WireMessage],
+        stream: bool,
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return all_tools.to_vec(),
+    };
+
+    let url = format!("{}/api/chat", host);
+    let body = DiscoverReq { model, messages: &messages, stream: false };
+
+    let resp_text = match client.post(&url).json(&body).send().await
+        .and_then(|r| r.error_for_status())
+    {
+        Ok(r) => match r.text().await { Ok(t) => t, Err(_) => return all_tools.to_vec() },
+        Err(_) => return all_tools.to_vec(),
+    };
+
+    // Ollama non-streaming: {"message":{"content":"..."}, ...}
+    let content = serde_json::from_str::<serde_json::Value>(&resp_text)
+        .ok()
+        .and_then(|v| v["message"]["content"].as_str().map(String::from))
+        .unwrap_or_default();
+
+    let json_str = extract_json_array(&content);
+    let selected: Vec<String> = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(_) => return all_tools.to_vec(),
+    };
+
+    if selected.is_empty() {
+        return all_tools.to_vec();
+    }
+
+    let selected_set: std::collections::HashSet<&str> =
+        selected.iter().map(String::as_str).collect();
+
+    let filtered: Vec<ToolSchema> = all_tools
+        .iter()
+        .filter(|t| selected_set.contains(t.function.name.as_str()))
+        .cloned()
+        .collect();
+
+    // Safety: if the model picked nothing recognisable, fall back to all tools
+    if filtered.is_empty() { all_tools.to_vec() } else { filtered }
+}
+
+fn extract_json_array(s: &str) -> String {
+    let s = s.trim();
+    // Strip markdown code fences if present
+    let body = if let Some(rest) = s.strip_prefix("```") {
+        let inner = rest.trim_start_matches("json").trim_start_matches('\n');
+        inner.split("```").next().unwrap_or(inner).trim()
+    } else {
+        s
+    };
+    // Find outermost [ ... ]
+    let start = body.find('[').unwrap_or(0);
+    let end = body.rfind(']').map(|i| i + 1).unwrap_or(body.len());
+    body[start..end.min(body.len())].to_string()
 }
 
 // ── Agent loop ────────────────────────────────────────────────────────────────
@@ -446,7 +574,9 @@ async fn dispatch_tool(
     let builtin_names = ["read_file","write_file","list_files","search_files",
         "search_in_files","get_file_info","list_directory_tree","create_directory",
         "move_file","delete_file","find_old_files","web_search","fetch_webpage","compose_email",
-        "get_current_datetime"];
+        "get_current_datetime",
+        "wiki_list","wiki_search","wiki_read","wiki_write","wiki_patch","wiki_delete",
+        "wiki_append","wiki_lint"];
     if builtin_names.contains(&name) {
         let result = crate::tools::dispatch_builtin(name, args, allowed_dirs, web_search_results).await;
 

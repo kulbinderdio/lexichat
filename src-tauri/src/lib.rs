@@ -3,6 +3,7 @@ mod tools;
 mod openapi;
 mod mcp;
 mod jobs;
+mod wiki;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -122,6 +123,9 @@ pub struct SendMessageArgs {
     pub web_search_results: usize,
     #[serde(default)]
     pub disabled_mcp_tools: Vec<String>,
+    /// Server IDs the active profile has enabled. Empty = no profile active (use all servers).
+    #[serde(default)]
+    pub enabled_mcp_server_ids: Vec<String>,
 }
 
 fn default_web_search_results() -> usize { 10 }
@@ -158,10 +162,14 @@ async fn send_message(
         });
     }
 
-    // Collect all active tool schemas (builtins + openapi + mcp)
-    let mut all_tools = args.tools.clone();
+    // Collect built-in tool schemas (frontend-provided: file tools, wiki, etc.)
+    let builtin_tools = args.tools.clone();
 
-    // Add OpenAPI tools (all currently registered — already profile-scoped by set_openapi_specs)
+    // Tool discovery pre-flight: filter built-ins only — MCP/OpenAPI tools are
+    // user-curated and must always be available regardless of the message content.
+    let mut all_tools = ollama::discover_tools(&host, &args.model, &args.message, &builtin_tools).await;
+
+    // Always append OpenAPI tools (profile-scoped by set_openapi_specs)
     {
         let extra: Vec<ollama::ToolSchema> = state.openapi_specs.lock().unwrap().iter()
             .flat_map(|spec| spec.tools.iter()
@@ -170,10 +178,12 @@ async fn send_message(
         all_tools.extend(extra);
     }
 
-    // Add MCP tools (profile-scoped by set_mcp_servers, filtered by per-tool disable list)
+    // Append MCP tools — filtered by enabled_mcp_server_ids (empty = all servers, i.e. no profile)
     {
-        let extra: Vec<ollama::ToolSchema> = state.mcp_connections.lock().await.values()
-            .flat_map(|conn| conn.tools.iter()
+        let connections = state.mcp_connections.lock().await;
+        let extra: Vec<ollama::ToolSchema> = connections.iter()
+            .filter(|(id, _)| args.enabled_mcp_server_ids.is_empty() || args.enabled_mcp_server_ids.contains(*id))
+            .flat_map(|(_, conn)| conn.tools.iter()
                 .filter(|t| !args.disabled_mcp_tools.contains(&t.name))
                 .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
             .collect();
@@ -419,6 +429,10 @@ pub struct AddMCPServerArgs {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// If provided, reuse this ID instead of generating a new one (used when
+    /// re-registering an existing stored server that was evicted from Rust state).
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -444,7 +458,10 @@ async fn add_mcp_server(
     args: AddMCPServerArgs,
     state: State<'_, AppState>,
 ) -> Result<MCPServerInfo, String> {
-    let id = uuid_v4();
+    let id = args.id.clone().unwrap_or_else(uuid_v4);
+    // Remove any stale entry with this ID before re-registering
+    state.mcp_servers.lock().unwrap().retain(|s| s.id != id);
+    state.mcp_connections.lock().await.remove(&id);
     let config = MCPServerConfig {
         id: id.clone(),
         name: args.name.clone(),

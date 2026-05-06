@@ -375,6 +375,14 @@ pub async fn execute_job(
         // Parse OpenAPI specs from snapshot, build isolated MCP connections.
         // Nothing here touches the global AppState — no interference with main chat.
 
+        // Discovery pre-flight on built-ins only — MCP/OpenAPI tools are user-curated
+        // and must always be available regardless of the message content.
+        let mut all_tools = if use_step_tools {
+            all_tools
+        } else {
+            crate::ollama::discover_tools(&host, &job.model, &job.prompt, &all_tools).await
+        };
+
         let mut registered_specs: Vec<crate::openapi::RegisteredSpec> = Vec::new();
         for sp in &ctx.openapi_specs {
             if let Ok(tools) = crate::openapi::parse_spec(&sp.title, &sp.base_url, &sp.spec_json) {
@@ -417,6 +425,7 @@ pub async fn execute_job(
         }
 
         let temp_mcp = tokio::sync::Mutex::new(temp_conns);
+
         let r = agent_loop(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
@@ -430,6 +439,13 @@ pub async fn execute_job(
         // ── Fallback: use active AppState (global jobs / backward compat) ──────
         let specs        = state.openapi_specs.lock().unwrap().clone();
         let allowed_dirs = state.allowed_dirs.lock().unwrap().clone();
+
+        // Discovery pre-flight on built-ins only — then extend with user-curated tools.
+        let mut all_tools = if use_step_tools {
+            all_tools
+        } else {
+            crate::ollama::discover_tools(&host, &job.model, &job.prompt, &all_tools).await
+        };
 
         let extra: Vec<ToolSchema> = specs.iter()
             .flat_map(|s| s.tools.iter().filter_map(|t| serde_json::from_value::<ToolSchema>(t.schema.clone()).ok()))

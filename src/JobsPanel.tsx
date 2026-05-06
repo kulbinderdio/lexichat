@@ -120,18 +120,19 @@ function resolveProfileContext(
   selectedMcpIds: string[],
   disabledMcpTools: string[],
   globalAllowedDirs: string[] = [],
+  registrySpecs: import("./AdminPanel").StoredOpenAPISpec[] = [],
+  registryMcp: import("./AdminPanel").StoredMCPServer[] = [],
 ): import("./jobTypes").JobProfileContext {
-  // Mirror syncServers fallback: profile dirs → global dirs → empty
   const allowed_dirs = (profile.allowedDirs?.length ?? 0) > 0
     ? profile.allowedDirs!
     : globalAllowedDirs;
   return {
     ollama_host: profile.host ?? "http://localhost:11434",
     allowed_dirs,
-    openapi_specs: (profile.openapiSpecs ?? [])
+    openapi_specs: registrySpecs
       .filter(s => s.enabled !== false && selectedSpecIds.includes(s.id))
       .map(s => ({ id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth })),
-    mcp_servers: (profile.mcpServers ?? [])
+    mcp_servers: registryMcp
       .filter(s => selectedMcpIds.includes(s.id))
       .map(s => ({ id: s.id, name: s.name, command: s.command, args: s.args ?? [], env: s.env ?? {}, auth: s.auth })),
     disabled_mcp_tools: disabledMcpTools,
@@ -667,26 +668,22 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
 
   const selectedProfile = profiles.find(p => p.id === job.profile_id) ?? null;
 
-  // When no profile is selected, show global-level tools so the user can still configure the job
-  const effectiveOpenAPI  = selectedProfile ? (selectedProfile.openapiSpecs ?? []).filter(s => s.enabled !== false) : globalOpenapiSpecs.filter(s => s.enabled !== false);
-  const effectiveMcp      = selectedProfile ? (selectedProfile.mcpServers ?? []) : globalMcpServers;
+  // When no profile is selected, show all registry tools; when a profile is selected, show its enabled subset
+  const effectiveOpenAPI  = selectedProfile
+    ? globalOpenapiSpecs.filter(s => s.enabled !== false && selectedProfile.enabledOpenapiSpecIds.includes(s.id))
+    : globalOpenapiSpecs.filter(s => s.enabled !== false);
+  const effectiveMcp      = selectedProfile
+    ? globalMcpServers.filter(s => selectedProfile.enabledMcpServerIds.includes(s.id))
+    : globalMcpServers;
   const effectiveBuiltins = selectedProfile ? (selectedProfile.enabledTools ?? {}) : globalEnabledTools;
   void !selectedProfile; // isGlobal — no longer directly used in JSX
 
   const loadToolOptions = async () => {
     setToolsLoading(true);
     try {
-      // Aggregate ALL OpenAPI specs across global settings + every profile, deduplicated by id
-      const allSpecsMap = new Map<string, import("./AdminPanel").StoredOpenAPISpec>();
-      for (const s of (globalOpenapiSpecs ?? [])) allSpecsMap.set(s.id, s);
-      for (const p of profiles) for (const s of (p.openapiSpecs ?? [])) allSpecsMap.set(s.id, s);
-      const allSpecs = [...allSpecsMap.values()].filter(s => s.enabled !== false);
-
-      // Aggregate ALL MCP servers across global settings + every profile, deduplicated by id
-      const allMcpMap = new Map<string, import("./AdminPanel").StoredMCPServer>();
-      for (const s of (globalMcpServers ?? [])) allMcpMap.set(s.id, s);
-      for (const p of profiles) for (const s of (p.mcpServers ?? [])) allMcpMap.set(s.id, s);
-      const allMcp = [...allMcpMap.values()];
+      // Registry is the single source of truth — no need to aggregate across profiles
+      const allSpecs = globalOpenapiSpecs.filter(s => s.enabled !== false);
+      const allMcp   = globalMcpServers;
 
       // Parse OpenAPI tools via the stateless command (no AppState mutation)
       const specs: SpecInfoLocal[] = allSpecs.length > 0
@@ -732,8 +729,12 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
   };
 
   const refreshSnapshot = (p: Profile | null) => {
-    const specs = p ? (p.openapiSpecs ?? []).filter(s => s.enabled !== false) : globalOpenapiSpecs.filter(s => s.enabled !== false);
-    const mcps  = p ? (p.mcpServers ?? []) : globalMcpServers;
+    const specs = p
+      ? globalOpenapiSpecs.filter(s => s.enabled !== false && p.enabledOpenapiSpecIds.includes(s.id))
+      : globalOpenapiSpecs.filter(s => s.enabled !== false);
+    const mcps = p
+      ? globalMcpServers.filter(s => p.enabledMcpServerIds.includes(s.id))
+      : globalMcpServers;
     setSelSpecIds(specs.map(s => s.id));
     setSelMcpIds(mcps.map(s => s.id));
     setDisabledMcp(mcps.flatMap(srv => Object.entries(srv.enabledTools ?? {}).filter(([,en]) => !en).map(([n]) => n)));
@@ -753,7 +754,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
   const handleSave = () => {
     let profile_context: import("./jobTypes").JobProfileContext | null = null;
     if (selectedProfile) {
-      profile_context = resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp, globalAllowedDirs);
+      profile_context = resolveProfileContext(selectedProfile, selSpecIds, selMcpIds, disabledMcp, globalAllowedDirs, globalOpenapiSpecs, globalMcpServers);
     } else if (effectiveOpenAPI.length > 0 || effectiveMcp.length > 0) {
       // Build context from global settings so the job carries its tool snapshot
       profile_context = {
@@ -778,9 +779,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
     });
   };
 
-  const [advancedOpen, setAdvancedOpen] = useState(
-    !!(job.output_file || (promptMode === "freeform" && job.system_prompt))
-  );
+  const [advancedOpen, setAdvancedOpen] = useState(!!job.output_file);
 
   // In steps mode, derive the tool list from the steps themselves
   const stepsToolNames = promptMode === "steps"
@@ -832,6 +831,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
                 profile_id: p?.id ?? null,
                 profile_name: p?.name ?? null,
                 model: p?.model ?? job.model,
+                system_prompt: p?.systemPrompt ?? null,
                 enabled_builtin_tools: p
                   ? Object.entries(p.enabledTools ?? {}).filter(([,v]) => v !== false).map(([k]) => k)
                   : Object.entries(globalEnabledTools).filter(([,v]) => v !== false).map(([k]) => k),
@@ -920,6 +920,35 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
         )}
       </div>
 
+      {/* ── System Prompt ── */}
+      <div className="field" style={{ margin: 0 }}>
+        <label>
+          System Prompt
+          <span style={{ fontWeight: 400, opacity: 0.5, marginLeft: 5 }}>(optional)</span>
+        </label>
+        <textarea
+          className="admin-input"
+          value={job.system_prompt ?? ""}
+          onChange={e => set({ system_prompt: e.target.value || null })}
+          placeholder={promptMode === "steps"
+            ? "Leave blank to use the built-in step executor prompt.\nOverride here to customise the agent's behaviour for this job."
+            : "Leave blank to use the default assistant prompt.\nOverride here to customise the agent's behaviour for this job."}
+          style={{ minHeight: 70, resize: "vertical", fontSize: 11, fontFamily: "monospace" }}
+        />
+        {job.system_prompt && (
+          <div style={{ fontSize: 10, color: "var(--accent)", marginTop: 2 }}>
+            Custom system prompt active — the profile's system prompt will not be used.
+          </div>
+        )}
+        {!job.system_prompt && (
+          <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 2 }}>
+            {promptMode === "steps"
+              ? "Using built-in step executor prompt (autonomous, no confirmation, strict step order)."
+              : "Using default assistant prompt."}
+          </div>
+        )}
+      </div>
+
       {/* ── Advanced (collapsible) ── */}
       <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
         <button
@@ -928,7 +957,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
             background: "var(--surface2)", border: "none", cursor: "pointer", textAlign: "left" }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Advanced</span>
           <span style={{ fontSize: 10, color: "var(--text-tertiary)", fontWeight: 400 }}>
-            Tools: {toolSummary}{job.output_file ? " · output file set" : ""}{promptMode === "freeform" && job.system_prompt ? " · custom system prompt" : ""}
+            Tools: {toolSummary}{job.output_file ? " · output file set" : ""}
           </span>
           <span style={{ marginLeft: "auto", fontSize: 10, opacity: 0.4 }}>{advancedOpen ? "▲" : "▼"}</span>
         </button>
@@ -997,20 +1026,6 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
               )}
             </div>
 
-            {/* System prompt — only shown in freeform mode; steps use the built-in executor prompt */}
-            {promptMode === "freeform" && (
-              <div className="field" style={{ margin: 0 }}>
-                <label>System Prompt Override <span style={{ fontWeight: 400, opacity: 0.5 }}>(optional)</span></label>
-                <textarea className="admin-input" value={job.system_prompt ?? ""} onChange={e => set({ system_prompt: e.target.value || null })}
-                  placeholder="Leave blank to use the default assistant prompt"
-                  style={{ minHeight: 55, resize: "vertical", fontSize: 11, fontFamily: "monospace" }} />
-              </div>
-            )}
-            {promptMode === "steps" && (
-              <div style={{ fontSize: 11, color: "var(--text-tertiary)", padding: "2px 0" }}>
-                Step jobs use a built-in executor prompt that enforces strict step-by-step execution.
-              </div>
-            )}
 
             {/* Output file */}
             <div className="field" style={{ margin: 0 }}>

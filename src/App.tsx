@@ -72,6 +72,49 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "get_current_datetime", description: "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use whenever you need today's date or a timestamp for a filename.", parameters: { type: "object", properties: {}, required: [] } } },
 ];
 
+const WIKI_TOOLS: ToolSchema[] = [
+  { type: "function", function: { name: "wiki_list", description: "List all pages in the persistent wiki.", parameters: { type: "object", properties: {}, required: [] } } },
+  { type: "function", function: { name: "wiki_search", description: "Search wiki pages for a keyword or phrase. Always search before writing to avoid duplicates.", parameters: { type: "object", properties: { query: { type: "string", description: "Keyword or phrase to search for." } }, required: ["query"] } } },
+  { type: "function", function: { name: "wiki_read", description: "Read the full contents of a wiki page.", parameters: { type: "object", properties: { path: { type: "string", description: "Page path e.g. 'people/alice.md' or 'projects'. .md extension optional." } }, required: ["path"] } } },
+  { type: "function", function: { name: "wiki_write", description: "Create or overwrite a wiki page with markdown content. Search first to avoid duplicates.", parameters: { type: "object", properties: { path: { type: "string", description: "Page path e.g. 'people/alice.md'." }, content: { type: "string", description: "Full markdown content." } }, required: ["path", "content"] } } },
+  { type: "function", function: { name: "wiki_patch", description: "Update part of a wiki page by replacing the first occurrence of a specific string.", parameters: { type: "object", properties: { path: { type: "string", description: "Page path." }, find: { type: "string", description: "Exact text to find." }, replace: { type: "string", description: "Replacement text." } }, required: ["path", "find", "replace"] } } },
+  { type: "function", function: { name: "wiki_delete", description: "Permanently delete a wiki page.", parameters: { type: "object", properties: { path: { type: "string", description: "Page path to delete." } }, required: ["path"] } } },
+  { type: "function", function: { name: "wiki_append", description: "Append content to a wiki page without overwriting it. Use this for log.md entries. Creates the page if it doesn't exist.", parameters: { type: "object", properties: { path: { type: "string", description: "Page path e.g. 'log.md'." }, content: { type: "string", description: "Content to append." } }, required: ["path", "content"] } } },
+  { type: "function", function: { name: "wiki_lint", description: "Run a health check on the wiki: finds empty pages, pages missing from index.md, broken index links, and log.md freshness. Call this periodically.", parameters: { type: "object", properties: {}, required: [] } } },
+];
+
+const WIKI_SYSTEM_PROMPT_BLOCK = `
+
+You have access to a persistent personal wiki that stores knowledge across conversations. This is your long-term memory — treat it as your source of truth about the user.
+
+Wiki tools: wiki_list, wiki_search, wiki_read, wiki_write, wiki_patch, wiki_delete, wiki_append, wiki_lint.
+
+MANDATORY retrieval rules — follow these before answering:
+- For ANY question involving dates, plans, events, anniversaries, birthdays, or "what's coming up": call wiki_search with the relevant keywords (e.g. "birthday", "july", "anniversary") BEFORE answering. Never guess from context alone.
+- For ANY question involving a person's name, project, preference, or past conversation: call wiki_search with their name or the topic BEFORE answering.
+- When the wiki is non-empty (index.md exists), call wiki_read("index.md") at the start of a new conversation to orient yourself.
+- If wiki_search returns results, read the relevant pages with wiki_read before composing your answer.
+
+Storage rules:
+- After learning any durable fact (name, date, preference, project, goal), store it immediately without being asked.
+- Always wiki_search before writing to avoid duplicates — update existing pages with wiki_patch rather than creating a new page.
+- Use clear structured markdown with ## headings.
+- Paths are relative like "people/alice.md" or "events/birthdays.md" — no leading slash. .md is optional.
+- Keep index.md current: after creating or significantly updating a page, update index.md with a one-line entry for that page.
+
+Logging (log.md):
+- After any wiki_write or wiki_patch, also call wiki_append("log.md", "## [YYYY-MM-DD] action | detail") to record what changed and why.
+- Use today's date in ISO format. Keep log entries to one short sentence.
+
+Ingest workflow — when the user shares a large block of information to remember:
+1. wiki_search for each key topic to avoid overwriting existing knowledge.
+2. wiki_write or wiki_patch the relevant pages.
+3. Update index.md.
+4. Append a log entry summarising what was ingested.
+
+Maintenance:
+- Call wiki_lint occasionally (e.g. at the start of a session after reading index.md) to surface empty pages, missing index entries, or broken links, then fix any issues found.`;
+
 // ── Built-in OpenAPI specs ────────────────────────────────────────────────────
 
 const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
@@ -169,8 +212,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   numGPULayers: null,
   models: [],
   enabledTools: { read_file: true, list_files: true, web_search: true },
-  mcpServers: [],
-  openapiSpecs: [],
+  toolRegistry: { mcpServers: [], openapiSpecs: [] },
   profiles: [],
   activeProfileId: null,
   allowedDirs: undefined,
@@ -193,18 +235,63 @@ function injectBuiltinSpecs(specs: StoredOpenAPISpec[]): StoredOpenAPISpec[] {
   return result;
 }
 
+function dedupeById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter(item => { if (seen.has(item.id)) return false; seen.add(item.id); return true; });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function migrateToRegistry(raw: any): any {
+  // Already migrated — toolRegistry present in saved data
+  if (raw && raw.toolRegistry) return raw;
+
+  const legacyMcp:   StoredOpenAPISpec[] = raw?.mcpServers   ?? [];
+  const legacySpecs: StoredOpenAPISpec[] = raw?.openapiSpecs ?? [];
+  const profiles: any[]                  = raw?.profiles     ?? [];
+
+  const allMcp = dedupeById([
+    ...legacyMcp,
+    ...profiles.flatMap((p: any) => p.mcpServers ?? []),
+  ]);
+  const allSpecs = dedupeById([
+    ...legacySpecs,
+    ...profiles.flatMap((p: any) => p.openapiSpecs ?? []),
+  ]);
+
+  const result: any = { ...raw };
+  result.toolRegistry = { mcpServers: allMcp, openapiSpecs: allSpecs };
+  delete result.mcpServers;
+  delete result.openapiSpecs;
+  result.profiles = profiles.map((p: any) => {
+    const migrated: any = { ...p };
+    migrated.enabledMcpServerIds   = (p.mcpServers   ?? []).map((s: any) => s.id);
+    migrated.enabledOpenapiSpecIds = (p.openapiSpecs ?? []).map((s: any) => s.id);
+    delete migrated.mcpServers;
+    delete migrated.openapiSpecs;
+    return migrated;
+  });
+  return result;
+}
+
 export function loadSettings(): AppSettings {
   try {
     const s = localStorage.getItem("lexi_settings");
-    const loaded: AppSettings = s ? { ...DEFAULT_SETTINGS, ...JSON.parse(s) } : { ...DEFAULT_SETTINGS };
-    // Inject built-in specs at global level and into every profile
-    loaded.openapiSpecs = injectBuiltinSpecs(loaded.openapiSpecs);
+    // Run migration on the raw parsed object BEFORE merging with defaults,
+    // so the toolRegistry sentinel check is against saved data only.
+    const parsed = s ? JSON.parse(s) : {};
+    const migrated = migrateToRegistry(parsed);
+    const loaded: AppSettings = { ...DEFAULT_SETTINGS, ...migrated };
+    loaded.toolRegistry = {
+      ...loaded.toolRegistry,
+      openapiSpecs: injectBuiltinSpecs(loaded.toolRegistry.openapiSpecs ?? []),
+    };
     loaded.profiles = loaded.profiles.map(p => ({
       ...p,
-      openapiSpecs: injectBuiltinSpecs(p.openapiSpecs ?? []),
+      enabledMcpServerIds:   p.enabledMcpServerIds   ?? [],
+      enabledOpenapiSpecIds: p.enabledOpenapiSpecIds  ?? [],
     }));
     return loaded;
-  } catch { return { ...DEFAULT_SETTINGS, openapiSpecs: [...BUILTIN_OPENAPI_SPECS] }; }
+  } catch { return { ...DEFAULT_SETTINGS, toolRegistry: { mcpServers: [], openapiSpecs: [...BUILTIN_OPENAPI_SPECS] } }; }
 }
 
 export function saveSettings(s: AppSettings) {
@@ -719,19 +806,19 @@ export default function App() {
       setSettings(prev => {
         const patchAuth = (auth: import("./AdminPanel").AuthConfig) =>
           ({ ...auth, access_token });
-        const updateSpecs = (specs: typeof prev.openapiSpecs) =>
-          specs.map(s => s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s);
-        const updateMcp = (servers: typeof prev.mcpServers) =>
-          servers.map(s => s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s);
         const updated: typeof prev = {
           ...prev,
-          openapiSpecs: updateSpecs(prev.openapiSpecs),
-          mcpServers:   updateMcp(prev.mcpServers ?? []),
-          profiles: prev.profiles.map(p => ({
-            ...p,
-            openapiSpecs: updateSpecs(p.openapiSpecs ?? []),
-            mcpServers:   updateMcp(p.mcpServers   ?? []),
-          })),
+          toolRegistry: {
+            mcpServers: prev.toolRegistry.mcpServers.map(s =>
+              s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s),
+            openapiSpecs: prev.toolRegistry.openapiSpecs.map(s =>
+              s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s),
+          },
+          // Also patch profile-level auth overrides that reference this tool
+          profiles: prev.profiles.map(p => {
+            if (!p.toolAuthOverrides?.[spec_id]) return p;
+            return { ...p, toolAuthOverrides: { ...p.toolAuthOverrides, [spec_id]: patchAuth(p.toolAuthOverrides[spec_id]) } };
+          }),
         };
         saveSettings(updated);
         // Re-sync AppState so the Admin panel's tool dropdowns reflect the
@@ -785,6 +872,8 @@ export default function App() {
     const enabledTools = ALL_BUILTIN_TOOLS.filter(
       t => effectiveEnabledTools[t.function.name] !== false
     );
+    // Wiki tools injected when wiki memory is enabled globally
+    if (settings.wikiEnabled) enabledTools.push(...WIKI_TOOLS);
 
     // Split attachments into images (sent via Ollama images field) and other files (appended as paths)
     const imagePaths = attachedFiles.filter(isImage);
@@ -815,16 +904,20 @@ export default function App() {
       const basePrompt = activeProfile?.systemPrompt ?? BASE_SYSTEM_PROMPT;
 
       // Build dynamic suffix describing any registered external tools
-      const ctx = activeProfile ?? settings;
-      const ctxOpenAPI = Array.isArray((ctx as typeof settings).openapiSpecs) ? (ctx as typeof settings).openapiSpecs : [];
-      const ctxMCP     = Array.isArray((ctx as typeof settings).mcpServers)   ? (ctx as typeof settings).mcpServers   : [];
+      const registry = settings.toolRegistry;
+      const ctxOpenAPI = activeProfile
+        ? registry.openapiSpecs.filter(s => activeProfile.enabledOpenapiSpecIds.includes(s.id) && s.enabled !== false)
+        : registry.openapiSpecs.filter(s => s.enabled !== false);
+      const ctxMCP = activeProfile
+        ? registry.mcpServers.filter(s => activeProfile.enabledMcpServerIds.includes(s.id))
+        : registry.mcpServers;
       const externalParts: string[] = [];
       if (ctxOpenAPI.length > 0)
         externalParts.push(`OpenAPI services you can call: ${ctxOpenAPI.map(s => s.title).join(", ")}.`);
       if (ctxMCP.length > 0)
         externalParts.push(`MCP servers connected: ${ctxMCP.map(s => s.name).join(", ")}.`);
       const externalSuffix = externalParts.length > 0
-        ? `\nExternal service tools available — call these ONLY when the user explicitly names that service: ${externalParts.join(" ")}`
+        ? `\nExternal tools available — use these whenever they are relevant to the user's request: ${externalParts.join(" ")}`
         : "";
 
       const resolved = resolveParams(chatParams);
@@ -836,12 +929,15 @@ export default function App() {
         ? `\n\nUser context (treat these as facts about the user — use them automatically when relevant, do not repeat them unless asked):\n${contextVars.map(v => `- ${v.name}: ${v.value}`).join("\n")}`
         : "";
 
-      const systemPrompt = allowedDirs.length > 0
-        ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
-        : `${effectiveBase}${externalSuffix}${contextVarsSuffix}`;
+      const wikiSuffix = settings.wikiEnabled ? WIKI_SYSTEM_PROMPT_BLOCK : "";
 
-      const activeMcp = activeProfile?.mcpServers ?? settings.mcpServers ?? [];
-      const disabledMcpTools = activeMcp.flatMap(srv =>
+      const systemPrompt = allowedDirs.length > 0
+        ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
+        : `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}`;
+
+      // Profile-enabled MCP server IDs (empty = no profile = all servers visible)
+      const enabledMcpServerIds = activeProfile ? activeProfile.enabledMcpServerIds : [];
+      const disabledMcpTools = ctxMCP.flatMap(srv =>
         Object.entries(srv.enabledTools ?? {})
           .filter(([, en]) => !en)
           .map(([name]) => name)
@@ -865,6 +961,7 @@ export default function App() {
           keep_alive: resolved.keepAlive ?? null,
           web_search_results: settings.webSearchResults ?? 10,
           disabled_mcp_tools: disabledMcpTools,
+          enabled_mcp_server_ids: enabledMcpServerIds,
         }
       });
     } catch (err) {
@@ -899,15 +996,34 @@ export default function App() {
 
   // Sync Rust's runtime state to whichever profile/global context is now active
   const syncServers = async (s: AppSettings) => {
-    const profile = s.profiles.find(p => p.id === s.activeProfileId) ?? null;
-    const ctx     = profile ?? s;
-    const mcp     = ctx.mcpServers ?? [];
-    const openapi = ctx.openapiSpecs ?? [];
-    const host    = profile?.host || s.host;
-    const dirs    = profile?.allowedDirs ?? s.allowedDirs ?? [];
-    const enabledOpenapi = openapi.filter(sp => sp.enabled !== false);
+    const profile  = s.profiles.find(p => p.id === s.activeProfileId) ?? null;
+    const registry = s.toolRegistry;
+
+    // Always connect ALL registry MCP servers so they're available in Rust's connection pool.
+    // Profile filtering is enforced at call time via enabled_mcp_server_ids in send_message.
+    // Auth overrides are still applied per-profile.
+    let mcp = registry.mcpServers;
+    if (profile?.toolAuthOverrides) {
+      const ov = profile.toolAuthOverrides;
+      mcp = mcp.map(srv => ov[srv.id] ? { ...srv, auth: ov[srv.id] } : srv);
+    }
+
+    // OpenAPI specs: still profile-filtered (they connect per-call, no persistent pool)
+    let openapi: StoredOpenAPISpec[];
+    if (profile) {
+      openapi = registry.openapiSpecs.filter(sp => profile.enabledOpenapiSpecIds.includes(sp.id));
+      if (profile.toolAuthOverrides) {
+        const ov = profile.toolAuthOverrides;
+        openapi = openapi.map(sp => ov[sp.id] ? { ...sp, auth: ov[sp.id] } : sp);
+      }
+    } else {
+      openapi = registry.openapiSpecs;
+    }
+
+    const host = profile?.host || s.host;
+    const dirs = profile?.allowedDirs ?? s.allowedDirs ?? [];
     await invoke("set_mcp_servers",   { servers: mcp }).catch(() => {});
-    await invoke("set_openapi_specs", { specs: enabledOpenapi }).catch(() => {});
+    await invoke("set_openapi_specs", { specs: openapi.filter(sp => sp.enabled !== false) }).catch(() => {});
     await invoke("set_ollama_host",   { host }).catch(() => {});
     await invoke("set_allowed_dirs",  { dirs }).catch(() => {});
   };
@@ -1007,8 +1123,8 @@ export default function App() {
           models={settings.models}
           profiles={settings.profiles}
           activeProfileId={settings.activeProfileId ?? null}
-          globalOpenapiSpecs={settings.openapiSpecs ?? []}
-          globalMcpServers={settings.mcpServers ?? []}
+          globalOpenapiSpecs={settings.toolRegistry.openapiSpecs}
+          globalMcpServers={settings.toolRegistry.mcpServers}
           globalEnabledTools={settings.enabledTools ?? {}}
           globalAllowedDirs={settings.allowedDirs ?? []}
           onClose={() => setView("chat")}

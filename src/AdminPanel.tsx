@@ -53,14 +53,24 @@ export interface ContextVar {
   value: string;
 }
 
+export interface ToolRegistry {
+  mcpServers: StoredMCPServer[];
+  openapiSpecs: StoredOpenAPISpec[];
+}
+
 export interface Profile {
   id: string;
   name: string;
   systemPrompt: string;
   model: string;
   enabledTools: Record<string, boolean>;
-  mcpServers: StoredMCPServer[];
-  openapiSpecs: StoredOpenAPISpec[];
+  // Registry-based tool selection (replaces per-profile mcpServers/openapiSpecs)
+  enabledMcpServerIds: string[];
+  enabledOpenapiSpecIds: string[];
+  toolAuthOverrides?: Record<string, AuthConfig>; // tool id → auth override for this profile
+  // Legacy fields kept for migration only — will be undefined after first load
+  mcpServers?: StoredMCPServer[];
+  openapiSpecs?: StoredOpenAPISpec[];
   maxTools: number;
   chatParams?: ChatParams;
   contextVars?: ContextVar[];
@@ -75,12 +85,15 @@ export interface AppSettings {
   numGPULayers: number | null;
   models: string[];
   enabledTools: Record<string, boolean>;
-  mcpServers: StoredMCPServer[];
-  openapiSpecs: StoredOpenAPISpec[];
+  toolRegistry: ToolRegistry;
   profiles: Profile[];
   activeProfileId: string | null;
   chatParams?: ChatParams;
   allowedDirs?: string[];
+  wikiEnabled?: boolean;
+  // Legacy fields kept for migration only — will be undefined after first load
+  mcpServers?: StoredMCPServer[];
+  openapiSpecs?: StoredOpenAPISpec[];
 }
 
 interface SpecInfo {
@@ -260,8 +273,8 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
       model: settings.models[0] ?? "",
       enabledTools: { ...settings.enabledTools },
-      mcpServers: [],
-      openapiSpecs: [],
+      enabledMcpServerIds: [],
+      enabledOpenapiSpecIds: [],
       maxTools: settings.maxTools,
     };
     setDraft(p);
@@ -335,8 +348,8 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
       ...imported,
       id: uid(),
       name: resolveImportName(imported.name, settings.profiles),
-      mcpServers:   imported.mcpServers   ?? [],
-      openapiSpecs: imported.openapiSpecs ?? [],
+      enabledMcpServerIds:   imported.enabledMcpServerIds   ?? [],
+      enabledOpenapiSpecIds: imported.enabledOpenapiSpecIds ?? [],
       enabledTools: imported.enabledTools ?? {},
       maxTools:     imported.maxTools     ?? settings.maxTools,
     };
@@ -443,6 +456,44 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
               </div>
             </div>
 
+            {settings.toolRegistry.openapiSpecs.filter(s => !BUILTIN_OPENAPI_SPEC_IDS.has(s.id)).length > 0 && (
+              <div className="field" style={{ marginBottom: 14 }}>
+                <label>OpenAPI Services</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                  {settings.toolRegistry.openapiSpecs
+                    .filter(s => selected!.enabledOpenapiSpecIds.includes(s.id))
+                    .map(s => (
+                      <span key={s.id} style={{
+                        fontSize: 10, padding: "2px 7px", borderRadius: 10,
+                        background: "var(--purple-bg)", border: "1px solid var(--purple-border)", color: "var(--purple)"
+                      }}>🌐 {s.title}</span>
+                    ))}
+                  {settings.toolRegistry.openapiSpecs.filter(s => selected!.enabledOpenapiSpecIds.includes(s.id)).length === 0 && (
+                    <span style={{ fontSize: 11, opacity: 0.5 }}>None selected</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {settings.toolRegistry.mcpServers.length > 0 && (
+              <div className="field" style={{ marginBottom: 14 }}>
+                <label>MCP Servers</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                  {settings.toolRegistry.mcpServers
+                    .filter(s => selected!.enabledMcpServerIds.includes(s.id))
+                    .map(s => (
+                      <span key={s.id} style={{
+                        fontSize: 10, padding: "2px 7px", borderRadius: 10,
+                        background: "var(--purple-bg)", border: "1px solid var(--purple-border)", color: "var(--purple)"
+                      }}>🔌 {s.name}</span>
+                    ))}
+                  {settings.toolRegistry.mcpServers.filter(s => selected!.enabledMcpServerIds.includes(s.id)).length === 0 && (
+                    <span style={{ fontSize: 11, opacity: 0.5 }}>None selected</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             <button className="btn" style={{ color: "#f87171", borderColor: "#f8717133", marginTop: 8 }}
               onClick={() => deleteProfile(selected!.id)}>
               Delete Profile
@@ -494,6 +545,51 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
                 ))}
               </div>
             </div>
+
+            {settings.toolRegistry.openapiSpecs.length > 0 && (
+              <div className="field" style={{ marginBottom: 12 }}>
+                <label>OpenAPI Services</label>
+                <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>
+                  Select which services this profile can access.
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {settings.toolRegistry.openapiSpecs.map(sp => (
+                    <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12 }}>
+                      <input type="checkbox" className="admin-checkbox"
+                        checked={d.enabledOpenapiSpecIds.includes(sp.id)}
+                        onChange={e => setDraft({ ...d, enabledOpenapiSpecIds: e.target.checked
+                          ? [...d.enabledOpenapiSpecIds, sp.id]
+                          : d.enabledOpenapiSpecIds.filter(id => id !== sp.id) })} />
+                      <span>🌐 {sp.title}</span>
+                      {BUILTIN_OPENAPI_SPEC_IDS.has(sp.id) && (
+                        <span style={{ fontSize: 10, opacity: 0.4 }}>(built-in)</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {settings.toolRegistry.mcpServers.length > 0 && (
+              <div className="field" style={{ marginBottom: 12 }}>
+                <label>MCP Servers</label>
+                <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>
+                  Select which MCP servers this profile can use.
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {settings.toolRegistry.mcpServers.map(srv => (
+                    <label key={srv.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12 }}>
+                      <input type="checkbox" className="admin-checkbox"
+                        checked={d.enabledMcpServerIds.includes(srv.id)}
+                        onChange={e => setDraft({ ...d, enabledMcpServerIds: e.target.checked
+                          ? [...d.enabledMcpServerIds, srv.id]
+                          : d.enabledMcpServerIds.filter(id => id !== srv.id) })} />
+                      <span>🔌 {srv.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="field" style={{ marginBottom: 12 }}>
               <label>Max Tools per Query</label>
@@ -652,6 +748,7 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
     onChange({ ...settings, enabledTools: { ...settings.enabledTools, [name]: val } });
   const setMaxTools = (v: number) => onChange({ ...settings, maxTools: v });
   const setWebSearchResults = (v: number) => onChange({ ...settings, webSearchResults: v });
+  const setWikiEnabled = (val: boolean) => onChange({ ...settings, wikiEnabled: val });
 
   return (
     <div className="admin-scroll">
@@ -675,6 +772,26 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
             </div>
           </label>
         ))}
+      </section>
+
+      <section className="admin-section">
+        <div className="admin-section-header">
+          <span className="admin-section-icon">📖</span>
+          <span className="admin-section-title">WIKI MEMORY</span>
+        </div>
+        <label className="admin-row" style={{ cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={settings.wikiEnabled === true}
+            onChange={e => setWikiEnabled(e.target.checked)}
+            className="admin-checkbox"
+          />
+          <span className="tool-icon">📖</span>
+          <div className="admin-row-text">
+            <span className="admin-row-title">Persistent Wiki Memory</span>
+            <span className="admin-row-sub">Gives the model wiki_read, wiki_write, wiki_search, wiki_patch, wiki_list and wiki_delete tools to store and recall knowledge across conversations. Stored as markdown files in ~/.local/share/lexichat/wiki/</span>
+          </div>
+        </label>
       </section>
 
       <section className="admin-section">
@@ -1158,8 +1275,24 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
   const reconnect = async (id: string) => {
     setReconnecting(prev => new Set([...prev, id]));
     try {
-      const updated = await invoke<MCPServerInfo>("reconnect_mcp_server", { id });
-      setServers(prev => prev.map(s => s.id === id ? updated : s));
+      const inRust = servers.some(s => s.id === id);
+      let updated: MCPServerInfo;
+      if (!inRust) {
+        // Server was evicted from Rust state (e.g. not enabled in active profile).
+        // Re-register it using the stored config and the same ID so dispatch works.
+        const storedSrv = stored.find(s => s.id === id);
+        if (!storedSrv) return;
+        updated = await invoke<MCPServerInfo>("add_mcp_server", { args: {
+          id: storedSrv.id, name: storedSrv.name, command: storedSrv.command,
+          args: storedSrv.args, env: storedSrv.env ?? {}, auth: storedSrv.auth,
+        }});
+      } else {
+        updated = await invoke<MCPServerInfo>("reconnect_mcp_server", { id });
+      }
+      setServers(prev => {
+        const exists = prev.some(s => s.id === id);
+        return exists ? prev.map(s => s.id === id ? updated : s) : [...prev, updated];
+      });
     } catch { }
     setReconnecting(prev => { const s = new Set(prev); s.delete(id); return s; });
   };
@@ -1180,66 +1313,72 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
   return (
     <div className="admin-scroll" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ flex: 1 }}>
-        {servers.length === 0 && !showAdd && (
+        {stored.length === 0 && !showAdd && (
           <div className="admin-empty">No MCP servers connected. Add a server to extend LexiChat with custom tools.</div>
         )}
 
-        {servers.map(srv => (
-          <section key={srv.id} className="admin-section">
+        {stored.map(storedSrv => {
+          // Overlay runtime connection status from Rust state (may be absent if server
+          // is not enabled in the active profile — that's fine, show as "Not active").
+          const srv = servers.find(s => s.id === storedSrv.id);
+          const connected = srv?.connected ?? false;
+          const srvError = srv?.error ?? null;
+          const tools = srv?.tools ?? [];
+          const tool_count = srv?.tool_count ?? 0;
+          return (
+          <section key={storedSrv.id} className="admin-section">
             <div className="admin-row">
-              <button className="icon-btn" onClick={() => toggleExpand(srv.id)} style={{ fontSize: 9 }}>
-                {expanded.has(srv.id) ? "▼" : "▶"}
+              <button className="icon-btn" onClick={() => toggleExpand(storedSrv.id)} style={{ fontSize: 9 }}>
+                {expanded.has(storedSrv.id) ? "▼" : "▶"}
               </button>
               <span style={{ fontSize: 14, marginRight: 2 }}>🖧</span>
               <div style={{ flex: 1 }}>
-                <div className="admin-row-title">{srv.name}</div>
+                <div className="admin-row-title">{storedSrv.name}</div>
                 <div className="admin-row-sub" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <span style={{ fontFamily: "monospace" }}>{srv.command}</span>
-                  <span style={{ color: srv.connected ? "#4ade80" : srv.error ? "#f87171" : "#888",
-                    fontSize: 10, background: (srv.connected ? "#4ade80" : "#f87171") + "22",
+                  <span style={{ fontFamily: "monospace" }}>{storedSrv.command}</span>
+                  <span style={{ color: connected ? "#4ade80" : srvError ? "#f87171" : "#888",
+                    fontSize: 10, background: (connected ? "#4ade80" : srvError ? "#f87171" : "#888") + "22",
                     padding: "1px 6px", borderRadius: 10 }}>
-                    {srv.connected ? (() => {
-                      const storedSrv = stored.find(s => s.id === srv.id);
-                      const enabledCount = srv.tools.filter(t => isToolEnabled(storedSrv, t.name)).length;
-                      return enabledCount === srv.tool_count
-                        ? `✓ ${srv.tool_count} tools`
-                        : `✓ ${enabledCount}/${srv.tool_count} tools`;
-                    })() : srv.error ? "✕ Error" : "Disconnected"}
+                    {connected ? (() => {
+                      const enabledCount = tools.filter(t => isToolEnabled(storedSrv, t.name)).length;
+                      return enabledCount === tool_count
+                        ? `✓ ${tool_count} tools`
+                        : `✓ ${enabledCount}/${tool_count} tools`;
+                    })() : srvError ? "✕ Error" : "Not active"}
                   </span>
                 </div>
               </div>
-              {!srv.connected && (
+              {!connected && (
                 <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
-                  onClick={() => reconnect(srv.id)} disabled={reconnecting.has(srv.id)}>
-                  {reconnecting.has(srv.id) ? "…" : "↻"}
+                  onClick={() => reconnect(storedSrv.id)} disabled={reconnecting.has(storedSrv.id)}>
+                  {reconnecting.has(storedSrv.id) ? "…" : "↻"}
                 </button>
               )}
-              <button className="icon-btn danger" onClick={() => remove(srv.id)}>✕</button>
+              <button className="icon-btn danger" onClick={() => remove(storedSrv.id)}>✕</button>
             </div>
-            {expanded.has(srv.id) && (
+            {expanded.has(storedSrv.id) && (
               <div style={{ paddingLeft: 28 }}>
-                {srv.error && <div style={{ fontSize: 11, color: "#f87171", padding: "4px 16px" }}>{srv.error}</div>}
-                {srv.tools.length > 0 && (
+                {srvError && <div style={{ fontSize: 11, color: "#f87171", padding: "4px 16px" }}>{srvError}</div>}
+                {tools.length > 0 && (
                   <div style={{ paddingBottom: 4, display: "flex", gap: 8 }}>
                     <button className="btn" style={{ fontSize: 10, padding: "1px 7px" }}
-                      onClick={() => onChange(stored.map(s => s.id !== srv.id ? s : {
-                        ...s, enabledTools: Object.fromEntries(srv.tools.map(t => [t.name, true]))
+                      onClick={() => onChange(stored.map(s => s.id !== storedSrv.id ? s : {
+                        ...s, enabledTools: Object.fromEntries(tools.map(t => [t.name, true]))
                       }))}>All</button>
                     <button className="btn" style={{ fontSize: 10, padding: "1px 7px" }}
-                      onClick={() => onChange(stored.map(s => s.id !== srv.id ? s : {
-                        ...s, enabledTools: Object.fromEntries(srv.tools.map(t => [t.name, false]))
+                      onClick={() => onChange(stored.map(s => s.id !== storedSrv.id ? s : {
+                        ...s, enabledTools: Object.fromEntries(tools.map(t => [t.name, false]))
                       }))}>None</button>
                   </div>
                 )}
-                {srv.tools.map(t => {
-                  const storedSrv = stored.find(s => s.id === srv.id);
+                {tools.map(t => {
                   const enabled = isToolEnabled(storedSrv, t.name);
                   return (
                     <label key={t.name} className="admin-row" style={{ cursor: "pointer", paddingTop: 3, paddingBottom: 3 }}>
                       <input
                         type="checkbox"
                         checked={enabled}
-                        onChange={e => toggleTool(srv.id, t.name, e.target.checked)}
+                        onChange={e => toggleTool(storedSrv.id, t.name, e.target.checked)}
                         style={{ marginRight: 6, accentColor: "var(--purple)" }}
                       />
                       <div className="admin-row-text">
@@ -1252,7 +1391,8 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
               </div>
             )}
           </section>
-        ))}
+          );
+        })}
 
         {showAdd && (
           <section className="admin-section" style={{ padding: "12px 16px" }}>
@@ -1489,23 +1629,37 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
 
   // The active profile (if any) or global settings is the "context" for MCP/OpenAPI/Sandbox/Server tabs
   const activeProfile = draft.profiles.find(p => p.id === draft.activeProfileId) ?? null;
-  const ctxMCP     = (activeProfile ? activeProfile.mcpServers   : draft.mcpServers)   ?? [];
-  const ctxOpenAPI = (activeProfile ? activeProfile.openapiSpecs : draft.openapiSpecs) ?? [];
+  // Tools are now stored globally in toolRegistry; profiles reference by ID
+  const ctxMCP     = draft.toolRegistry.mcpServers;
+  const ctxOpenAPI = draft.toolRegistry.openapiSpecs;
   const ctxDirs    = (activeProfile ? activeProfile.allowedDirs  : draft.allowedDirs)  ?? [];
 
   const setCtxMCP = (servers: StoredMCPServer[]) => {
-    if (activeProfile) {
-      setDraft(d => ({ ...d, profiles: d.profiles.map(p => p.id === activeProfile.id ? { ...p, mcpServers: servers } : p) }));
-    } else {
-      setDraft(d => ({ ...d, mcpServers: servers }));
-    }
+    setDraft(d => {
+      // Auto-enable any newly added servers in the active profile so they
+      // aren't immediately excluded by syncServers after clicking Done.
+      const prevIds = new Set(d.toolRegistry.mcpServers.map(s => s.id));
+      const newIds = servers.filter(s => !prevIds.has(s.id)).map(s => s.id);
+      const profiles = newIds.length > 0 && d.activeProfileId
+        ? d.profiles.map(p => p.id === d.activeProfileId
+            ? { ...p, enabledMcpServerIds: [...(p.enabledMcpServerIds ?? []), ...newIds] }
+            : p)
+        : d.profiles;
+      return { ...d, toolRegistry: { ...d.toolRegistry, mcpServers: servers }, profiles };
+    });
   };
   const setCtxOpenAPI = (specs: StoredOpenAPISpec[]) => {
-    if (activeProfile) {
-      setDraft(d => ({ ...d, profiles: d.profiles.map(p => p.id === activeProfile.id ? { ...p, openapiSpecs: specs } : p) }));
-    } else {
-      setDraft(d => ({ ...d, openapiSpecs: specs }));
-    }
+    setDraft(d => {
+      // Auto-enable any newly added specs in the active profile.
+      const prevIds = new Set(d.toolRegistry.openapiSpecs.map(s => s.id));
+      const newIds = specs.filter(s => !prevIds.has(s.id)).map(s => s.id);
+      const profiles = newIds.length > 0 && d.activeProfileId
+        ? d.profiles.map(p => p.id === d.activeProfileId
+            ? { ...p, enabledOpenapiSpecIds: [...(p.enabledOpenapiSpecIds ?? []), ...newIds] }
+            : p)
+        : d.profiles;
+      return { ...d, toolRegistry: { ...d.toolRegistry, openapiSpecs: specs }, profiles };
+    });
   };
   const setCtxDirs = (dirs: string[]) => {
     if (activeProfile) {

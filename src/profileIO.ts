@@ -26,15 +26,12 @@ export function buildExportEnvelope(profile: Profile): ProfileExportEnvelope {
     exported_at: new Date().toISOString(),
     profile: {
       ...profile,
-      mcpServers: profile.mcpServers.map(s => ({
-        ...s,
-        auth: s.auth ? stripAuth(s.auth) : undefined,
-        env: {},
-      })),
-      openapiSpecs: profile.openapiSpecs.map(s => ({
-        ...s,
-        auth: s.auth ? stripAuth(s.auth) : undefined,
-      })),
+      // Strip auth from any per-profile auth overrides
+      toolAuthOverrides: profile.toolAuthOverrides
+        ? Object.fromEntries(
+            Object.entries(profile.toolAuthOverrides).map(([id, auth]) => [id, stripAuth(auth)])
+          )
+        : undefined,
     },
   };
 }

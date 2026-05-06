@@ -170,7 +170,10 @@ pub async fn execute(
     args: &Value,
     app: Option<&tauri::AppHandle>,
 ) -> String {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()
+        .unwrap_or_default();
 
     // Build URL: substitute path parameters
     let mut url_path = tool.path.clone();
@@ -208,16 +211,17 @@ pub async fn execute(
 
     let mut req = spec.auth.apply_async(&client, base_req).await;
     req = req.header("User-Agent", concat!("LexiChat/", env!("CARGO_PKG_VERSION")));
-    req = req.header("Content-Type", "application/json");
     req = req.header("Accept", "application/json");
 
-    // Body
+    // Body — only set Content-Type for methods that carry a request body
     let body_params: serde_json::Map<String,Value> = tool.parameters.iter()
         .filter(|p| p.location == "body")
         .filter_map(|p| args.get(&p.name).map(|v| (p.name.clone(), v.clone())))
         .collect();
     if !body_params.is_empty() {
         req = req.json(&body_params);
+    } else if ["POST", "PUT", "PATCH"].contains(&tool.method.as_str()) {
+        req = req.header("Content-Type", "application/json");
     }
 
     let result = send_and_format(req).await;
@@ -242,10 +246,11 @@ pub async fn execute(
             let mut retry_req = retry_base
                 .header("Authorization", format!("Bearer {new_token}"))
                 .header("User-Agent", concat!("LexiChat/", env!("CARGO_PKG_VERSION")))
-                .header("Content-Type", "application/json")
                 .header("Accept", "application/json");
             if !body_params.is_empty() {
                 retry_req = retry_req.json(&body_params);
+            } else if ["POST", "PUT", "PATCH"].contains(&tool.method.as_str()) {
+                retry_req = retry_req.header("Content-Type", "application/json");
             }
             return send_and_format(retry_req).await;
         }
@@ -269,7 +274,15 @@ async fn send_and_format(req: reqwest::RequestBuilder) -> String {
                 Err(e) => format!("HTTP {status} — read error: {e}"),
             }
         }
-        Err(e) => format!("Request error: {e}"),
+        Err(e) => {
+            let mut msg = format!("Request error: {e}");
+            let mut src: Option<&dyn std::error::Error> = std::error::Error::source(&e);
+            while let Some(cause) = src {
+                msg.push_str(&format!("\n  caused by: {cause}"));
+                src = cause.source();
+            }
+            msg
+        }
     }
 }
 
