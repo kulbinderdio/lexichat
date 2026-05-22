@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:rust": "cd src-tauri && /Users/dio/.cargo/bin/cargo test",
+    "test:rust": "cd src-tauri && cargo test",
     "test:all": "npm run test && npm run test:rust"
   },
   "dependencies": {

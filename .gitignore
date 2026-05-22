@@ -17,6 +17,9 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+
+# Claude Code local settings
+.claude/
 *.suo
 *.ntvs*
 *.njsproj
@@ -29,3 +32,12 @@ src-tauri/target/
 # Local scratch
 temp/
 *.json.bak
+
+# Secrets / credentials (never commit these)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx

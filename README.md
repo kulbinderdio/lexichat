@@ -172,3 +172,16 @@ All file tools are sandboxed — they only operate within directories you explic
 ## Architecture Overview
 
 See [CLAUDE.md](CLAUDE.md) for a detailed technical architecture guide.
+
+---
+
+## License
+
+LexiChat is dual-licensed:
+
+- **Personal / open-source use**: [GNU AGPLv3](LICENSE) — free to use, modify, and distribute provided any derivative work is also released under AGPLv3.
+- **Commercial use**: A separate commercial license is required if you use LexiChat in a proprietary product or service, or do not wish to comply with AGPLv3's copyleft terms.
+
+For commercial licensing enquiries contact: info@lexi-chat.com
+
+See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
