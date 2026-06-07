@@ -1,6 +1,6 @@
 [package]
 name = "lexichat"
-version = "0.1.7"
+version = "1.7.1"
 description = "LexiChat — Local AI Agent"
 authors = ["you"]
 edition = "2021"
@@ -36,6 +36,10 @@ url = { version = "2", features = ["serde"] }
 zip = "2"
 printpdf = "0.6"
 chrono = { version = "0.4", features = ["serde"] }
+# Sandboxed Python interpreter for the run_python code-execution tool.
+# Pinned to a specific revision — the crates.io `monty` is a 0.0.0 placeholder,
+# so we depend on the workspace crate directly from git.
+monty = { git = "https://github.com/pydantic/monty", rev = "8feace1a5f7335970cebe6ab3b3d2c491f820864" }
 
 [dev-dependencies]
 tempfile = "3"

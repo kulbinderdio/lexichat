@@ -4,6 +4,7 @@ mod openapi;
 mod mcp;
 mod jobs;
 mod wiki;
+mod sandbox;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -28,6 +29,12 @@ pub struct AppState {
     /// subsequent sendmessage call can retrieve it without the model needing
     /// to pass the full base64 string through its context window.
     pub pending_email_raw:    Mutex<Option<String>>,
+    /// Whether the user has approved code execution (run_python) for this session.
+    /// Resets to false on app restart (session-toggle permission model).
+    pub code_exec_unlocked:   Mutex<bool>,
+    /// In-flight code-execution permission request: the agent loop parks a
+    /// oneshot sender here while it waits for the frontend to approve/deny.
+    pub pending_code_permission: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
 }
 
 impl Default for AppState {
@@ -47,6 +54,8 @@ impl Default for AppState {
             job_runs:        Mutex::new(jobs::load_runs()),
             tray:            Mutex::new(None),
             pending_email_raw: Mutex::new(None),
+            code_exec_unlocked: Mutex::new(false),
+            pending_code_permission: Mutex::new(None),
         }
     }
 }
@@ -100,6 +109,10 @@ pub struct SendMessageArgs {
     pub tools: Vec<ollama::ToolSchema>,
     #[serde(default)]
     pub image_paths: Vec<String>,
+    /// Non-image files the user attached. The run_python sandbox is allowed to
+    /// read/write these even if they fall outside the configured allowed dirs.
+    #[serde(default)]
+    pub file_paths: Vec<String>,
     // LLM generation options (all optional)
     #[serde(default)]
     pub temperature: Option<f64>,
@@ -222,6 +235,7 @@ async fn send_message(
         specs_snapshot,
         &state.mcp_connections,
         allowed_dirs_snapshot,
+        args.file_paths.clone(), // sandbox may read/write attached files
         args.web_search_results,
         &app,
         false, // silent = false for interactive chat
@@ -232,6 +246,17 @@ async fn send_message(
 }
 
 // ── Sandbox commands ──────────────────────────────────────────────────────────
+
+/// Frontend's response to an `agent-permission-request` for run_python.
+/// Resolves the oneshot the agent loop is awaiting. `approved = true` unlocks
+/// code execution for the rest of the session.
+#[tauri::command]
+fn respond_code_permission(approved: bool, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(tx) = state.pending_code_permission.lock().unwrap().take() {
+        let _ = tx.send(approved);
+    }
+    Ok(())
+}
 
 #[tauri::command]
 fn get_allowed_dirs(state: State<'_, AppState>) -> Vec<String> {
@@ -1021,6 +1046,7 @@ pub fn run() {
             add_allowed_dir,
             remove_allowed_dir,
             set_allowed_dirs,
+            respond_code_permission,
             write_file_text,
             read_file_text,
             read_image_data_url,

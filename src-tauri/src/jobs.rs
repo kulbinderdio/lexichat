@@ -430,6 +430,7 @@ pub async fn execute_job(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
             registered_specs, &temp_mcp, ctx.allowed_dirs.clone(),
+            Vec::new(), // no attached-file sandbox paths in jobs
             10, app, true, 25, // 25 steps — enough headroom for multi-step workflows
         ).await;
         // temp_mcp drops here → MCPConnections drop → kill_on_drop kills stdio processes
@@ -461,6 +462,7 @@ pub async fn execute_job(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
             specs, &state.mcp_connections, allowed_dirs,
+            Vec::new(), // no attached-file sandbox paths in jobs
             10, app, true, 25, // 25 steps — enough headroom for multi-step workflows
         ).await
     };

@@ -205,8 +205,15 @@ impl MCPConnection {
                 auth:   config.auth.clone(),
             }
         } else {
-            let mut cmd = tokio::process::Command::new(&config.command);
-            cmd.args(&config.args)
+            // Split on whitespace so users can paste a full command string
+            // (e.g. "docker mcp gateway run --profile test") into the command field.
+            let mut parts = config.command.split_whitespace();
+            let exe = parts.next().unwrap_or("");
+            let inline_args: Vec<&str> = parts.collect();
+
+            let mut cmd = tokio::process::Command::new(exe);
+            cmd.args(&inline_args)
+               .args(&config.args)
                .envs(&config.env)
                .kill_on_drop(true)
                .stdin(Stdio::piped())

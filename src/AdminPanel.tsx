@@ -137,7 +137,13 @@ const BUILTIN_TOOLS = [
   { name: "find_old_files",      label: "Find Old Files",       icon: "🗂️" },
   { name: "web_search",          label: "Web Search",           icon: "🌐" },
   { name: "get_current_datetime", label: "Get Date / Time",      icon: "🕐" },
+  { name: "run_python",          label: "Run Python (Code Sandbox)", icon: "🐍" },
 ];
+
+// Tools that are opt-in: disabled unless the user explicitly turns them on.
+const OPT_IN_TOOLS = new Set(["run_python"]);
+const toolEnabled = (enabled: Record<string, boolean>, name: string): boolean =>
+  OPT_IN_TOOLS.has(name) ? enabled[name] === true : enabled[name] !== false;
 
 const DEFAULT_SYSTEM_PROMPT = `You are Lexi, a personal AI assistant running locally for a single authorised user.
 You have tools to read local files and search the web. Be proactive — use tools immediately rather than asking the user for paths or clarification.
@@ -761,14 +767,18 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
           <label key={t.name} className="admin-row" style={{ cursor: "pointer" }}>
             <input
               type="checkbox"
-              checked={settings.enabledTools[t.name] !== false}
+              checked={toolEnabled(settings.enabledTools, t.name)}
               onChange={e => setToolEnabled(t.name, e.target.checked)}
               className="admin-checkbox"
             />
             <span className="tool-icon">{t.icon}</span>
             <div className="admin-row-text">
               <span className="admin-row-title">{t.label}</span>
-              <span className="admin-row-sub">{t.name}</span>
+              <span className="admin-row-sub">
+                {t.name === "run_python"
+                  ? "Global master switch. Executes LLM-written Python in a sandbox; asks for approval before the first run each session. Profiles can opt out individually."
+                  : t.name}
+              </span>
             </div>
           </label>
         ))}
