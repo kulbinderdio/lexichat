@@ -1,5 +1,10 @@
 # LexiChat
 
+
+<img width="1284" height="852" alt="image" src="https://github.com/user-attachments/assets/712aee36-6659-4fb5-b5cd-066c775e7dae" />
+
+
+
 A local AI chat desktop application built with Tauri 2.x (Rust backend) and React/TypeScript frontend. Powered by [Ollama](https://ollama.com), with support for file tools, OpenAPI integrations, and MCP servers.
 
 ## Prerequisites
