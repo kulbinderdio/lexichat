@@ -1,13 +1,13 @@
 # LexiChat
 
-A local AI chat desktop application built with Tauri 2.x (Rust backend) and React/TypeScript frontend. Powered by [Ollama](https://ollama.com), with support for file tools, OpenAPI integrations, and MCP servers.
+A local AI chat desktop application built with Tauri 2.x (Rust backend) and React/TypeScript frontend. Powered by [Ollama](https://ollama.com), with support for file tools, a Python code-execution sandbox, OpenAPI integrations, and MCP servers.
 
 ## Prerequisites
 
 | Tool | Version | Notes |
 |------|---------|-------|
 | [Node.js](https://nodejs.org) | 18+ | npm 9+ included |
-| [Rust](https://rustup.rs) | stable | via `rustup` |
+| [Rust](https://rustup.rs) | stable ≥ 1.95 | via `rustup`; the `monty` code-sandbox crate requires rustc 1.95+ |
 | [Ollama](https://ollama.com) | any | must be running locally |
 
 ### macOS-specific
@@ -141,6 +141,7 @@ User settings are stored in `localStorage` within the app's WebView. The sandbox
 3. Open **Settings** (gear icon) to:
    - Create chat profiles with different models and system prompts
    - Enable/disable built-in file and web search tools
+   - Enable the Python code-execution sandbox (`run_python`, off by default)
    - Register OpenAPI specs for external API access
    - Connect MCP servers
    - Configure sandbox directories for file tool access
@@ -164,8 +165,25 @@ User settings are stored in `localStorage` within the app's WebView. The sandbox
 | `find_old_files` | Find files older than N days |
 | `web_search` | DuckDuckGo web search |
 | `compose_email` | Build a base64url-encoded RFC 2822 email (for Gmail API) |
+| `run_python` | Execute Python in a secure sandbox to compute answers (opt-in) |
 
 All file tools are sandboxed — they only operate within directories you explicitly allow in Settings.
+
+### Code Execution Sandbox (`run_python`)
+
+`run_python` lets the model **write and run Python** to compute exact answers — arithmetic, data processing, parsing, date/string logic — instead of predicting them token by token.
+
+**Interpreter / library.** Code runs in [Monty](https://github.com/pydantic/monty) (`monty` crate, MIT-licensed) — a from-scratch, sandboxed Python-subset interpreter written in Rust by [Pydantic](https://pydantic.dev). It uses [Ruff](https://github.com/astral-sh/ruff)'s parser to turn source into bytecode and executes it on its own VM, embedded directly in the Tauri backend (no external process, no container). It is pinned as a git dependency in `src-tauri/Cargo.toml` (the crates.io `monty` is a placeholder) and requires **rustc ≥ 1.95**.
+
+**Security model.** Monty is default-deny: the sandbox has **no network, no environment, and no direct filesystem access**. Execution is capped by wall-clock time (10s) and heap memory (256 MB), so runaway code stops on its own.
+
+**Permission.** The tool is **off by default**. It's a global master switch (Settings → Tools → *Run Python (Code Sandbox)*) with per-profile opt-out. The first time it runs in a session, the app prompts for explicit approval; approving unlocks it for the rest of that session. Background scheduled jobs can never run it unless already unlocked interactively.
+
+**File access.** Native `open()` / `pathlib` are disabled. Instead the code may call three host functions — `read_file(path)`, `write_file(path, content)`, `list_files(dir)` — which route through the **same allowed-directory checks** (`tools::check_path`) as the built-in file tools. Files you attach to a message are also readable.
+
+**Limitations.** A practical subset of Python: **no class definitions** and **no third-party packages** (no `numpy`/`pandas`/`requests`).
+
+Implementation lives in `src-tauri/src/sandbox.rs` (unit-tested via `cargo test --lib sandbox`).
 
 ---
 

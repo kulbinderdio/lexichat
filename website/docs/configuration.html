@@ -214,6 +214,13 @@ tailwind.config = {
           Avoid adding high-level paths like your home directory (<code class="prose-code">~</code>) to the allowed list. Instead, add specific working folders (e.g. <code class="prose-code">~/Documents/LexiChat</code>) to minimise the blast radius of accidental writes.
         </div>
       </div>
+
+      <div class="bg-sky-50 border border-sky-100 rounded-xl p-4 flex gap-3 mt-4">
+        <span class="material-symbols-outlined text-sky-500 flex-shrink-0 mt-0.5">terminal</span>
+        <div class="text-sm text-slate-700">
+          The <a href="tools.html#run_python" class="text-accent hover:underline">Python code sandbox</a> (<code class="prose-code">run_python</code>) honours this same allowed-directory list. Enable it under Settings → Tools (it's off by default and asks permission before the first run each session). Note that if <strong>no</strong> directories are allowed, file access is unrestricted — add at least one folder to constrain both the file tools and the sandbox.
+        </div>
+      </div>
     </section>
 
     <!-- Chat Parameters -->

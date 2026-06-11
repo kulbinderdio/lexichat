@@ -65,6 +65,7 @@ tailwind.config = {
       <a href="#chat" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Chat &amp; Streaming</a>
       <a href="#web-search" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Web Search</a>
       <a href="#file-tools" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">File Tools</a>
+      <a href="#code-sandbox" class="flex items-center gap-1.5 text-sm text-slate-600 hover:text-accent py-1 transition-colors">Code Sandbox <span class="px-1.5 py-0.5 bg-sky-100 text-sky-700 text-[9px] font-bold tracking-wider uppercase rounded">New</span></a>
       <a href="#vision" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Vision / Images</a>
       <a href="#profiles" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Profiles</a>
       <a href="#model-control" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Model Control</a>
@@ -160,6 +161,40 @@ tailwind.config = {
       <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3">
         <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">lock</span>
         <div class="text-sm text-slate-700"><strong>Sandboxed access:</strong> File tools are strictly limited to the directories you configured. The AI cannot read or write outside those paths — any attempt is blocked at the Rust layer.</div>
+      </div>
+    </section>
+
+    <!-- Code Sandbox -->
+    <section id="code-sandbox" class="mb-12 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-1 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">terminal</span> Python Code Sandbox
+        <span class="px-2 py-0.5 bg-sky-600 text-white text-[10px] font-black tracking-widest uppercase rounded-full">New · v1.7.1</span>
+      </h2>
+      <div class="text-xs text-slate-400 mb-4">Built-in tool · Settings → Tools</div>
+      <p class="text-slate-600 mb-4">With the <code class="prose-code bg-slate-100 px-1.5 py-0.5 rounded text-sm">run_python</code> tool enabled, the AI can write and run Python to <strong>compute exact answers</strong> — maths, data wrangling, parsing, date logic — instead of estimating them. Code runs in an isolated, offline interpreter (<a href="https://github.com/pydantic/monty" class="text-accent hover:underline" target="_blank" rel="noopener">Monty</a>).</p>
+
+      <div class="grid sm:grid-cols-2 gap-4 mb-5">
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-sky-500 mt-0.5">lock</span>
+          <div><div class="font-medium text-sm mb-0.5">Isolated &amp; offline</div><div class="text-xs text-slate-500">No network and no direct filesystem access. CPU time and memory are capped, so runaway code stops on its own.</div></div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-sky-500 mt-0.5">verified_user</span>
+          <div><div class="font-medium text-sm mb-0.5">Permission first</div><div class="text-xs text-slate-500">Off by default; asks before the first run each session, then stays unlocked for that session. Profiles can opt out.</div></div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-sky-500 mt-0.5">folder_managed</span>
+          <div><div class="font-medium text-sm mb-0.5">Respects your file sandbox</div><div class="text-xs text-slate-500">Reads and writes only via helpers that reuse your allowed-directory rules; files you attach are included.</div></div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-sky-500 mt-0.5">function</span>
+          <div><div class="font-medium text-sm mb-0.5">Built for computation</div><div class="text-xs text-slate-500">A practical Python subset — no class definitions and no third-party packages (numpy / pandas / requests).</div></div>
+        </div>
+      </div>
+
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex gap-3">
+        <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">menu_book</span>
+        <div class="text-sm text-slate-700">See the <a href="tools.html#run_python" class="text-accent hover:underline">run_python reference</a> for parameters, the in-sandbox file helpers, and a worked example.</div>
       </div>
     </section>
 

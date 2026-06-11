@@ -13,7 +13,7 @@
 
   gtag('config', 'G-NHGZKJ6KE1');
 </script>
-<meta name="description" content="Reference for LexiChat's built-in AI tools: web_search, read_file, write_file, and list_directory."/>
+<meta name="description" content="Reference for LexiChat's built-in AI tools: run_python (code sandbox), web_search, read_file, write_file, and list_directory."/>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
@@ -69,6 +69,7 @@ tailwind.config = {
     <div class="sticky top-24 space-y-1">
       <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Tools</div>
       <a href="#overview" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Overview</a>
+      <a href="#run_python" class="flex items-center gap-1.5 text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">run_python <span class="px-1.5 py-0.5 bg-sky-100 text-sky-700 text-[9px] font-bold tracking-wider uppercase rounded not-italic">New</span></a>
       <a href="#web_search" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">web_search</a>
       <a href="#read_file" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">read_file</a>
       <a href="#write_file" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors prose-code">write_file</a>
@@ -110,6 +111,81 @@ tailwind.config = {
         </div>
         <p class="text-xs text-slate-400 mt-3">The loop can repeat multiple times in a single response if the model needs to call several tools.</p>
       </div>
+    </section>
+
+    <!-- run_python -->
+    <section id="run_python" class="mb-12 scroll-mt-24">
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 bg-sky-50 rounded-xl flex items-center justify-center flex-shrink-0">
+          <span class="material-symbols-outlined text-sky-500">terminal</span>
+        </div>
+        <div>
+          <h2 class="text-xl font-semibold prose-code flex items-center gap-2">run_python
+            <span class="px-2 py-0.5 bg-sky-600 text-white text-[10px] font-black tracking-widest uppercase rounded-full not-italic">New · v1.7.1</span>
+          </h2>
+          <div class="text-xs text-slate-400">Run Python in a secure sandbox to compute answers</div>
+        </div>
+      </div>
+
+      <p class="text-slate-600 mb-4">Lets the model <strong>execute Python</strong> to actually compute a result — arithmetic, data processing, string and date manipulation, algorithmic logic — instead of predicting the answer token by token. Code runs in <a href="https://github.com/pydantic/monty" class="text-accent hover:underline" target="_blank" rel="noopener">Monty</a>, a Rust-based sandboxed Python interpreter that has no operating-system access of its own.</p>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3 mb-4">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">toggle_off</span>
+        <div class="text-sm text-slate-700"><strong>Off by default.</strong> Turn on <em>Run Python (Code Sandbox)</em> under Settings → Tools. The first time it runs in a session LexiChat asks for your explicit permission; approving unlocks it for the rest of that session. (Profiles can opt out individually.)</div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl overflow-hidden mb-4">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-200">
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Parameter</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Type</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Required</th>
+              <th class="text-left px-4 py-3 font-semibold text-slate-700">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="px-4 py-3 prose-code font-medium">code</td>
+              <td class="px-4 py-3 text-slate-400">string</td>
+              <td class="px-4 py-3"><span class="bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">yes</span></td>
+              <td class="px-4 py-3 text-slate-600">The Python source to execute. Use <code class="prose-code">print()</code> to output results.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Returns</div>
+        <p class="text-sm text-slate-600">Everything the code prints to stdout, plus the value of the final expression. Runtime errors are returned as text so the model can correct its code and retry.</p>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-4">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">File access from inside the sandbox</div>
+        <p class="text-sm text-slate-600 mb-3">Native <code class="prose-code">open()</code> and <code class="prose-code">pathlib</code> are disabled. Instead the code can call three helpers that route through the <strong>same allowed-directory checks</strong> as the file tools above:</p>
+        <ul class="text-sm text-slate-600 space-y-1.5 mb-3">
+          <li class="flex items-start gap-2"><span class="material-symbols-outlined text-sky-500 text-base" style="font-size:16px">draft</span><span><code class="prose-code">read_file(path)</code> — returns the file contents as a string</span></li>
+          <li class="flex items-start gap-2"><span class="material-symbols-outlined text-sky-500 text-base" style="font-size:16px">edit_document</span><span><code class="prose-code">write_file(path, content)</code> — writes the file, returns bytes written</span></li>
+          <li class="flex items-start gap-2"><span class="material-symbols-outlined text-sky-500 text-base" style="font-size:16px">folder_open</span><span><code class="prose-code">list_files(dir)</code> — returns the names in a directory</span></li>
+        </ul>
+        <p class="text-sm text-slate-600">Paths must be inside your allowed folders, or a file you attached to the message.</p>
+      </div>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 flex gap-3 mb-4">
+        <span class="material-symbols-outlined text-slate-400 flex-shrink-0 mt-0.5">info</span>
+        <div class="text-sm text-slate-600"><strong>Supports a practical subset of Python.</strong> No class definitions and no third-party packages (no numpy / pandas / requests). There is no network access, and CPU time and memory are capped so runaway code stops on its own.</div>
+      </div>
+
+      <pre><code><span class="cm">// User says: "What's the 30th Fibonacci number?"</span>
+{
+  <span class="key">"name"</span>: <span class="str">"run_python"</span>,
+  <span class="key">"arguments"</span>: {
+    <span class="key">"code"</span>: <span class="str">"a, b = 0, 1\nfor _ in range(30):\n    a, b = b, a + b\nprint(a)"</span>
+  }
+}
+
+<span class="cm">// Returned to model</span>
+<span class="num">832040</span></code></pre>
     </section>
 
     <!-- web_search -->
@@ -357,6 +433,10 @@ tailwind.config = {
         <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
           <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">cloud_off</span>
           <div class="text-sm text-slate-600"><strong>No exfiltration</strong> — tool results go back to your local Ollama model only. No tool sends data to any external service (web_search sends the query to DuckDuckGo but not your file contents).</div>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
+          <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">terminal</span>
+          <div class="text-sm text-slate-600"><strong>Sandboxed code execution</strong> — <code class="prose-code">run_python</code> runs in an isolated interpreter with no network and no direct filesystem access; its file helpers reuse the same allowed-directory checks. It's off by default and asks permission before the first run each session.</div>
         </div>
       </div>
     </section>
