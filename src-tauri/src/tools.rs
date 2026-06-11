@@ -47,7 +47,7 @@ pub async fn dispatch_builtin(name: &str, args: &Value, allowed_dirs: &[String],
 
 // ── Sandbox check ─────────────────────────────────────────────────────────────
 
-fn check_path(path: &str, allowed_dirs: &[String]) -> Result<(), String> {
+pub(crate) fn check_path(path: &str, allowed_dirs: &[String]) -> Result<(), String> {
     if allowed_dirs.is_empty() {
         return Ok(());
     }

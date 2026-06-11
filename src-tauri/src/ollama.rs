@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use crate::openapi::RegisteredSpec;
 use crate::mcp::MCPConnection;
 
@@ -380,6 +380,9 @@ pub async fn agent_loop(
     openapi_specs: Vec<RegisteredSpec>,
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: Vec<String>,
+    // Extra paths the run_python sandbox may access (e.g. user-attached files),
+    // in addition to `allowed_dirs`. Empty for background jobs.
+    sandbox_paths: Vec<String>,
     web_search_results: usize,
     app: &AppHandle,
     silent: bool,
@@ -510,7 +513,7 @@ pub async fn agent_loop(
             }
 
             // Route: builtin → openapi → mcp
-            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs, web_search_results, app).await;
+            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs, &sandbox_paths, web_search_results, silent, app).await;
 
             // Cap large responses — but never truncate passthrough values like compose_email
             // whose full content must be forwarded intact to the next tool call.
@@ -567,9 +570,16 @@ async fn dispatch_tool(
     openapi_specs: &[RegisteredSpec],
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: &[String],
+    sandbox_paths: &[String],
     web_search_results: usize,
+    silent: bool,
     app: &AppHandle,
 ) -> String {
+    // 0. Code-execution sandbox — gated behind a per-session permission prompt.
+    if name == "run_python" {
+        return dispatch_run_python(args, allowed_dirs, sandbox_paths, silent, app).await;
+    }
+
     // 1. Try built-in tools first
     let builtin_names = ["read_file","write_file","list_files","search_files",
         "search_in_files","get_file_info","list_directory_tree","create_directory",
@@ -695,4 +705,52 @@ async fn dispatch_tool(
     }
 
     format!("Unknown tool: {name}")
+}
+
+/// Handle a `run_python` call: enforce the per-session execution permission, then
+/// run the code in the Monty sandbox with file access scoped to `allowed_dirs`
+/// plus any attached files (`sandbox_paths`).
+async fn dispatch_run_python(
+    args: &serde_json::Value,
+    allowed_dirs: &[String],
+    sandbox_paths: &[String],
+    silent: bool,
+    app: &AppHandle,
+) -> String {
+    let code = args["code"].as_str().unwrap_or("").to_string();
+    if code.trim().is_empty() {
+        return "Error: run_python requires a non-empty 'code' string.".into();
+    }
+
+    // Permission gate (session toggle): once approved, stays unlocked until the
+    // app restarts. Background jobs can never prompt, so they require a prior
+    // interactive unlock.
+    if let Some(state) = app.try_state::<crate::AppState>() {
+        let unlocked = *state.code_exec_unlocked.lock().unwrap();
+        if !unlocked {
+            if silent {
+                return "Error: code execution requires interactive approval and is \
+                        disabled in background jobs.".into();
+            }
+            let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+            *state.pending_code_permission.lock().unwrap() = Some(tx);
+            let _ = app.emit("agent-permission-request", serde_json::json!({ "code": code }));
+
+            let approved = matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(300), rx).await,
+                Ok(Ok(true))
+            );
+            *state.pending_code_permission.lock().unwrap() = None;
+
+            if !approved {
+                return "User denied code execution.".into();
+            }
+            *state.code_exec_unlocked.lock().unwrap() = true;
+        }
+    }
+
+    // Sandbox may touch the run's allowed dirs plus any attached files.
+    let mut allow = allowed_dirs.to_vec();
+    allow.extend(sandbox_paths.iter().cloned());
+    crate::sandbox::run_python(code, allow).await
 }

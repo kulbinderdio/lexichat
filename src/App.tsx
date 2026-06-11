@@ -70,6 +70,7 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "compose_email", description: "Build a base64url-encoded RFC 2822 email ready for the Gmail API. Returns ONLY the raw base64url string — use the entire return value as the 'raw' field in gmail_sendmessage, with no modification.", parameters: { type: "object", properties: { to: { type: "string", description: "Recipient email address(es), comma-separated." }, from: { type: "string", description: "Sender email address (optional)." }, subject: { type: "string", description: "Email subject line." }, body: { type: "string", description: "Plain text email body." }, reply_to_message_id: { type: "string", description: "Message-ID to reply to, for threading (optional)." } }, required: ["to","subject","body"] } } },
   { type: "function", function: { name: "fetch_webpage", description: "Fetch and read the full text content of a webpage by URL. Use this to read a specific URL the user provides, or to read the full article behind a web search result.", parameters: { type: "object", properties: { url: { type: "string", description: "Full URL to fetch, must start with http:// or https://" } }, required: ["url"] } } },
   { type: "function", function: { name: "get_current_datetime", description: "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use whenever you need today's date or a timestamp for a filename.", parameters: { type: "object", properties: {}, required: [] } } },
+  { type: "function", function: { name: "run_python", description: "Execute Python code in a secure sandbox to compute or answer questions (math, data processing, string/logic work). Use print() to output results. Supports a subset of Python: NO class definitions and NO third-party packages (no numpy/pandas/requests). For file access use the provided functions read_file(path)->str, write_file(path, content)->int, and list_files(dir)->list — do NOT use open() or pathlib (they are disabled). Paths must be within the user's allowed folders or attached files.", parameters: { type: "object", properties: { code: { type: "string", description: "The Python source code to execute." } }, required: ["code"] } } },
 ];
 
 const WIKI_TOOLS: ToolSchema[] = [
@@ -710,6 +711,8 @@ export default function App() {
   const [showAbout, setShowAbout] = useState(false);
   const [view,     setView]     = useState<"chat" | "jobs">("chat");
   const [jobBadge, setJobBadge] = useState(0);
+  // Pending run_python execution awaiting the user's approval.
+  const [permissionRequest, setPermissionRequest] = useState<{ code: string } | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -799,6 +802,11 @@ export default function App() {
       setView(v => { if (v !== "jobs") setJobBadge(prev => prev + 1); return v; });
     }).then(u => cleanup.push(u));
 
+    // Code-execution permission request from the run_python sandbox.
+    listen<{ code: string }>("agent-permission-request", e => {
+      setPermissionRequest({ code: e.payload.code });
+    }).then(u => cleanup.push(u));
+
     // Persist refreshed OAuth2 access tokens so they survive restarts.
     // Covers both OpenAPI specs and MCP servers across global settings and all profiles.
     listen<{ spec_id: string; access_token: string }>("openapi-token-refreshed", e => {
@@ -869,8 +877,14 @@ export default function App() {
 
     // Profile overrides global settings; chatParams toggles can further restrict
     const effectiveEnabledTools = activeProfile?.enabledTools ?? settings.enabledTools;
-    const enabledTools = ALL_BUILTIN_TOOLS.filter(
-      t => effectiveEnabledTools[t.function.name] !== false
+    // run_python (code execution) is gated by a GLOBAL master switch — a security
+    // capability that defaults off. Once the master is on it behaves like any other
+    // tool: enabled unless a profile explicitly opts out.
+    const runPythonMaster = settings.enabledTools.run_python === true;
+    const enabledTools = ALL_BUILTIN_TOOLS.filter(t =>
+      t.function.name === "run_python"
+        ? runPythonMaster && effectiveEnabledTools.run_python !== false
+        : effectiveEnabledTools[t.function.name] !== false
     );
     // Wiki tools injected when wiki memory is enabled globally
     if (settings.wikiEnabled) enabledTools.push(...WIKI_TOOLS);
@@ -950,6 +964,7 @@ export default function App() {
           system_prompt: systemPrompt,
           tools: enabledTools,
           image_paths: imagePaths,
+          file_paths: otherFiles,
           temperature: resolved.temperature,
           top_p: resolved.topP ?? null,
           top_k: resolved.topK ?? null,
@@ -1266,10 +1281,38 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 0.1.7</div>
+            <div className="about-version">Version 1.7.1</div>
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {permissionRequest && (
+        <div className="modal-overlay">
+          <div className="about-modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 560, textAlign: "left" }}>
+            <h2 className="about-name" style={{ fontSize: 18 }}>Run Python code?</h2>
+            <p className="about-desc">
+              The assistant wants to execute this code in the sandbox. It can read and
+              write files within your allowed folders and attached files. Approving will
+              allow code execution for the rest of this session.
+            </p>
+            <pre style={{
+              background: "var(--code-bg, #1e1e1e)", color: "var(--code-fg, #e0e0e0)",
+              padding: 12, borderRadius: 6, maxHeight: 280, overflow: "auto",
+              fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word",
+            }}>{permissionRequest.code}</pre>
+            <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
+              <button className="btn" onClick={() => {
+                invoke("respond_code_permission", { approved: false }).catch(() => {});
+                setPermissionRequest(null);
+              }}>Deny</button>
+              <button className="btn primary" onClick={() => {
+                invoke("respond_code_permission", { approved: true }).catch(() => {});
+                setPermissionRequest(null);
+              }}>Allow &amp; run</button>
+            </div>
           </div>
         </div>
       )}
