@@ -5,7 +5,25 @@
 
 
 
-A local AI chat desktop application built with Tauri 2.x (Rust backend) and React/TypeScript frontend. Powered by [Ollama](https://ollama.com), with support for file tools, OpenAPI integrations, and MCP servers.
+**Your private AI data assistant.**
+
+LexiChat connects a local LLM to **your data** — REST APIs, SPARQL / linked-data endpoints, MCP servers, and local files — and runs entirely on your machine via [Ollama](https://ollama.com). No cloud, no subscriptions, nothing leaves your device.
+
+Built with Tauri 2.x (Rust backend) and a React/TypeScript frontend.
+
+## Connect your data
+
+LexiChat is built around bringing your own data to a private model. Each source becomes a tool the AI can call, all managed in Settings and scoped per profile:
+
+| Source | What it does |
+|--------|--------------|
+| **Local files** | Sandboxed read / write / search over folders you explicitly allow |
+| **REST APIs (OpenAPI)** | Paste an OpenAPI 3.x spec → one callable tool per operation |
+| **SPARQL endpoints** | Query linked-data / RDF services (e.g. UK gov open data); auto-generated query + schema tools, primed with your prefixes and example queries |
+| **MCP servers** | Connect Model Context Protocol servers (stdio or HTTP) |
+| **Web search** | Built-in DuckDuckGo search, no API key |
+
+Ships with ready-to-use SPARQL endpoints (HM Land Registry, OpenDataCommunities) and a built-in Wikipedia API. See the [Integrations guide](https://github.com/kulbinderdio/lexichat/blob/main/website/docs/integrations.html) for setup details.
 
 ## Prerequisites
 
@@ -55,10 +73,10 @@ The CI/CD workflow builds installers for all platforms automatically. To trigger
 
 ```bash
 # 1. Tag the commit you want to release
-git tag v0.2.0
+git tag v1.8.0
 
 # 2. Push the tag — this kicks off the build
-git push origin v0.2.0
+git push origin v1.8.0
 ```
 
 GitHub Actions will run 4 parallel jobs (macOS, Windows, Linux x86-64, Linux ARM64). When all finish (typically 15–25 minutes), a **draft release** appears at:
@@ -147,12 +165,15 @@ User settings are stored in `localStorage` within the app's WebView. The sandbox
    - Create chat profiles with different models and system prompts
    - Enable/disable built-in file and web search tools
    - Register OpenAPI specs for external API access
+   - Add SPARQL endpoints for linked-data queries
    - Connect MCP servers
    - Configure sandbox directories for file tool access
 
 ---
 
-## Built-in Tools
+## Built-in Tools (local files & web)
+
+These ship with the app and cover local-file access and web search. They sit alongside the external data connectors above (OpenAPI, SPARQL, MCP).
 
 | Tool | Description |
 |------|-------------|
