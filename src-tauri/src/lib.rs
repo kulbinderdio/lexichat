@@ -1,6 +1,7 @@
 mod ollama;
 mod tools;
 mod openapi;
+mod sparql;
 mod mcp;
 mod jobs;
 mod wiki;
@@ -11,6 +12,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use serde::{Deserialize, Serialize};
 use openapi::RegisteredSpec;
+use sparql::RegisteredSparqlEndpoint;
 use mcp::{MCPServerConfig, MCPConnection, AuthConfig};
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -19,6 +21,7 @@ pub struct AppState {
     pub ollama_host:          Mutex<String>,
     pub conversation:         Mutex<Vec<ollama::WireMessage>>,
     pub openapi_specs:        Mutex<Vec<RegisteredSpec>>,
+    pub sparql_endpoints:     Mutex<Vec<RegisteredSparqlEndpoint>>,
     pub mcp_servers:          Mutex<Vec<MCPServerConfig>>,
     pub mcp_connections:      tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     pub allowed_dirs:         Mutex<Vec<String>>,
@@ -47,6 +50,7 @@ impl Default for AppState {
             ollama_host:     Mutex::new("http://localhost:11434".into()),
             conversation:    Mutex::new(Vec::new()),
             openapi_specs:   Mutex::new(Vec::new()),
+            sparql_endpoints: Mutex::new(Vec::new()),
             mcp_servers:     Mutex::new(Vec::new()),
             mcp_connections: tokio::sync::Mutex::new(HashMap::new()),
             allowed_dirs:    Mutex::new(saved),
@@ -191,6 +195,15 @@ async fn send_message(
         all_tools.extend(extra);
     }
 
+    // Always append SPARQL endpoint tools (profile-scoped by set_sparql_endpoints)
+    {
+        let extra: Vec<ollama::ToolSchema> = state.sparql_endpoints.lock().unwrap().iter()
+            .flat_map(|ep| ep.tools.iter()
+                .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
+            .collect();
+        all_tools.extend(extra);
+    }
+
     // Append MCP tools — filtered by enabled_mcp_server_ids (empty = all servers, i.e. no profile)
     {
         let connections = state.mcp_connections.lock().await;
@@ -204,6 +217,7 @@ async fn send_message(
     }
 
     let specs_snapshot: Vec<openapi::RegisteredSpec> = state.openapi_specs.lock().unwrap().clone();
+    let sparql_snapshot: Vec<sparql::RegisteredSparqlEndpoint> = state.sparql_endpoints.lock().unwrap().clone();
     let allowed_dirs_snapshot: Vec<String> = state.allowed_dirs.lock().unwrap().clone();
 
     let options = if args.temperature.is_some() || args.top_p.is_some() || args.top_k.is_some()
@@ -233,6 +247,7 @@ async fn send_message(
         args.keep_alive.clone(),
         &state.conversation,
         specs_snapshot,
+        sparql_snapshot,
         &state.mcp_connections,
         allowed_dirs_snapshot,
         args.file_paths.clone(), // sandbox may read/write attached files
@@ -442,6 +457,155 @@ async fn list_openapi_specs(state: State<'_, AppState>) -> Result<Vec<SpecInfo>,
             path: t.path.clone(),
         }).collect(),
     }).collect())
+}
+
+// ── SPARQL commands ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct RegisterSparqlArgs {
+    pub title: String,
+    pub endpoint_url: String,
+    #[serde(default)] pub prefixes: String,
+    #[serde(default)] pub schema_summary: String,
+    #[serde(default)] pub example_queries: Vec<sparql::ExampleQuery>,
+    #[serde(default)] pub usage_hint: String,
+    #[serde(default)] pub auth: AuthConfig,
+    #[serde(default = "default_read_only")] pub read_only: bool,
+}
+
+fn default_read_only() -> bool { true }
+
+#[derive(Serialize)]
+pub struct SparqlInfo {
+    pub id: String,
+    pub title: String,
+    pub endpoint_url: String,
+    pub tool_count: usize,
+    pub tools: Vec<String>,
+}
+
+fn sparql_info(ep: &RegisteredSparqlEndpoint) -> SparqlInfo {
+    SparqlInfo {
+        id: ep.id.clone(),
+        title: ep.title.clone(),
+        endpoint_url: ep.endpoint_url.clone(),
+        tool_count: ep.tools.len(),
+        tools: ep.tools.iter().map(|t| t.name.clone()).collect(),
+    }
+}
+
+fn build_endpoint(id: String, args: RegisterSparqlArgs) -> RegisteredSparqlEndpoint {
+    let mut ep = RegisteredSparqlEndpoint {
+        id,
+        title: args.title,
+        endpoint_url: args.endpoint_url,
+        prefixes: args.prefixes,
+        schema_summary: args.schema_summary,
+        example_queries: args.example_queries,
+        usage_hint: args.usage_hint,
+        auth: args.auth,
+        read_only: args.read_only,
+        tools: Vec::new(),
+    };
+    ep.tools = sparql::build_tools(&ep);
+    ep
+}
+
+#[tauri::command]
+async fn register_sparql_endpoint(
+    args: RegisterSparqlArgs,
+    state: State<'_, AppState>,
+) -> Result<SparqlInfo, String> {
+    if args.title.trim().is_empty() || args.endpoint_url.trim().is_empty() {
+        return Err("Title and endpoint URL are required".into());
+    }
+    let ep = build_endpoint(uuid_v4(), args);
+    let info = sparql_info(&ep);
+    state.sparql_endpoints.lock().unwrap().push(ep);
+    Ok(info)
+}
+
+#[tauri::command]
+async fn remove_sparql_endpoint(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.sparql_endpoints.lock().unwrap().retain(|e| e.id != id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_sparql_endpoints(state: State<'_, AppState>) -> Result<Vec<SparqlInfo>, String> {
+    Ok(state.sparql_endpoints.lock().unwrap().iter().map(sparql_info).collect())
+}
+
+/// Compute the tools for a set of endpoints without touching AppState — used by the
+/// Admin SPARQL tab so tool info shows regardless of which profile is active.
+#[tauri::command]
+fn get_sparql_tools(endpoints: Vec<serde_json::Value>) -> Vec<SparqlInfo> {
+    endpoints.iter().filter_map(|e| {
+        let id    = e["id"].as_str().unwrap_or("").to_string();
+        let title = e["title"].as_str().unwrap_or("").to_string();
+        let url   = e["endpoint_url"].as_str().unwrap_or("").to_string();
+        if title.is_empty() || url.is_empty() { return None; }
+        let ep = build_endpoint(id, RegisterSparqlArgs {
+            title,
+            endpoint_url: url,
+            prefixes: e["prefixes"].as_str().unwrap_or("").to_string(),
+            schema_summary: e["schema_summary"].as_str().unwrap_or("").to_string(),
+            example_queries: serde_json::from_value(e["example_queries"].clone()).unwrap_or_default(),
+            usage_hint: e["usage_hint"].as_str().unwrap_or("").to_string(),
+            auth: serde_json::from_value(e["auth"].clone()).unwrap_or_default(),
+            read_only: e["read_only"].as_bool().unwrap_or(true),
+        });
+        Some(sparql_info(&ep))
+    }).collect()
+}
+
+#[derive(Deserialize)]
+pub struct SyncSparqlInput {
+    pub id: String,
+    pub title: String,
+    pub endpoint_url: String,
+    #[serde(default)] pub prefixes: String,
+    #[serde(default)] pub schema_summary: String,
+    #[serde(default)] pub example_queries: Vec<sparql::ExampleQuery>,
+    #[serde(default)] pub usage_hint: String,
+    #[serde(default)] pub auth: AuthConfig,
+    #[serde(default = "default_read_only")] pub read_only: bool,
+}
+
+#[tauri::command]
+async fn set_sparql_endpoints(
+    endpoints: Vec<SyncSparqlInput>,
+    state: State<'_, AppState>,
+) -> Result<Vec<SparqlInfo>, String> {
+    let mut registered = Vec::new();
+    let mut infos = Vec::new();
+    for input in endpoints {
+        let ep = build_endpoint(input.id, RegisterSparqlArgs {
+            title: input.title,
+            endpoint_url: input.endpoint_url,
+            prefixes: input.prefixes,
+            schema_summary: input.schema_summary,
+            example_queries: input.example_queries,
+            usage_hint: input.usage_hint,
+            auth: input.auth,
+            read_only: input.read_only,
+        });
+        infos.push(sparql_info(&ep));
+        registered.push(ep);
+    }
+    *state.sparql_endpoints.lock().unwrap() = registered;
+    Ok(infos)
+}
+
+#[derive(Deserialize)]
+pub struct DiscoverSparqlArgs {
+    pub endpoint_url: String,
+    #[serde(default)] pub auth: AuthConfig,
+}
+
+#[tauri::command]
+async fn discover_sparql_endpoint(args: DiscoverSparqlArgs) -> Result<sparql::DiscoveryResult, String> {
+    Ok(sparql::probe(&args.endpoint_url, &args.auth).await)
 }
 
 // ── MCP commands ──────────────────────────────────────────────────────────────
@@ -1035,6 +1199,12 @@ pub fn run() {
             register_openapi_spec,
             remove_openapi_spec,
             list_openapi_specs,
+            register_sparql_endpoint,
+            remove_sparql_endpoint,
+            list_sparql_endpoints,
+            get_sparql_tools,
+            set_sparql_endpoints,
+            discover_sparql_endpoint,
             add_mcp_server,
             remove_mcp_server,
             list_mcp_servers,

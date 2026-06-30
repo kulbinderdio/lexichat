@@ -13,7 +13,7 @@
 
   gtag('config', 'G-NHGZKJ6KE1');
 </script>
-<meta name="description" content="Connect LexiChat to any REST API using OpenAPI specs or define custom HTTP tools. Full integration guide."/>
+<meta name="description" content="Connect LexiChat to any REST API using OpenAPI specs, query SPARQL / linked-data endpoints, or define custom HTTP tools. Full integration guide."/>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
@@ -74,6 +74,9 @@ tailwind.config = {
       <a href="#openapi-example" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Example spec</a>
       <a href="#custom" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Custom Tools</a>
       <a href="#custom-example" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Example</a>
+      <a href="#sparql" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">SPARQL Endpoints</a>
+      <a href="#sparql-fields" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Endpoint fields</a>
+      <a href="#sparql-example" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Example: Land Registry</a>
       <a href="#auth" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Authentication</a>
       <a href="#managing" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Managing Tools</a>
       <a href="#limitations" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Limitations</a>
@@ -96,14 +99,21 @@ tailwind.config = {
       <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
         <span class="material-symbols-outlined text-accent">hub</span> Overview
       </h2>
-      <p class="text-slate-600 mb-5">Beyond the built-in tools, LexiChat lets you add arbitrary HTTP endpoints as callable tools. There are two ways to do this:</p>
-      <div class="grid sm:grid-cols-2 gap-4">
+      <p class="text-slate-600 mb-5">Beyond the built-in tools, LexiChat lets you connect external data sources as callable tools. There are three ways to do this:</p>
+      <div class="grid sm:grid-cols-3 gap-4">
         <div class="bg-white border border-slate-200 rounded-xl p-5">
           <div class="flex items-center gap-2 mb-3">
             <span class="material-symbols-outlined text-accent">description</span>
             <div class="font-semibold">OpenAPI Import</div>
           </div>
           <p class="text-sm text-slate-600">Paste a JSON or YAML OpenAPI 3.x spec and LexiChat automatically generates one tool per API operation. Best for well-documented public or internal APIs.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent">hub</span>
+            <div class="font-semibold">SPARQL Endpoints</div>
+          </div>
+          <p class="text-sm text-slate-600">Query linked-data / RDF services (e.g. UK government open data). LexiChat generates a query tool plus a schema tool per endpoint, primed with your prefixes and example queries.</p>
         </div>
         <div class="bg-white border border-slate-200 rounded-xl p-5">
           <div class="flex items-center gap-2 mb-3">
@@ -325,12 +335,140 @@ tailwind.config = {
 <span class="cm">// Returns JSON → fed back to model</span></code></pre>
     </section>
 
+    <!-- SPARQL Endpoints -->
+    <section id="sparql" class="mb-10">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">hub</span> SPARQL Endpoints
+      </h2>
+      <p class="text-slate-600 mb-5">SPARQL endpoints expose <strong>linked data</strong> (RDF) — UK government open data, scientific datasets, knowledge graphs, and more. Unlike REST APIs, a SPARQL service has no machine-readable contract describing its data, so instead of importing a spec you assemble a small <strong>bundle</strong> that tells the model how to query it: the endpoint URL, namespace prefixes, a short schema summary, and a few example queries.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Two tools per endpoint</div>
+        <div class="space-y-3 text-sm text-slate-600">
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded text-xs flex-shrink-0 mt-0.5">…_query</span>
+            <p>The AI writes a SPARQL query and this tool runs it (<code class="prose-code">SELECT</code>, <code class="prose-code">ASK</code>, <code class="prose-code">CONSTRUCT</code>, <code class="prose-code">DESCRIBE</code>). Your prefixes, schema summary, and first example are embedded in the tool description so the model can author valid queries. Results come back as a compact table.</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs flex-shrink-0 mt-0.5">…_schema</span>
+            <p>Returns the full vocabulary, prefixes, and all example queries on demand. The model calls this first when it is unsure of the data model — keeping the always-on query-tool description small.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">How to add an endpoint</div>
+        <div class="space-y-3">
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">1</div>
+            <p class="text-sm text-slate-600">Open <strong>Admin → SPARQL</strong> tab and click <strong>+ Add SPARQL Endpoint</strong></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">2</div>
+            <p class="text-sm text-slate-600">Enter a <strong>title</strong> and the <strong>endpoint URL</strong>, then click <strong>Test &amp; discover</strong> — LexiChat confirms the endpoint is live and pre-fills suggested prefixes and a sampled class/property list</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">3</div>
+            <p class="text-sm text-slate-600">Fill in <strong>When to use</strong> (the topics this endpoint answers) and add one or two real <strong>example queries</strong> — these have the biggest impact on query quality</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">4</div>
+            <p class="text-sm text-slate-600">Click <strong>Add Endpoint</strong> — the query and schema tools are available immediately</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 text-sm text-slate-700 mb-5 flex gap-3">
+        <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">lightbulb</span>
+        <div><strong>Built-in endpoints.</strong> LexiChat ships with HM Land Registry and OpenDataCommunities (MHCLG) ready to use — they are available in every profile and toggled with the On/Off switch. Click the ▸ arrow on any endpoint to view its full read-only setup. (A decommissioned ONS endpoint is included disabled, as a template.)</div>
+      </div>
+    </section>
+
+    <!-- SPARQL fields -->
+    <section id="sparql-fields" class="mb-12">
+      <h3 class="text-lg font-semibold mb-3">Endpoint fields</h3>
+      <div class="overflow-hidden rounded-lg border border-slate-100">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="bg-slate-50 border-b border-slate-100">
+              <th class="text-left px-4 py-2.5 font-semibold text-slate-600">Field</th>
+              <th class="text-left px-4 py-2.5 font-semibold text-slate-600">Description</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-50">
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Title</td>
+              <td class="px-4 py-2.5 text-slate-600">Human name for the endpoint — used to derive the tool names (e.g. <em>HM Land Registry</em> → <code class="prose-code">hm_land_registry_query</code>)</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Endpoint URL</td>
+              <td class="px-4 py-2.5 text-slate-600">The SPARQL query endpoint. Queries are sent as an HTTP <code class="prose-code">POST</code> with <code class="prose-code">Accept: application/sparql-results+json</code></td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">When to use</td>
+              <td class="px-4 py-2.5 text-slate-600">The topics this endpoint covers. Surfaced in the tool description and system prompt so the model prefers it over web search for matching questions</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Prefixes</td>
+              <td class="px-4 py-2.5 text-slate-600">PREFIX declarations the model should reuse, one per line</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Schema / vocabulary</td>
+              <td class="px-4 py-2.5 text-slate-600">A summary of the key classes and properties (or a pasted ontology). Keep it concise — it is sent to the model</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Example queries</td>
+              <td class="px-4 py-2.5 text-slate-600">Real, working queries with a label each. The single highest-value context for accurate query generation</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Read-only</td>
+              <td class="px-4 py-2.5 text-slate-600">On by default — rejects update operations (<code class="prose-code">INSERT</code>, <code class="prose-code">DELETE</code>, <code class="prose-code">DROP</code>, …) before they are sent</td>
+            </tr>
+            <tr>
+              <td class="px-4 py-2.5 prose-code font-medium text-sm">Authentication</td>
+              <td class="px-4 py-2.5 text-slate-600">Same options as OpenAPI — none, bearer, API key, basic, or OAuth2 (see below)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SPARQL example -->
+    <section id="sparql-example" class="mb-12">
+      <h3 class="text-lg font-semibold mb-3">Example: HM Land Registry</h3>
+      <p class="text-sm text-slate-600 mb-4">The built-in HM Land Registry endpoint (<code class="prose-code text-accent">https://landregistry.data.gov.uk/landregistry/query</code>) is set up to answer UK property questions. With it enabled you can ask:</p>
+      <p class="text-sm text-slate-600 mb-4"><em>"Use HM Land Registry to find recent sold prices in postcode PL6 8RU."</em></p>
+      <p class="text-sm text-slate-600 mb-3">The AI calls <code class="prose-code">hm_land_registry_query</code> with a query like its bundled example:</p>
+      <div class="relative group">
+        <button onclick="copyCode(this)" class="absolute top-3 right-3 z-10 flex items-center gap-1.5 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white text-xs font-medium px-2.5 py-1.5 rounded-lg transition-all opacity-0 group-hover:opacity-100" title="Copy to clipboard">
+          <span class="material-symbols-outlined copy-icon" style="font-size:14px">content_copy</span>
+          <span class="copy-label">Copy</span>
+        </button>
+        <pre><code><span class="kw">PREFIX</span> lrppi: <span class="str">&lt;http://landregistry.data.gov.uk/def/ppi/&gt;</span>
+<span class="kw">PREFIX</span> lrcommon: <span class="str">&lt;http://landregistry.data.gov.uk/def/common/&gt;</span>
+<span class="kw">SELECT</span> ?date ?price ?street ?town <span class="kw">WHERE</span> {
+  ?txn lrppi:propertyAddress ?addr ;
+       lrppi:pricePaid ?price ;
+       lrppi:transactionDate ?date .
+  ?addr lrcommon:postcode <span class="str">"PL6 8RU"</span> .
+  <span class="kw">OPTIONAL</span> { ?addr lrcommon:street ?street }
+  <span class="kw">OPTIONAL</span> { ?addr lrcommon:town ?town }
+} <span class="kw">ORDER BY</span> <span class="kw">DESC</span>(?date) <span class="kw">LIMIT</span> <span class="num">20</span></code></pre>
+      </div>
+      <p class="text-xs text-slate-400 mt-2 ml-1">If the model is unsure of the vocabulary it first calls <code class="prose-code">hm_land_registry_schema</code> to retrieve the prefixes and examples, then writes the query.</p>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3 mt-5">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">psychology</span>
+        <div class="text-sm text-slate-700"><strong>Helping the model choose SPARQL over web search.</strong> Smaller local models often reach for <code class="prose-code">web_search</code> by default. Filling in the <strong>When to use</strong> field and adding concrete example queries is what reliably steers the model to the SPARQL tool. Naming the endpoint in your request ("use HM Land Registry…") also works.</div>
+      </div>
+    </section>
+
     <!-- Authentication -->
     <section id="auth" class="mb-12">
       <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
         <span class="material-symbols-outlined text-accent">lock</span> Authentication
       </h2>
-      <p class="text-slate-600 mb-5">When adding an OpenAPI spec or MCP connection, you can configure authentication. LexiChat supports four methods:</p>
+      <p class="text-slate-600 mb-5">When adding an OpenAPI spec, SPARQL endpoint, or MCP connection, you can configure authentication. LexiChat supports four methods:</p>
       <div class="space-y-3">
         <div class="bg-white border border-slate-200 rounded-xl p-4 flex items-start gap-3">
           <span class="material-symbols-outlined text-accent flex-shrink-0 mt-0.5">key</span>
@@ -382,7 +520,7 @@ tailwind.config = {
       </div>
 
       <div class="bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm text-slate-600">
-        <strong>MCP tool selections are profile-specific.</strong> Each profile stores its own MCP server connection list and per-tool enabled state. Switching profiles swaps the entire tool environment — MCP servers, OpenAPI specs, allowed directories, and tool toggles all change together.
+        <strong>Tool selections are profile-specific.</strong> Each profile stores its own MCP servers, OpenAPI specs, and SPARQL endpoints, plus per-tool enabled state. Switching profiles swaps the entire tool environment — servers, specs, endpoints, allowed directories, and tool toggles all change together. The built-in SPARQL endpoints are the exception: they are available in every profile, governed only by their own On/Off toggle.
       </div>
     </section>
 

@@ -429,7 +429,7 @@ pub async fn execute_job(
         let r = agent_loop(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
-            registered_specs, &temp_mcp, ctx.allowed_dirs.clone(),
+            registered_specs, Vec::new(), &temp_mcp, ctx.allowed_dirs.clone(),
             Vec::new(), // no attached-file sandbox paths in jobs
             10, app, true, 25, // 25 steps — enough headroom for multi-step workflows
         ).await;
@@ -461,7 +461,7 @@ pub async fn execute_job(
         agent_loop(
             &host, &job.model, &system_prompt, &all_tools,
             None, None, &conversation,
-            specs, &state.mcp_connections, allowed_dirs,
+            specs, Vec::new(), &state.mcp_connections, allowed_dirs,
             Vec::new(), // no attached-file sandbox paths in jobs
             10, app, true, 25, // 25 steps — enough headroom for multi-step workflows
         ).await

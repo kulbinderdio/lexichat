@@ -48,6 +48,31 @@ export interface StoredOpenAPISpec {
 // IDs of built-in specs that ship with the app (user can disable but not delete)
 export const BUILTIN_OPENAPI_SPEC_IDS = new Set(["builtin-wikipedia"]);
 
+export interface SparqlExampleQuery {
+  label: string;
+  query: string;
+}
+
+export interface StoredSparqlEndpoint {
+  id: string;
+  title: string;
+  endpoint_url: string;
+  prefixes?: string;
+  schema_summary?: string;
+  example_queries?: SparqlExampleQuery[];
+  usage_hint?: string;
+  auth?: AuthConfig;
+  enabled?: boolean;
+  read_only?: boolean;
+}
+
+// IDs of built-in SPARQL endpoints that ship with the app (user can disable but not delete)
+export const BUILTIN_SPARQL_ENDPOINT_IDS = new Set([
+  "builtin-landregistry",
+  "builtin-opendatacommunities",
+  "builtin-ons-stats",
+]);
+
 export interface ContextVar {
   name: string;
   value: string;
@@ -56,6 +81,7 @@ export interface ContextVar {
 export interface ToolRegistry {
   mcpServers: StoredMCPServer[];
   openapiSpecs: StoredOpenAPISpec[];
+  sparqlEndpoints: StoredSparqlEndpoint[];
 }
 
 export interface Profile {
@@ -67,6 +93,7 @@ export interface Profile {
   // Registry-based tool selection (replaces per-profile mcpServers/openapiSpecs)
   enabledMcpServerIds: string[];
   enabledOpenapiSpecIds: string[];
+  enabledSparqlEndpointIds: string[];
   toolAuthOverrides?: Record<string, AuthConfig>; // tool id → auth override for this profile
   // Legacy fields kept for migration only — will be undefined after first load
   mcpServers?: StoredMCPServer[];
@@ -104,6 +131,21 @@ interface SpecInfo {
   tools: { name: string; description: string; method: string; path: string }[];
 }
 
+interface SparqlInfo {
+  id: string;
+  title: string;
+  endpoint_url: string;
+  tool_count: number;
+  tools: string[];
+}
+
+interface SparqlDiscovery {
+  live: boolean;
+  message: string;
+  suggested_prefixes: string;
+  suggested_schema: string;
+}
+
 interface MCPServerInfo {
   id: string;
   name: string;
@@ -121,7 +163,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = "profiles" | "tools" | "models" | "openapi" | "mcp" | "sandbox" | "server" | "defaults";
+type Tab = "profiles" | "tools" | "models" | "openapi" | "sparql" | "mcp" | "sandbox" | "server" | "defaults";
 
 const BUILTIN_TOOLS = [
   { name: "list_files",          label: "List Files",           icon: "📁" },
@@ -281,6 +323,7 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
       enabledTools: { ...settings.enabledTools },
       enabledMcpServerIds: [],
       enabledOpenapiSpecIds: [],
+      enabledSparqlEndpointIds: [],
       maxTools: settings.maxTools,
     };
     setDraft(p);
@@ -356,6 +399,7 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
       name: resolveImportName(imported.name, settings.profiles),
       enabledMcpServerIds:   imported.enabledMcpServerIds   ?? [],
       enabledOpenapiSpecIds: imported.enabledOpenapiSpecIds ?? [],
+      enabledSparqlEndpointIds: imported.enabledSparqlEndpointIds ?? [],
       enabledTools: imported.enabledTools ?? {},
       maxTools:     imported.maxTools     ?? settings.maxTools,
     };
@@ -481,6 +525,25 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
               </div>
             )}
 
+            {settings.toolRegistry.sparqlEndpoints.length > 0 && (
+              <div className="field" style={{ marginBottom: 14 }}>
+                <label>SPARQL Endpoints</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                  {settings.toolRegistry.sparqlEndpoints
+                    .filter(s => (selected!.enabledSparqlEndpointIds ?? []).includes(s.id))
+                    .map(s => (
+                      <span key={s.id} style={{
+                        fontSize: 10, padding: "2px 7px", borderRadius: 10,
+                        background: "var(--purple-bg)", border: "1px solid var(--purple-border)", color: "var(--purple)"
+                      }}>🔗 {s.title}</span>
+                    ))}
+                  {(selected!.enabledSparqlEndpointIds ?? []).filter(id => settings.toolRegistry.sparqlEndpoints.some(s => s.id === id)).length === 0 && (
+                    <span style={{ fontSize: 11, opacity: 0.5 }}>None selected</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             {settings.toolRegistry.mcpServers.length > 0 && (
               <div className="field" style={{ marginBottom: 14 }}>
                 <label>MCP Servers</label>
@@ -568,6 +631,30 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
                           : d.enabledOpenapiSpecIds.filter(id => id !== sp.id) })} />
                       <span>🌐 {sp.title}</span>
                       {BUILTIN_OPENAPI_SPEC_IDS.has(sp.id) && (
+                        <span style={{ fontSize: 10, opacity: 0.4 }}>(built-in)</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {settings.toolRegistry.sparqlEndpoints.length > 0 && (
+              <div className="field" style={{ marginBottom: 12 }}>
+                <label>SPARQL Endpoints</label>
+                <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>
+                  Select which linked-data endpoints this profile can query.
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {settings.toolRegistry.sparqlEndpoints.map(sp => (
+                    <label key={sp.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12 }}>
+                      <input type="checkbox" className="admin-checkbox"
+                        checked={(d.enabledSparqlEndpointIds ?? []).includes(sp.id)}
+                        onChange={e => setDraft({ ...d, enabledSparqlEndpointIds: e.target.checked
+                          ? [...(d.enabledSparqlEndpointIds ?? []), sp.id]
+                          : (d.enabledSparqlEndpointIds ?? []).filter(id => id !== sp.id) })} />
+                      <span>🔗 {sp.title}</span>
+                      {BUILTIN_SPARQL_ENDPOINT_IDS.has(sp.id) && (
                         <span style={{ fontSize: 10, opacity: 0.4 }}>(built-in)</span>
                       )}
                     </label>
@@ -1229,6 +1316,330 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
   );
 }
 
+// ── SPARQL tab ────────────────────────────────────────────────────────────────
+
+function SparqlTab({ stored, onChange }: { stored: StoredSparqlEndpoint[]; onChange: (s: StoredSparqlEndpoint[]) => void }) {
+  const [infos, setInfos] = useState<SparqlInfo[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [title, setTitle] = useState("");
+  const [endpointUrl, setEndpointUrl] = useState("");
+  const [prefixes, setPrefixes] = useState("");
+  const [schemaSummary, setSchemaSummary] = useState("");
+  const [usageHint, setUsageHint] = useState("");
+  const [examples, setExamples] = useState<SparqlExampleQuery[]>([]);
+  const [readOnly, setReadOnly] = useState(true);
+  const [auth, setAuth] = useState<AuthConfig>(DEFAULT_AUTH);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverMsg, setDiscoverMsg] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Compute tool info statelessly from the displayed endpoints so it shows
+  // regardless of which profile is active (Rust's registered state is profile-scoped).
+  useEffect(() => {
+    invoke<SparqlInfo[]>("get_sparql_tools", { endpoints: stored }).then(setInfos).catch(() => {});
+  }, [stored]);
+
+  const resetForm = () => {
+    setTitle(""); setEndpointUrl(""); setPrefixes(""); setSchemaSummary(""); setUsageHint("");
+    setExamples([]); setReadOnly(true); setAuth(DEFAULT_AUTH);
+    setError(""); setDiscoverMsg(""); setEditingId(null); setShowAdd(false);
+  };
+
+  const startEdit = (id: string) => {
+    const ep = stored.find(s => s.id === id);
+    if (!ep) return;
+    setEditingId(id);
+    setTitle(ep.title);
+    setEndpointUrl(ep.endpoint_url);
+    setPrefixes(ep.prefixes ?? "");
+    setSchemaSummary(ep.schema_summary ?? "");
+    setUsageHint(ep.usage_hint ?? "");
+    setExamples(ep.example_queries ?? []);
+    setReadOnly(ep.read_only !== false);
+    setAuth(ep.auth ?? DEFAULT_AUTH);
+    setError(""); setDiscoverMsg(""); setShowAdd(false);
+  };
+
+  const argsForRegister = () => ({
+    title: title.trim(),
+    endpoint_url: endpointUrl.trim(),
+    prefixes,
+    schema_summary: schemaSummary,
+    example_queries: examples.filter(e => e.query.trim()),
+    usage_hint: usageHint,
+    auth,
+    read_only: readOnly,
+  });
+
+  const entryFromArgs = (id: string): StoredSparqlEndpoint => ({
+    id, title: title.trim(), endpoint_url: endpointUrl.trim(),
+    prefixes, schema_summary: schemaSummary,
+    example_queries: examples.filter(e => e.query.trim()),
+    usage_hint: usageHint,
+    auth, read_only: readOnly,
+  });
+
+  const discover = async () => {
+    if (!endpointUrl.trim()) return;
+    setDiscovering(true);
+    setDiscoverMsg("");
+    setError("");
+    try {
+      const res = await invoke<SparqlDiscovery>("discover_sparql_endpoint", {
+        args: { endpoint_url: endpointUrl.trim(), auth },
+      });
+      setDiscoverMsg(res.message);
+      if (res.live) {
+        if (res.suggested_prefixes && !prefixes.trim()) setPrefixes(res.suggested_prefixes);
+        if (res.suggested_schema && !schemaSummary.trim()) setSchemaSummary(res.suggested_schema);
+      }
+    } catch (e) {
+      setDiscoverMsg(`Discovery failed: ${String(e)}`);
+    }
+    setDiscovering(false);
+  };
+
+  const add = async () => {
+    if (!title.trim() || !endpointUrl.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const info = await invoke<SparqlInfo>("register_sparql_endpoint", { args: argsForRegister() });
+      setInfos(prev => [...prev, info]);
+      onChange([...stored, entryFromArgs(info.id)]);
+      resetForm();
+    } catch (e) {
+      setError(String(e));
+    }
+    setLoading(false);
+  };
+
+  const saveEdit = async () => {
+    if (!editingId || !title.trim() || !endpointUrl.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      await invoke("remove_sparql_endpoint", { id: editingId });
+      const info = await invoke<SparqlInfo>("register_sparql_endpoint", { args: argsForRegister() });
+      setInfos(prev => prev.filter(s => s.id !== editingId).concat(info));
+      onChange(stored.filter(s => s.id !== editingId).concat(entryFromArgs(info.id)));
+      resetForm();
+    } catch (e) {
+      setError(String(e));
+    }
+    setLoading(false);
+  };
+
+  const remove = async (id: string) => {
+    await invoke("remove_sparql_endpoint", { id });
+    setInfos(prev => prev.filter(s => s.id !== id));
+    onChange(stored.filter(s => s.id !== id));
+    if (editingId === id) resetForm();
+  };
+
+  const toggleExpand = (id: string) =>
+    setExpanded(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+
+  const setExample = (i: number, patch: Partial<SparqlExampleQuery>) =>
+    setExamples(prev => prev.map((e, idx) => idx === i ? { ...e, ...patch } : e));
+
+  const formBody = (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="field">
+        <label>Title</label>
+        <input className="admin-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. HM Land Registry" />
+      </div>
+      <div className="field">
+        <label>SPARQL Endpoint URL</label>
+        <input className="admin-input" value={endpointUrl} onChange={e => setEndpointUrl(e.target.value)}
+          placeholder="https://landregistry.data.gov.uk/landregistry/query" style={{ fontFamily: "monospace", fontSize: 11 }} />
+      </div>
+      <div>
+        <button className="btn" onClick={discover} disabled={discovering || !endpointUrl.trim()}>
+          {discovering ? "Testing…" : "Test & discover"}
+        </button>
+        {discoverMsg && <div style={{ fontSize: 11, marginTop: 4, opacity: 0.8 }}>{discoverMsg}</div>}
+      </div>
+      <div className="field">
+        <label>When to use (topics)</label>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 4 }}>
+          What questions this endpoint answers. The model uses this to pick this tool over web search.
+        </div>
+        <input className="admin-input" value={usageHint} onChange={e => setUsageHint(e.target.value)}
+          placeholder="e.g. UK property sold prices, house price index, address-level transactions" />
+      </div>
+      <div className="field">
+        <label>Prefixes</label>
+        <textarea className="admin-input" value={prefixes} onChange={e => setPrefixes(e.target.value)}
+          placeholder={"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\nPREFIX ukhpi: <http://landregistry.data.gov.uk/def/ukhpi/>"}
+          style={{ minHeight: 70, resize: "vertical", fontFamily: "monospace", fontSize: 11 }} />
+      </div>
+      <div className="field">
+        <label>Schema / vocabulary summary</label>
+        <textarea className="admin-input" value={schemaSummary} onChange={e => setSchemaSummary(e.target.value)}
+          placeholder="Describe the key classes and properties the model should use, or paste an ontology summary."
+          style={{ minHeight: 90, resize: "vertical", fontFamily: "monospace", fontSize: 11 }} />
+      </div>
+      <div className="field">
+        <label>Example queries</label>
+        <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 6 }}>
+          Real example queries are the most valuable context for the model.
+        </div>
+        {examples.map((ex, i) => (
+          <div key={i} style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8, border: "1px solid var(--border)", borderRadius: 6, padding: 8 }}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input className="admin-input" value={ex.label} onChange={e => setExample(i, { label: e.target.value })}
+                placeholder="Label (e.g. Recent price-paid records)" style={{ flex: 1 }} />
+              <button className="icon-btn danger" onClick={() => setExamples(prev => prev.filter((_, idx) => idx !== i))}>✕</button>
+            </div>
+            <textarea className="admin-input" value={ex.query} onChange={e => setExample(i, { query: e.target.value })}
+              placeholder="SELECT ?s WHERE { ?s ?p ?o } LIMIT 10"
+              style={{ minHeight: 60, resize: "vertical", fontFamily: "monospace", fontSize: 11 }} />
+          </div>
+        ))}
+        <button className="btn" onClick={() => setExamples(prev => [...prev, { label: "", query: "" }])}>+ Add example query</button>
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+        <input type="checkbox" checked={readOnly} onChange={e => setReadOnly(e.target.checked)} />
+        Read-only (reject INSERT/DELETE/DROP and other update operations)
+      </label>
+      <AuthConfigForm auth={auth} onChange={setAuth} />
+      {error && <div style={{ color: "#f87171", fontSize: 12 }}>{error}</div>}
+    </div>
+  );
+
+  return (
+    <div className="admin-scroll" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ flex: 1 }}>
+        {stored.length === 0 && !showAdd && (
+          <div className="admin-empty">No SPARQL endpoints registered. Add one to query linked-data services.</div>
+        )}
+
+        {stored.map(ep => {
+          const isBuiltin = BUILTIN_SPARQL_ENDPOINT_IDS.has(ep.id);
+          const isEnabled = ep.enabled !== false;
+          const info = infos.find(s => s.id === ep.id);
+
+          const toggleEnabled = () =>
+            onChange(stored.map(s => s.id === ep.id ? { ...s, enabled: !isEnabled } : s));
+
+          return (
+          <section key={ep.id} className="admin-section" style={{ opacity: isEnabled ? 1 : 0.55 }}>
+            <div className="admin-row">
+              <button className="icon-btn" onClick={() => toggleExpand(ep.id)} style={{ fontSize: 9 }}>
+                {expanded.has(ep.id) ? "▼" : "▶"}
+              </button>
+              <div style={{ flex: 1 }}>
+                <div className="admin-row-title">
+                  {ep.title}
+                  {isBuiltin && <span style={{ fontSize: 9, marginLeft: 6, opacity: 0.45, fontWeight: 400 }}>built-in</span>}
+                </div>
+                <div className="admin-row-sub">
+                  {ep.endpoint_url}
+                  {info ? ` · ${info.tool_count} tools` : isEnabled ? " · loading…" : " · disabled"}
+                </div>
+              </div>
+              {isBuiltin ? (
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, cursor: "pointer" }}>
+                  <input type="checkbox" checked={isEnabled} onChange={toggleEnabled} />
+                  {isEnabled ? "On" : "Off"}
+                </label>
+              ) : (
+                <>
+                  <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
+                    onClick={() => editingId === ep.id ? resetForm() : startEdit(ep.id)}>
+                    {editingId === ep.id ? "Cancel" : "Edit"}
+                  </button>
+                  <button className="icon-btn danger" onClick={() => remove(ep.id)}>✕</button>
+                </>
+              )}
+            </div>
+
+            {editingId === ep.id && (
+              <div style={{ padding: "8px 16px 12px", borderTop: "1px solid var(--border)" }}>
+                {formBody}
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button className="btn" onClick={resetForm}>Cancel</button>
+                  <button className="btn primary" onClick={saveEdit} disabled={loading || !title.trim() || !endpointUrl.trim()}>
+                    {loading ? "Saving…" : "Save Changes"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!editingId && expanded.has(ep.id) && (
+              <div style={{ padding: "8px 16px 12px 28px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 10, fontSize: 11 }}>
+                {info && info.tools.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, opacity: 0.6, marginBottom: 3 }}>Generated tools</div>
+                    {info.tools.map(name => (
+                      <div key={name} style={{ fontFamily: "monospace", fontWeight: 600 }}>{name}</div>
+                    ))}
+                  </div>
+                )}
+                {(ep.usage_hint ?? "").trim() && (
+                  <div>
+                    <div style={{ fontWeight: 700, opacity: 0.6, marginBottom: 3 }}>When to use</div>
+                    <span style={{ opacity: 0.85 }}>{ep.usage_hint}</span>
+                  </div>
+                )}
+                <div>
+                  <div style={{ fontWeight: 700, opacity: 0.6, marginBottom: 3 }}>Read-only</div>
+                  <span>{ep.read_only !== false ? "Yes — updates (INSERT/DELETE/…) are rejected" : "No — update queries are allowed"}</span>
+                </div>
+                {(ep.prefixes ?? "").trim() && (
+                  <div>
+                    <div style={{ fontWeight: 700, opacity: 0.6, marginBottom: 3 }}>Prefixes</div>
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 11, opacity: 0.85 }}>{ep.prefixes}</pre>
+                  </div>
+                )}
+                {(ep.schema_summary ?? "").trim() && (
+                  <div>
+                    <div style={{ fontWeight: 700, opacity: 0.6, marginBottom: 3 }}>Schema / vocabulary</div>
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 11, opacity: 0.85 }}>{ep.schema_summary}</pre>
+                  </div>
+                )}
+                {(ep.example_queries ?? []).length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, opacity: 0.6, marginBottom: 3 }}>Example queries</div>
+                    {(ep.example_queries ?? []).map((ex, i) => (
+                      <div key={i} style={{ marginBottom: 6 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 2 }}>{ex.label || `Example ${i + 1}`}</div>
+                        <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: 11, opacity: 0.85, background: "var(--code-bg, rgba(127,127,127,0.08))", padding: 6, borderRadius: 4 }}>{ex.query}</pre>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+          );
+        })}
+
+        {showAdd && (
+          <section className="admin-section" style={{ padding: "12px 16px" }}>
+            {formBody}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button className="btn" onClick={resetForm}>Cancel</button>
+              <button className="btn primary" onClick={add} disabled={loading || !title.trim() || !endpointUrl.trim()}>
+                {loading ? "Saving…" : "Add Endpoint"}
+              </button>
+            </div>
+          </section>
+        )}
+      </div>
+      {!showAdd && !editingId && (
+        <div className="admin-footer-bar">
+          <button className="btn primary" onClick={() => setShowAdd(true)}>+ Add SPARQL Endpoint</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── MCP tab ───────────────────────────────────────────────────────────────────
 
 function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s: StoredMCPServer[]) => void }) {
@@ -1642,6 +2053,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
   // Tools are now stored globally in toolRegistry; profiles reference by ID
   const ctxMCP     = draft.toolRegistry.mcpServers;
   const ctxOpenAPI = draft.toolRegistry.openapiSpecs;
+  const ctxSparql  = draft.toolRegistry.sparqlEndpoints;
   const ctxDirs    = (activeProfile ? activeProfile.allowedDirs  : draft.allowedDirs)  ?? [];
 
   const setCtxMCP = (servers: StoredMCPServer[]) => {
@@ -1671,6 +2083,19 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
       return { ...d, toolRegistry: { ...d.toolRegistry, openapiSpecs: specs }, profiles };
     });
   };
+  const setCtxSparql = (endpoints: StoredSparqlEndpoint[]) => {
+    setDraft(d => {
+      // Auto-enable any newly added endpoints in the active profile.
+      const prevIds = new Set(d.toolRegistry.sparqlEndpoints.map(s => s.id));
+      const newIds = endpoints.filter(s => !prevIds.has(s.id)).map(s => s.id);
+      const profiles = newIds.length > 0 && d.activeProfileId
+        ? d.profiles.map(p => p.id === d.activeProfileId
+            ? { ...p, enabledSparqlEndpointIds: [...(p.enabledSparqlEndpointIds ?? []), ...newIds] }
+            : p)
+        : d.profiles;
+      return { ...d, toolRegistry: { ...d.toolRegistry, sparqlEndpoints: endpoints }, profiles };
+    });
+  };
   const setCtxDirs = (dirs: string[]) => {
     if (activeProfile) {
       setDraft(d => ({ ...d, profiles: d.profiles.map(p => p.id === activeProfile.id ? { ...p, allowedDirs: dirs } : p) }));
@@ -1687,6 +2112,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
     { id: "tools",    icon: "⚡",  label: "Tools" },
     { id: "models",   icon: "🖥",  label: "Models" },
     { id: "openapi",  icon: "🌐",  label: "OpenAPI" },
+    { id: "sparql",   icon: "🔗",  label: "SPARQL" },
     { id: "mcp",      icon: "🔌",  label: "MCP" },
     { id: "sandbox",  icon: "🔒",  label: "Sandbox" },
     { id: "server",   icon: "⚙️",  label: "Server" },
@@ -1709,7 +2135,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
           ))}
         </div>
         <div className="admin-divider" />
-        {activeProfile && ["mcp","openapi","tools","sandbox","server"].includes(tab) && (
+        {activeProfile && ["mcp","openapi","sparql","tools","sandbox","server"].includes(tab) && (
           <div style={{ padding: "4px 16px", background: "var(--purple-bg)", borderBottom: "1px solid var(--purple-border)", fontSize: 11, color: "var(--purple)", display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
             <span>🤖</span> Profile: <strong>{activeProfile.name}</strong>
           </div>
@@ -1719,6 +2145,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
           {tab === "tools"   && <ToolsTab   settings={draft} onChange={setDraft} />}
           {tab === "models"  && <ModelsTab  settings={draft} onChange={setDraft} />}
           {tab === "openapi" && <OpenAPITab stored={ctxOpenAPI} onChange={setCtxOpenAPI} />}
+          {tab === "sparql"  && <SparqlTab stored={ctxSparql} onChange={setCtxSparql} />}
           {tab === "mcp"     && <MCPTab stored={ctxMCP} onChange={setCtxMCP} />}
           {tab === "sandbox" && <SandboxTab dirs={ctxDirs} onChange={setCtxDirs} />}
           {tab === "server"  && <ServerTab  settings={draft} onChange={setDraft} activeProfile={activeProfile} onProfileChange={setActiveProfile} />}

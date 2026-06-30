@@ -7,7 +7,7 @@ import { Settings, RotateCcw, Bug, Paperclip, Info, Clock } from "lucide-react";
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
-import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec } from "./AdminPanel";
+import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec, StoredSparqlEndpoint, BUILTIN_SPARQL_ENDPOINT_IDS } from "./AdminPanel";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -204,6 +204,97 @@ const BUILTIN_OPENAPI_SPECS: StoredOpenAPISpec[] = [
   },
 ];
 
+// ── Built-in SPARQL endpoints ─────────────────────────────────────────────────
+
+const BUILTIN_SPARQL_ENDPOINTS: StoredSparqlEndpoint[] = [
+  {
+    id: "builtin-landregistry",
+    title: "HM Land Registry",
+    endpoint_url: "https://landregistry.data.gov.uk/landregistry/query",
+    enabled: true,
+    read_only: true,
+    usage_hint: "UK house/property sold prices, price-paid transactions by postcode/town/street, and the UK House Price Index",
+    prefixes: [
+      "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>",
+      "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>",
+      "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>",
+      "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>",
+      "PREFIX ukhpi: <http://landregistry.data.gov.uk/def/ukhpi/>",
+      "PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>",
+      "PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>",
+    ].join("\n"),
+    schema_summary:
+      "HM Land Registry open linked data. Two main datasets:\n" +
+      "- UK House Price Index (ukhpi:): monthly price statistics per region. Key properties: ukhpi:refRegion, ukhpi:refMonth, ukhpi:averagePrice, ukhpi:housePriceIndex.\n" +
+      "- Price Paid (lrppi:): individual residential property transactions. A lrppi:Transaction has lrppi:pricePaid, lrppi:transactionDate, and lrppi:propertyAddress (an lrcommon:Address with lrcommon:postcode, lrcommon:town, lrcommon:street).",
+    example_queries: [
+      {
+        label: "Recent Price Paid records for a postcode",
+        query:
+          "PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>\n" +
+          "PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>\n" +
+          "SELECT ?date ?price ?street ?town WHERE {\n" +
+          "  ?txn lrppi:propertyAddress ?addr ;\n" +
+          "       lrppi:pricePaid ?price ;\n" +
+          "       lrppi:transactionDate ?date .\n" +
+          "  ?addr lrcommon:postcode \"PL6 8RU\" .\n" +
+          "  OPTIONAL { ?addr lrcommon:street ?street }\n" +
+          "  OPTIONAL { ?addr lrcommon:town ?town }\n" +
+          "} ORDER BY DESC(?date) LIMIT 20",
+      },
+    ],
+  },
+  {
+    id: "builtin-opendatacommunities",
+    title: "OpenDataCommunities (MHCLG)",
+    endpoint_url: "https://opendatacommunities.org/sparql",
+    enabled: true,
+    read_only: true,
+    usage_hint: "English official statistics from MHCLG: housing, homelessness, deprivation (IMD), local authority and community data",
+    prefixes: [
+      "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>",
+      "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>",
+      "PREFIX skos: <http://www.w3.org/2004/02/skos/core#>",
+      "PREFIX qb: <http://purl.org/linked-data/cube#>",
+    ].join("\n"),
+    schema_summary:
+      "Official statistics from MHCLG (England & Wales), SPARQL 1.1. Much of the data uses the RDF Data Cube vocabulary (qb:). " +
+      "Use the schema tool or introspect with `SELECT DISTINCT ?type WHERE { ?s a ?type } LIMIT 100` to find datasets and dimensions. Docs: https://opendatacommunities.org/help",
+    example_queries: [
+      {
+        label: "List available classes",
+        query: "SELECT DISTINCT ?type (COUNT(?s) AS ?n) WHERE { ?s a ?type } GROUP BY ?type ORDER BY DESC(?n) LIMIT 50",
+      },
+    ],
+  },
+  {
+    id: "builtin-ons-stats",
+    title: "ONS Statistics (decommissioned)",
+    endpoint_url: "https://statistics.data.gov.uk/sparql",
+    enabled: false,
+    read_only: true,
+    prefixes: "",
+    schema_summary:
+      "NOTE: the ONS PublishMyData SPARQL endpoint (statistics.data.gov.uk) was decommissioned on 31 March 2025 and is no longer live — 'Test & discover' will report it unreachable. " +
+      "Data moved to portals such as the ONS Geography Portal and Explore Local Statistics. For live UK linked-data statistics use the OpenDataCommunities endpoint instead. Kept here as a reference/template.",
+    example_queries: [],
+  },
+];
+
+function injectBuiltinSparql(endpoints: StoredSparqlEndpoint[]): StoredSparqlEndpoint[] {
+  let result = endpoints;
+  for (const builtin of BUILTIN_SPARQL_ENDPOINTS) {
+    const existing = result.find(e => e.id === builtin.id);
+    if (!existing) {
+      result = [...result, builtin];
+    } else {
+      // Refresh definition but preserve the user's enabled choice.
+      result = result.map(e => e.id === builtin.id ? { ...builtin, enabled: e.enabled } : e);
+    }
+  }
+  return result;
+}
+
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -213,7 +304,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   numGPULayers: null,
   models: [],
   enabledTools: { read_file: true, list_files: true, web_search: true },
-  toolRegistry: { mcpServers: [], openapiSpecs: [] },
+  toolRegistry: { mcpServers: [], openapiSpecs: [], sparqlEndpoints: [] },
   profiles: [],
   activeProfileId: null,
   allowedDirs: undefined,
@@ -260,13 +351,14 @@ function migrateToRegistry(raw: any): any {
   ]);
 
   const result: any = { ...raw };
-  result.toolRegistry = { mcpServers: allMcp, openapiSpecs: allSpecs };
+  result.toolRegistry = { mcpServers: allMcp, openapiSpecs: allSpecs, sparqlEndpoints: [] };
   delete result.mcpServers;
   delete result.openapiSpecs;
   result.profiles = profiles.map((p: any) => {
     const migrated: any = { ...p };
     migrated.enabledMcpServerIds   = (p.mcpServers   ?? []).map((s: any) => s.id);
     migrated.enabledOpenapiSpecIds = (p.openapiSpecs ?? []).map((s: any) => s.id);
+    migrated.enabledSparqlEndpointIds = [];
     delete migrated.mcpServers;
     delete migrated.openapiSpecs;
     return migrated;
@@ -285,14 +377,16 @@ export function loadSettings(): AppSettings {
     loaded.toolRegistry = {
       ...loaded.toolRegistry,
       openapiSpecs: injectBuiltinSpecs(loaded.toolRegistry.openapiSpecs ?? []),
+      sparqlEndpoints: injectBuiltinSparql(loaded.toolRegistry.sparqlEndpoints ?? []),
     };
     loaded.profiles = loaded.profiles.map(p => ({
       ...p,
       enabledMcpServerIds:   p.enabledMcpServerIds   ?? [],
       enabledOpenapiSpecIds: p.enabledOpenapiSpecIds  ?? [],
+      enabledSparqlEndpointIds: p.enabledSparqlEndpointIds ?? [],
     }));
     return loaded;
-  } catch { return { ...DEFAULT_SETTINGS, toolRegistry: { mcpServers: [], openapiSpecs: [...BUILTIN_OPENAPI_SPECS] } }; }
+  } catch { return { ...DEFAULT_SETTINGS, toolRegistry: { mcpServers: [], openapiSpecs: [...BUILTIN_OPENAPI_SPECS], sparqlEndpoints: [...BUILTIN_SPARQL_ENDPOINTS] } }; }
 }
 
 export function saveSettings(s: AppSettings) {
@@ -821,6 +915,8 @@ export default function App() {
               s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s),
             openapiSpecs: prev.toolRegistry.openapiSpecs.map(s =>
               s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s),
+            sparqlEndpoints: prev.toolRegistry.sparqlEndpoints.map(s =>
+              s.id === spec_id ? { ...s, auth: patchAuth(s.auth ?? { type: "none" as const }) } : s),
           },
           // Also patch profile-level auth overrides that reference this tool
           profiles: prev.profiles.map(p => {
@@ -925,13 +1021,22 @@ export default function App() {
       const ctxMCP = activeProfile
         ? registry.mcpServers.filter(s => activeProfile.enabledMcpServerIds.includes(s.id))
         : registry.mcpServers;
+      const ctxSparql = activeProfile
+        ? registry.sparqlEndpoints.filter(s => (BUILTIN_SPARQL_ENDPOINT_IDS.has(s.id) || (activeProfile.enabledSparqlEndpointIds ?? []).includes(s.id)) && s.enabled !== false)
+        : registry.sparqlEndpoints.filter(s => s.enabled !== false);
       const externalParts: string[] = [];
       if (ctxOpenAPI.length > 0)
         externalParts.push(`OpenAPI services you can call: ${ctxOpenAPI.map(s => s.title).join(", ")}.`);
+      if (ctxSparql.length > 0) {
+        const sparqlList = ctxSparql.map(s =>
+          s.usage_hint?.trim() ? `${s.title} (best for: ${s.usage_hint.trim()})` : s.title
+        ).join("; ");
+        externalParts.push(`Connected SPARQL / linked-data endpoints — ${sparqlList}. To use one, call its "…_query" tool with a SPARQL query (call its "…_schema" tool first if unsure of the vocabulary). These return authoritative structured data — prefer them over web_search when the question matches their topic.`);
+      }
       if (ctxMCP.length > 0)
         externalParts.push(`MCP servers connected: ${ctxMCP.map(s => s.name).join(", ")}.`);
       const externalSuffix = externalParts.length > 0
-        ? `\nExternal tools available — use these whenever they are relevant to the user's request: ${externalParts.join(" ")}`
+        ? `\nTOOL ROUTING: connected data tools are available — strongly prefer them over web_search whenever the user's request matches their topic, and only fall back to web_search for general open-web information they do not cover. ${externalParts.join(" ")}`
         : "";
 
       const resolved = resolveParams(chatParams);
@@ -1035,10 +1140,25 @@ export default function App() {
       openapi = registry.openapiSpecs;
     }
 
+    // SPARQL endpoints: built-in endpoints are globally available (governed by their
+    // own enabled toggle); custom endpoints are profile-filtered like OpenAPI specs.
+    let sparql: StoredSparqlEndpoint[];
+    if (profile) {
+      sparql = registry.sparqlEndpoints.filter(ep =>
+        BUILTIN_SPARQL_ENDPOINT_IDS.has(ep.id) || (profile.enabledSparqlEndpointIds ?? []).includes(ep.id));
+      if (profile.toolAuthOverrides) {
+        const ov = profile.toolAuthOverrides;
+        sparql = sparql.map(ep => ov[ep.id] ? { ...ep, auth: ov[ep.id] } : ep);
+      }
+    } else {
+      sparql = registry.sparqlEndpoints;
+    }
+
     const host = profile?.host || s.host;
     const dirs = profile?.allowedDirs ?? s.allowedDirs ?? [];
     await invoke("set_mcp_servers",   { servers: mcp }).catch(() => {});
     await invoke("set_openapi_specs", { specs: openapi.filter(sp => sp.enabled !== false) }).catch(() => {});
+    await invoke("set_sparql_endpoints", { endpoints: sparql.filter(ep => ep.enabled !== false) }).catch(() => {});
     await invoke("set_ollama_host",   { host }).catch(() => {});
     await invoke("set_allowed_dirs",  { dirs }).catch(() => {});
   };
@@ -1281,7 +1401,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 1.7.1</div>
+            <div className="about-version">Version 1.8.0</div>
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>

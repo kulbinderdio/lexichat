@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 use crate::openapi::RegisteredSpec;
+use crate::sparql::RegisteredSparqlEndpoint;
 use crate::mcp::MCPConnection;
 
 // ── Wire types ────────────────────────────────────────────────────────────────
@@ -378,6 +379,7 @@ pub async fn agent_loop(
     keep_alive: Option<String>,
     conversation: &Mutex<Vec<WireMessage>>,
     openapi_specs: Vec<RegisteredSpec>,
+    sparql_endpoints: Vec<RegisteredSparqlEndpoint>,
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: Vec<String>,
     // Extra paths the run_python sandbox may access (e.g. user-attached files),
@@ -512,8 +514,8 @@ pub async fn agent_loop(
                 });
             }
 
-            // Route: builtin → openapi → mcp
-            let result = dispatch_tool(name, args, &openapi_specs, mcp_connections, &allowed_dirs, &sandbox_paths, web_search_results, silent, app).await;
+            // Route: builtin → openapi → sparql → mcp
+            let result = dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &sandbox_paths, web_search_results, silent, app).await;
 
             // Cap large responses — but never truncate passthrough values like compose_email
             // whose full content must be forwarded intact to the next tool call.
@@ -568,6 +570,7 @@ async fn dispatch_tool(
     name: &str,
     args: &serde_json::Value,
     openapi_specs: &[RegisteredSpec],
+    sparql_endpoints: &[RegisteredSparqlEndpoint],
     mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
     allowed_dirs: &[String],
     sandbox_paths: &[String],
@@ -669,6 +672,21 @@ async fn dispatch_tool(
             } else { args };
 
             return crate::openapi::execute(spec, tool, effective_args, Some(app)).await;
+        }
+    }
+
+    // 2b. Try SPARQL endpoint tools (query + schema)
+    for ep in sparql_endpoints.iter() {
+        if let Some(tool) = ep.tools.iter().find(|t| t.name == name) {
+            // The query tool has a "query" param; the schema tool has none.
+            if tool.parameters.iter().any(|p| p.name == "query") {
+                let query = args["query"].as_str().unwrap_or("");
+                if query.trim().is_empty() {
+                    return "Error: missing 'query' argument — supply the full SPARQL query string.".into();
+                }
+                return crate::sparql::execute(ep, query, Some(app)).await;
+            }
+            return crate::sparql::schema_text(ep);
         }
     }
 
