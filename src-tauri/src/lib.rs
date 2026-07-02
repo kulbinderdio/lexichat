@@ -38,6 +38,12 @@ pub struct AppState {
     /// In-flight code-execution permission request: the agent loop parks a
     /// oneshot sender here while it waits for the frontend to approve/deny.
     pub pending_code_permission: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
+    /// Scratch slot: an MCP-App UI payload stashed by dispatch_tool for the agent
+    /// loop to attach to the next `agent-tool-result` event.
+    pub pending_tool_ui: Mutex<Option<ollama::ToolUiPayload>>,
+    /// MCP server ids the user has approved to render/interact with apps this
+    /// session (set by `approve_mcp_app`; reset on restart).
+    pub apps_allowed: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for AppState {
@@ -60,6 +66,8 @@ impl Default for AppState {
             pending_email_raw: Mutex::new(None),
             code_exec_unlocked: Mutex::new(false),
             pending_code_permission: Mutex::new(None),
+            pending_tool_ui: Mutex::new(None),
+            apps_allowed: Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
@@ -618,6 +626,8 @@ pub struct AddMCPServerArgs {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub enable_apps: bool,
     /// If provided, reuse this ID instead of generating a new one (used when
     /// re-registering an existing stored server that was evicted from Rust state).
     #[serde(default)]
@@ -634,12 +644,15 @@ pub struct MCPServerInfo {
     pub tool_count: usize,
     pub tools: Vec<MCPToolInfo>,
     pub error: Option<String>,
+    pub enable_apps: bool,
 }
 
 #[derive(Serialize, Clone)]
 pub struct MCPToolInfo {
     pub name: String,
     pub description: String,
+    /// True if this tool declares an MCP-App UI resource.
+    pub has_ui: bool,
 }
 
 #[tauri::command]
@@ -659,6 +672,7 @@ async fn add_mcp_server(
         env: args.env.clone(),
         enabled: true,
         auth: args.auth,
+        enable_apps: args.enable_apps,
     };
 
     state.mcp_servers.lock().unwrap().push(config.clone());
@@ -669,13 +683,14 @@ async fn add_mcp_server(
             let tools: Vec<MCPToolInfo> = conn.tools.iter().map(|t| MCPToolInfo {
                 name: t.name.clone(),
                 description: t.description.clone(),
+                has_ui: t.ui_resource_uri.is_some(),
             }).collect();
             let tool_count = tools.len();
             state.mcp_connections.lock().await.insert(id.clone(), conn);
-            Ok(MCPServerInfo { id, name: args.name, command: args.command, args: args.args, connected: true, tool_count, tools, error: None })
+            Ok(MCPServerInfo { id, name: args.name, command: args.command, args: args.args, connected: true, tool_count, tools, error: None, enable_apps: config.enable_apps })
         }
         Err(e) => {
-            Ok(MCPServerInfo { id, name: args.name, command: args.command, args: args.args, connected: false, tool_count: 0, tools: vec![], error: Some(e) })
+            Ok(MCPServerInfo { id, name: args.name, command: args.command, args: args.args, connected: false, tool_count: 0, tools: vec![], error: Some(e), enable_apps: config.enable_apps })
         }
     }
 }
@@ -695,6 +710,7 @@ async fn list_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServerInf
         let conn = connections.get(&s.id);
         let tools: Vec<MCPToolInfo> = conn.map(|c| c.tools.iter().map(|t| MCPToolInfo {
             name: t.name.clone(), description: t.description.clone(),
+            has_ui: t.ui_resource_uri.is_some(),
         }).collect()).unwrap_or_default();
         MCPServerInfo {
             id: s.id.clone(),
@@ -705,6 +721,7 @@ async fn list_mcp_servers(state: State<'_, AppState>) -> Result<Vec<MCPServerInf
             tool_count: tools.len(),
             tools,
             error: None,
+            enable_apps: s.enable_apps,
         }
     }).collect())
 }
@@ -718,12 +735,13 @@ async fn reconnect_mcp_server(id: String, state: State<'_, AppState>) -> Result<
     state.mcp_connections.lock().await.remove(&id);
     match MCPConnection::connect(config.clone()).await {
         Ok(conn) => {
-            let tools: Vec<MCPToolInfo> = conn.tools.iter().map(|t| MCPToolInfo { name: t.name.clone(), description: t.description.clone() }).collect();
+            let tools: Vec<MCPToolInfo> = conn.tools.iter().map(|t| MCPToolInfo { name: t.name.clone(), description: t.description.clone(), has_ui: t.ui_resource_uri.is_some() }).collect();
             let tool_count = tools.len();
+            let enable_apps = config.enable_apps;
             state.mcp_connections.lock().await.insert(id.clone(), conn);
-            Ok(MCPServerInfo { id, name: config.name, command: config.command, args: config.args, connected: true, tool_count, tools, error: None })
+            Ok(MCPServerInfo { id, name: config.name, command: config.command, args: config.args, connected: true, tool_count, tools, error: None, enable_apps })
         }
-        Err(e) => Ok(MCPServerInfo { id, name: config.name, command: config.command, args: config.args, connected: false, tool_count: 0, tools: vec![], error: Some(e) })
+        Err(e) => Ok(MCPServerInfo { id, name: config.name, command: config.command, args: config.args, connected: false, tool_count: 0, tools: vec![], error: Some(e), enable_apps: config.enable_apps })
     }
 }
 
@@ -740,6 +758,8 @@ pub struct SyncMCPInput {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub enable_apps: bool,
 }
 
 #[tauri::command]
@@ -757,25 +777,69 @@ async fn set_mcp_servers(
             id: srv.id.clone(), name: srv.name.clone(),
             command: srv.command.clone(), args: srv.args.clone(),
             env: srv.env.clone(), enabled: true, auth: srv.auth,
+            enable_apps: srv.enable_apps,
         };
         state.mcp_servers.lock().unwrap().push(config.clone());
         match MCPConnection::connect(config).await {
             Ok(conn) => {
                 let tools: Vec<MCPToolInfo> = conn.tools.iter()
-                    .map(|t| MCPToolInfo { name: t.name.clone(), description: t.description.clone() })
+                    .map(|t| MCPToolInfo { name: t.name.clone(), description: t.description.clone(), has_ui: t.ui_resource_uri.is_some() })
                     .collect();
                 let tool_count = tools.len();
                 state.mcp_connections.lock().await.insert(srv.id.clone(), conn);
                 results.push(MCPServerInfo { id: srv.id, name: srv.name, command: srv.command,
-                    args: srv.args, connected: true, tool_count, tools, error: None });
+                    args: srv.args, connected: true, tool_count, tools, error: None, enable_apps: srv.enable_apps });
             }
             Err(e) => {
                 results.push(MCPServerInfo { id: srv.id, name: srv.name, command: srv.command,
-                    args: srv.args, connected: false, tool_count: 0, tools: vec![], error: Some(e) });
+                    args: srv.args, connected: false, tool_count: 0, tools: vec![], error: Some(e), enable_apps: srv.enable_apps });
             }
         }
     }
     Ok(results)
+}
+
+// ── MCP Apps (SEP-1865) ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ApproveAppArgs { pub server_id: String }
+
+/// Grant an MCP server permission to render/interact with apps for this session.
+/// Called by the frontend after the user approves the consent prompt.
+#[tauri::command]
+fn approve_mcp_app(args: ApproveAppArgs, state: State<'_, AppState>) -> Result<(), String> {
+    state.apps_allowed.lock().unwrap().insert(args.server_id);
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct McpUiCallArgs {
+    pub server_id: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+}
+
+/// Proxy an MCP-App (iframe) initiated `tools/call` to the live MCP connection.
+/// Consent-gated: the server must have been approved via `approve_mcp_app`.
+#[tauri::command]
+async fn mcp_ui_call_tool(
+    args: McpUiCallArgs,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if !state.apps_allowed.lock().unwrap().contains(&args.server_id) {
+        return Err("This MCP app is not approved to call tools in this session.".into());
+    }
+    let mut conns = state.mcp_connections.lock().await;
+    let conn = conns.get_mut(&args.server_id).ok_or("MCP server not connected")?;
+    let rich = conn.call_tool_rich(&args.tool_name, &args.arguments).await;
+    Ok(serde_json::json!({
+        "text": rich.text,
+        "structured": rich.structured,
+        "isError": rich.is_error,
+        "uiHtml": rich.ui_html,
+        "uiUri": rich.ui_uri,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -1210,6 +1274,8 @@ pub fn run() {
             list_mcp_servers,
             reconnect_mcp_server,
             set_mcp_servers,
+            approve_mcp_app,
+            mcp_ui_call_tool,
             set_openapi_specs,
             oauth2_authorize,
             get_allowed_dirs,

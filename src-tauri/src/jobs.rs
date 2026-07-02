@@ -412,6 +412,7 @@ pub async fn execute_job(
                 env:     srv.env.clone(),
                 enabled: true,
                 auth:    srv.auth.clone(),
+                enable_apps: false,
             };
             if let Ok(conn) = crate::mcp::MCPConnection::connect(cfg).await {
                 let extra: Vec<ToolSchema> = conn.tools.iter()

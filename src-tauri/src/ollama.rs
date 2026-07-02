@@ -71,6 +71,31 @@ pub struct ToolCallEvent {
 pub struct ToolResultEvent {
     pub name: String,
     pub result: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<ToolUiPayload>,
+}
+
+/// MCP Apps (SEP-1865) UI payload attached to a tool result so the frontend can
+/// render it in a sandboxed iframe. Only produced for app-enabled MCP servers in
+/// interactive (non-silent) chats.
+#[derive(Clone, Serialize)]
+pub struct ToolUiPayload {
+    pub server_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured: Option<serde_json::Value>,
+    /// Raw tool-result `content` array — forwarded to the app via ui/notifications/tool-result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+    /// Raw tool-result `_meta`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    /// The arguments the tool was called with — forwarded via ui/notifications/tool-input.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Serialize)]
@@ -526,17 +551,32 @@ pub async fn agent_loop(
                 result
             };
 
+            // An MCP-App UI payload may have been stashed by dispatch_tool; take it.
+            let ui = if !silent {
+                app.try_state::<crate::AppState>()
+                    .and_then(|s| s.pending_tool_ui.lock().unwrap().take())
+            } else { None };
+            let had_ui = ui.is_some();
             if !silent {
                 let _ = app.emit("agent-tool-result", ToolResultEvent {
                     name: name.clone(),
                     result: result.clone(),
+                    ui,
                 });
             }
+
+            // When an interactive UI was rendered, tell the model so it references
+            // the app naturally instead of apologising that it can't display images.
+            let conv_text = if had_ui {
+                format!("{result}\n\n[Note: an interactive UI for this result is now displayed to the user in the chat. Refer to it naturally (e.g. \"shown above\") and do NOT claim you are unable to display images or this content.]")
+            } else {
+                result
+            };
 
             let mut conv = conversation.lock().unwrap();
             conv.push(WireMessage {
                 role: "tool".into(),
-                content: Some(result),
+                content: Some(conv_text),
                 tool_calls: None,
                 tool_call_id: None,
                 name: Some(name.clone()),
@@ -700,7 +740,9 @@ async fn dispatch_tool(
                     Some(access_token.clone())
                 } else { None };
 
-                let result = conn.call_tool(name, args).await;
+                let enable_apps = conn.config.enable_apps;
+                let server_id = conn.config.id.clone();
+                let rich = conn.call_tool_rich(name, args).await;
 
                 // If the token changed (refresh happened), persist it to the frontend
                 if let (Some(before), crate::mcp::AuthConfig::OAuth2 { ref access_token, .. }) =
@@ -717,7 +759,23 @@ async fn dispatch_tool(
                     }
                 }
 
-                return result;
+                // MCP Apps: stash any UI resource for the loop to emit. Interactive
+                // chats only (never in background jobs), and only for opted-in servers.
+                if !silent && enable_apps && (rich.ui_html.is_some() || rich.ui_uri.is_some()) {
+                    if let Some(state) = app.try_state::<crate::AppState>() {
+                        *state.pending_tool_ui.lock().unwrap() = Some(ToolUiPayload {
+                            server_id,
+                            html: rich.ui_html.clone(),
+                            uri: rich.ui_uri.clone(),
+                            structured: rich.structured.clone(),
+                            content: (!rich.content.is_null()).then(|| rich.content.clone()),
+                            meta: (!rich.meta.is_null()).then(|| rich.meta.clone()),
+                            arguments: Some(args.clone()),
+                        });
+                    }
+                }
+
+                return rich.text;
             }
         }
     }

@@ -197,16 +197,30 @@ interface Props {
   clearKey?: number;
 }
 
+interface BridgeMsg { dir: string; tool: string; label: string; preview: string; }
+
 export function DebugPanel({ visible, clearKey }: Props) {
   const [runs, setRuns] = useState<DebugRun[]>([]);
+  const [bridge, setBridge] = useState<BridgeMsg[]>([]);
   const runCounter = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (clearKey === undefined) return;
     setRuns([]);
+    setBridge([]);
     runCounter.current = 0;
   }, [clearKey]);
+
+  // MCP-App ↔ host postMessage bridge traffic (frontend-only; window event).
+  useEffect(() => {
+    const h = (e: Event) => {
+      const d = (e as CustomEvent).detail as BridgeMsg;
+      setBridge(prev => [...prev.slice(-199), d]);
+    };
+    window.addEventListener("mcp-app-bridge", h);
+    return () => window.removeEventListener("mcp-app-bridge", h);
+  }, []);
 
   useEffect(() => {
     if (!visible) return;
@@ -381,12 +395,30 @@ export function DebugPanel({ visible, clearKey }: Props) {
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: "auto", padding: "8px 10px" }}>
-        {runs.length === 0 && (
+        {runs.length === 0 && bridge.length === 0 && (
           <div style={{ fontSize: 12, opacity: 0.35, textAlign: "center", marginTop: 40 }}>
             Send a message to see the agent trace.
           </div>
         )}
         {runs.map(run => <RunRow key={run.id} run={run} />)}
+
+        {bridge.length > 0 && (
+          <div style={{ marginTop: 12, borderTop: "1px solid var(--dbg-border)", paddingTop: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", fontSize: 11, fontWeight: 600, opacity: 0.6, marginBottom: 4 }}>
+              <span>🧩 MCP App bridge</span>
+              <button onClick={() => setBridge([])}
+                style={{ marginLeft: "auto", background: "none", border: "none", cursor: "pointer", fontSize: 10, opacity: 0.4, padding: 0 }}>
+                Clear
+              </button>
+            </div>
+            {bridge.map((m, i) => (
+              <div key={i} title={m.preview}
+                style={{ fontSize: 10, fontFamily: "monospace", opacity: 0.85, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", padding: "1px 0" }}>
+                <span style={{ opacity: 0.5 }}>{m.dir === "app→host" ? "▸" : "◂"}</span> {m.label}
+              </div>
+            ))}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
     </div>

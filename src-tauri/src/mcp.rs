@@ -153,6 +153,10 @@ pub struct MCPServerConfig {
     pub enabled: bool,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Opt-in: allow this server's tools to render interactive MCP-App UIs
+    /// (sandboxed iframe). Off by default.
+    #[serde(default)]
+    pub enable_apps: bool,
 }
 
 fn is_url(s: &str) -> bool {
@@ -170,6 +174,33 @@ pub struct MCPTool {
     pub description: String,
     pub input_schema: Value,
     pub schema: Value,
+    /// MCP Apps (SEP-1865): `ui://` resource this tool renders, from `_meta.ui.resourceUri`.
+    #[serde(default)]
+    pub ui_resource_uri: Option<String>,
+}
+
+/// A tool-call result that preserves the structured/UI parts the plain-text
+/// path discards. Used for MCP Apps rendering.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallResult {
+    pub text: String,
+    #[serde(default)]
+    pub structured: Option<Value>,
+    /// Raw `content` array from the tool result (preserves image/resource blocks
+    /// the text extraction drops — needed to forward to MCP-App UIs).
+    #[serde(default)]
+    pub content: Value,
+    /// Raw `_meta` from the tool result.
+    #[serde(default)]
+    pub meta: Value,
+    #[serde(default)]
+    pub is_error: bool,
+    /// Inline HTML of a UI resource (MCP-UI embedded resource, or a resource we fetched).
+    #[serde(default)]
+    pub ui_html: Option<String>,
+    /// `ui://` URI referenced by the tool/result when the HTML wasn't inlined.
+    #[serde(default)]
+    pub ui_uri: Option<String>,
 }
 
 // ── Transports ────────────────────────────────────────────────────────────────
@@ -193,6 +224,8 @@ enum Transport {
 pub struct MCPConnection {
     pub config: MCPServerConfig,
     pub tools:  Vec<MCPTool>,
+    /// `capabilities` object from the server's `initialize` result (empty if none).
+    pub server_capabilities: Value,
     transport:  Transport,
 }
 
@@ -233,14 +266,16 @@ impl MCPConnection {
             }
         };
 
-        let mut conn = MCPConnection { config: config.clone(), tools: Vec::new(), transport };
+        let mut conn = MCPConnection { config: config.clone(), tools: Vec::new(), server_capabilities: Value::Null, transport };
 
-        // Initialize handshake
-        conn.send_request("initialize", serde_json::json!({
-            "protocolVersion": "2024-11-05",
+        // Initialize handshake. Newer protocolVersion so servers may advertise the
+        // MCP Apps / resources capabilities; empty client capabilities are still valid.
+        let init = conn.send_request("initialize", serde_json::json!({
+            "protocolVersion": "2025-06-18",
             "capabilities": {},
-            "clientInfo": { "name": "lexichat", "version": "0.1.0" }
+            "clientInfo": { "name": "lexichat", "version": env!("CARGO_PKG_VERSION") }
         })).await.map_err(|e| format!("Initialize failed: {e}"))?;
+        conn.server_capabilities = init["capabilities"].clone();
 
         // Notify initialized
         conn.send_notification("notifications/initialized", serde_json::json!({})).await?;
@@ -327,31 +362,113 @@ impl MCPConnection {
         }
     }
 
+    /// Text-only tool call — unchanged behaviour for the plain agent path.
     pub async fn call_tool(&mut self, tool_name: &str, args: &Value) -> String {
-        // tool_name is prefixed; look up the raw name the MCP server expects
-        let raw = self.tools.iter()
-            .find(|t| t.name == tool_name)
-            .map(|t| t.raw_name.clone())
-            .unwrap_or_else(|| tool_name.to_string());
+        self.call_tool_rich(tool_name, args).await.text
+    }
+
+    /// Tool call that preserves structured content and any MCP-App UI resource.
+    pub async fn call_tool_rich(&mut self, tool_name: &str, args: &Value) -> ToolCallResult {
+        // tool_name is prefixed; look up the raw name + any declared UI resource.
+        // Match the model-facing prefixed name OR the server's raw name (UI apps
+        // call tools by their raw name over the bridge).
+        let (raw, tool_ui_uri) = self.tools.iter()
+            .find(|t| t.name == tool_name || t.raw_name == tool_name)
+            .map(|t| (t.raw_name.clone(), t.ui_resource_uri.clone()))
+            .unwrap_or_else(|| (tool_name.to_string(), None));
+
         let result = self.send_request("tools/call", serde_json::json!({
             "name": raw,
             "arguments": args
         })).await;
 
-        match result {
-            Ok(resp) => {
-                if let Some(content) = resp["content"].as_array() {
-                    content.iter()
-                        .filter_map(|c| c["text"].as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                } else {
-                    serde_json::to_string_pretty(&resp).unwrap_or_default()
+        let resp = match result {
+            Ok(r) => r,
+            Err(e) => return ToolCallResult {
+                text: format!("MCP tool error: {e}"),
+                structured: None, content: Value::Null, meta: Value::Null,
+                is_error: true, ui_html: None, ui_uri: None,
+            },
+        };
+
+        // Text: join content[].text, else pretty-print the whole result (unchanged).
+        let text = if let Some(content) = resp["content"].as_array() {
+            content.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+        } else {
+            serde_json::to_string_pretty(&resp).unwrap_or_default()
+        };
+        let is_error = resp["isError"].as_bool().unwrap_or(false);
+        let structured = resp.get("structuredContent").cloned();
+
+        // Detect a UI resource (MCP-UI embedded resource or ext-apps _meta ref).
+        let (mut ui_html, ui_uri) = extract_ui(&resp, &tool_ui_uri);
+        // If we have a ui:// uri but no inline HTML, fetch it via resources/read.
+        if ui_html.is_none() {
+            if let Some(uri) = ui_uri.clone() {
+                if let Ok(Some(html)) = self.read_resource(&uri).await {
+                    ui_html = Some(html);
                 }
             }
-            Err(e) => format!("MCP tool error: {e}"),
+        }
+
+        let content = resp["content"].clone();
+        let meta = resp["_meta"].clone();
+        ToolCallResult { text, structured, content, meta, is_error, ui_html, ui_uri }
+    }
+
+    /// Fetch a resource's text/HTML via `resources/read`.
+    pub async fn read_resource(&mut self, uri: &str) -> Result<Option<String>, String> {
+        let resp = self.send_request("resources/read", serde_json::json!({ "uri": uri })).await?;
+        if let Some(contents) = resp["contents"].as_array() {
+            for c in contents {
+                if let Some(t) = c["text"].as_str() {
+                    return Ok(Some(t.to_string()));
+                }
+                if let Some(html) = c["blob"].as_str().and_then(decode_b64_utf8) {
+                    return Ok(Some(html));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Decode a base64 string to a UTF-8 String (lossy), or None on failure.
+fn decode_b64_utf8(b: &str) -> Option<String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    STANDARD.decode(b).ok().map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// Extract an MCP-App UI resource from a `tools/call` result.
+/// Returns `(inline_html, ui_uri)`. Handles both dialects:
+///   (a) MCP-UI — an embedded resource block in `content[]` (`ui://` uri or `text/html`),
+///   (b) ext-apps — `_meta.ui.resourceUri` on the result, falling back to the tool's declared uri.
+fn extract_ui(resp: &Value, tool_ui_uri: &Option<String>) -> (Option<String>, Option<String>) {
+    let mut ui_html: Option<String> = None;
+    let mut ui_uri: Option<String> = None;
+    if let Some(content) = resp["content"].as_array() {
+        for c in content {
+            let res = &c["resource"];
+            let uri  = res["uri"].as_str().or_else(|| c["uri"].as_str());
+            let mime = res["mimeType"].as_str().or_else(|| c["mimeType"].as_str()).unwrap_or("");
+            let is_ui = uri.map(|u| u.starts_with("ui://")).unwrap_or(false)
+                || mime.starts_with("text/html");
+            if is_ui {
+                if let Some(h) = res["text"].as_str().or_else(|| c["text"].as_str()) {
+                    ui_html = Some(h.to_string());
+                } else if let Some(html) = res["blob"].as_str().and_then(decode_b64_utf8) {
+                    ui_html = Some(html);
+                }
+                if ui_uri.is_none() { ui_uri = uri.map(String::from); }
+                if ui_html.is_some() { break; }
+            }
         }
     }
+    if ui_uri.is_none() {
+        ui_uri = resp["_meta"]["ui"]["resourceUri"].as_str().map(String::from)
+            .or_else(|| tool_ui_uri.clone());
+    }
+    (ui_html, ui_uri)
 }
 
 // ── HTTP JSON-RPC helper ──────────────────────────────────────────────────────
@@ -453,6 +570,9 @@ fn parse_tools(config: &MCPServerConfig, result: &Value) -> Vec<MCPTool> {
         let description = t["description"].as_str().unwrap_or("").to_string();
         let input_schema = t["inputSchema"].clone();
 
+        // MCP Apps: a tool may declare a UI resource via _meta.ui.resourceUri.
+        let ui_resource_uri = t["_meta"]["ui"]["resourceUri"].as_str().map(String::from);
+
         let schema = serde_json::json!({
             "type": "function",
             "function": {
@@ -463,7 +583,7 @@ fn parse_tools(config: &MCPServerConfig, result: &Value) -> Vec<MCPTool> {
         });
 
         MCPTool { server_id: config.id.clone(), server_name: config.name.clone(),
-                  name, raw_name, description, input_schema, schema }
+                  name, raw_name, description, input_schema, schema, ui_resource_uri }
     }).collect()
 }
 
@@ -610,6 +730,7 @@ mod tests {
             env: HashMap::new(),
             enabled: true,
             auth: AuthConfig::None,
+            enable_apps: false,
         }
     }
 
@@ -676,5 +797,77 @@ mod tests {
         let result = serde_json::json!({});
         let tools = parse_tools(&config, &result);
         assert!(tools.is_empty());
+    }
+
+    // ── MCP Apps: UI resource detection ───────────────────────────────────────
+
+    #[test]
+    fn parse_tools_captures_ui_resource_uri() {
+        let config = make_config("Maps");
+        let result = serde_json::json!({
+            "tools": [{
+                "name": "show_map",
+                "description": "Show a map",
+                "inputSchema": { "type": "object", "properties": {} },
+                "_meta": { "ui": { "resourceUri": "ui://maps/view" } }
+            }]
+        });
+        let tools = parse_tools(&config, &result);
+        assert_eq!(tools[0].ui_resource_uri.as_deref(), Some("ui://maps/view"));
+    }
+
+    #[test]
+    fn parse_tools_no_ui_by_default() {
+        let config = make_config("Plain");
+        let result = serde_json::json!({
+            "tools": [{ "name": "t", "description": "", "inputSchema": {} }]
+        });
+        let tools = parse_tools(&config, &result);
+        assert!(tools[0].ui_resource_uri.is_none());
+    }
+
+    #[test]
+    fn extract_ui_mcp_ui_embedded_resource() {
+        // MCP-UI: an embedded resource block in content[] with ui:// + inline HTML.
+        let resp = serde_json::json!({
+            "content": [
+                { "type": "text", "text": "here is your chart" },
+                { "type": "resource", "resource": {
+                    "uri": "ui://chart/1",
+                    "mimeType": "text/html;profile=mcp-app",
+                    "text": "<html><body>chart</body></html>"
+                }}
+            ]
+        });
+        let (html, uri) = extract_ui(&resp, &None);
+        assert_eq!(uri.as_deref(), Some("ui://chart/1"));
+        assert!(html.unwrap().contains("chart"));
+    }
+
+    #[test]
+    fn extract_ui_ext_apps_meta_ref() {
+        // ext-apps: result carries _meta.ui.resourceUri, no inline HTML.
+        let resp = serde_json::json!({
+            "content": [{ "type": "text", "text": "ok" }],
+            "_meta": { "ui": { "resourceUri": "ui://app/main" } }
+        });
+        let (html, uri) = extract_ui(&resp, &None);
+        assert!(html.is_none());
+        assert_eq!(uri.as_deref(), Some("ui://app/main"));
+    }
+
+    #[test]
+    fn extract_ui_falls_back_to_tool_declared_uri() {
+        let resp = serde_json::json!({ "content": [{ "type": "text", "text": "ok" }] });
+        let (_, uri) = extract_ui(&resp, &Some("ui://declared/on/tool".to_string()));
+        assert_eq!(uri.as_deref(), Some("ui://declared/on/tool"));
+    }
+
+    #[test]
+    fn extract_ui_none_for_plain_text() {
+        let resp = serde_json::json!({ "content": [{ "type": "text", "text": "just text" }] });
+        let (html, uri) = extract_ui(&resp, &None);
+        assert!(html.is_none());
+        assert!(uri.is_none());
     }
 }

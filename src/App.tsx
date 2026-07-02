@@ -18,6 +18,17 @@ import "./App.css";
 
 interface ToolCall { name: string; args: string; }
 
+// MCP Apps (SEP-1865) UI payload attached to a tool result (see Rust ToolUiPayload).
+interface ToolUi {
+  server_id: string;
+  html?: string;
+  uri?: string;
+  structured?: unknown;
+  content?: unknown;    // raw tool-result content array (forwarded to the app)
+  meta?: unknown;       // raw tool-result _meta
+  arguments?: unknown;  // arguments the tool was called with
+}
+
 interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool-result" | "error";
@@ -27,7 +38,12 @@ interface ChatMessage {
   toolName?: string;
   toolArgs?: string;
   imageDataUrls?: string[];  // base64 data URIs for attached images
+  ui?: ToolUi;               // MCP-App interactive UI to render in a sandboxed iframe
 }
+
+// MCP servers approved to render/interact with apps this session (frontend mirror
+// of the backend apps_allowed set; gates iframe mounting).
+const approvedMcpApps = new Set<string>();
 
 interface ToolSchema {
   type: string;
@@ -765,13 +781,184 @@ function UrlListResult({ name, result, onSend }: { name: string; result: string;
   );
 }
 
+// ── MCP App (SEP-1865) sandboxed iframe + postMessage bridge ──────────────────
+function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: string; onSend: (text: string) => void }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [approved, setApproved] = useState(approvedMcpApps.has(ui.server_id));
+
+  useEffect(() => {
+    if (!approved || !ui.html) return;
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+
+    // Surface bridge traffic in the Debug panel (window event, frontend-only).
+    const logBridge = (dir: "host→app" | "app→host", msg: unknown) => {
+      const m = msg as Record<string, unknown> | null;
+      const label = String(m?.method ?? (m?.result ? "result" : m?.error ? "error" : m?.type) ?? "message");
+      let preview = "";
+      try { preview = JSON.stringify(msg).slice(0, 400); } catch { /* ignore */ }
+      window.dispatchEvent(new CustomEvent("mcp-app-bridge", {
+        detail: { dir, tool: toolName, label, preview },
+      }));
+    };
+
+    const post = (msg: unknown) => { logBridge("host→app", msg); iframe.contentWindow?.postMessage(msg, "*"); };
+
+    const proxyCall = async (toolNameArg: string, argsObj: unknown) =>
+      invoke("mcp_ui_call_tool", { args: { server_id: ui.server_id, tool_name: toolNameArg, arguments: argsObj ?? {} } });
+
+    const onMessage = async (event: MessageEvent) => {
+      if (event.source !== iframe.contentWindow) return; // only this app's iframe
+      const data = event.data as Record<string, unknown> | null;
+      if (!data || typeof data !== "object") return;
+      logBridge("app→host", data);
+
+      // ── ext-apps dialect: JSON-RPC over postMessage ──
+      if (data.jsonrpc === "2.0" && typeof data.method === "string") {
+        const { id, method } = data as { id?: unknown; method: string };
+        const params = (data.params ?? {}) as Record<string, unknown>;
+
+        // Push the tool's input + result so the app can render its content.
+        const pushToolData = () => {
+          post({ jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: ui.arguments ?? {} } });
+          post({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: {
+            content: ui.content ?? [],
+            structuredContent: ui.structured ?? undefined,
+            _meta: ui.meta ?? undefined,
+          }});
+        };
+
+        try {
+          if (method === "ui/initialize") {
+            // Respond with the full McpUiInitializeResult shape the app SDK expects.
+            post({ jsonrpc: "2.0", id, result: {
+              protocolVersion: "2026-01-26",
+              hostCapabilities: {},
+              hostInfo: { name: "LexiChat", version: "1.8.0" },
+              hostContext: {
+                toolInfo: {
+                  id: "1",
+                  tool: { name: toolName, description: "", inputSchema: { type: "object", properties: {} } },
+                },
+                theme: "light",
+                styles: { variables: {}, css: {} },
+                displayMode: "inline",
+                containerDimensions: { width: 600, height: 420 },
+              },
+            }});
+            // Some apps render on the initialize result; others wait for the
+            // initialized notification. Push tool data now as a fallback too.
+            pushToolData();
+          } else if (method === "ui/notifications/initialized") {
+            // Spec-correct trigger: deliver tool input + result after init.
+            pushToolData();
+          } else if (method === "tools/call") {
+            const r = await proxyCall(String(params.name ?? ""), params.arguments) as Record<string, unknown>;
+            post({ jsonrpc: "2.0", id, result: {
+              content: r.content ?? [{ type: "text", text: String(r.text ?? "") }],
+              structuredContent: r.structured ?? undefined,
+              isError: Boolean(r.isError),
+            }});
+          } else if (method === "ui/open-link") {
+            if (params.url) openUrl(String(params.url)).catch(() => {});
+            if (id != null) post({ jsonrpc: "2.0", id, result: {} });
+          } else if (method === "ui/message" || method === "ui/sendMessage" || method === "sendMessage") {
+            const text = String(params.text ?? params.prompt ?? "");
+            if (text) onSend(text);
+            if (id != null) post({ jsonrpc: "2.0", id, result: {} });
+          } else if (method === "ui/request-display-mode") {
+            if (id != null) post({ jsonrpc: "2.0", id, result: { displayMode: "inline" } });
+          } else if (id != null) {
+            // Unknown request — ack politely so the app isn't left hanging.
+            post({ jsonrpc: "2.0", id, result: {} });
+          }
+        } catch (err) {
+          if (id != null) post({ jsonrpc: "2.0", id, error: { code: -32000, message: String(err) } });
+        }
+        return;
+      }
+
+      // ── MCP-UI dialect: { type, payload, messageId? } ──
+      const type = data.type as string | undefined;
+      const messageId = data.messageId;
+      const payload = (data.payload ?? {}) as Record<string, unknown>;
+      const respond = (body: Record<string, unknown>) => { if (messageId != null) post({ type: "ui-message-response", messageId, payload: body }); };
+      try {
+        if (type === "ui-lifecycle-iframe-ready") {
+          // MCP-UI app announced ready → send it the initial render data.
+          post({ type: "ui-lifecycle-iframe-render-data", payload: { renderData: ui.structured ?? null } });
+          return;
+        }
+        if (type === "tool") {
+          const r = await proxyCall(String(payload.toolName ?? ""), payload.params);
+          respond({ response: r });
+        } else if (type === "prompt") {
+          if (payload.prompt) onSend(String(payload.prompt));
+          respond({ response: "ok" });
+        } else if (type === "link") {
+          if (payload.url) openUrl(String(payload.url)).catch(() => {});
+          respond({ response: "ok" });
+        } else if (type != null) {
+          respond({ response: "ok" });
+        }
+      } catch (err) {
+        respond({ error: String(err) });
+      }
+    };
+
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [approved, ui, onSend]);
+
+  if (!ui.html) return null;
+
+  if (!approved) {
+    return (
+      <div className="msg-tool-result">
+        <div style={{ padding: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>🔒 Interactive app from “{toolName}”</div>
+          <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
+            This MCP server wants to display an interactive UI that can call its tools. Only allow apps from servers you trust.
+          </div>
+          <button className="btn primary" onClick={async () => {
+            try { await invoke("approve_mcp_app", { args: { server_id: ui.server_id } }); } catch { /* ignore */ }
+            approvedMcpApps.add(ui.server_id);
+            setApproved(true);
+          }}>Allow app</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="msg-tool-result">
+      <div className="tool-result-inner">
+        <span className="tool-result-check">✓</span>
+        <span className="tool-result-name">{toolName}</span>
+        <span className="tool-result-dot">·</span>
+        <span className="tool-result-preview">interactive app</span>
+      </div>
+      <iframe
+        ref={iframeRef}
+        title={`mcp-app-${toolName}`}
+        sandbox="allow-scripts allow-forms"
+        srcDoc={ui.html}
+        style={{ width: "100%", height: 420, border: "1px solid var(--border)", borderRadius: 8, background: "#fff", marginTop: 6 }}
+      />
+    </div>
+  );
+}
+
 function ToolResultRow({
-  name, result, args, onSend, onAttach,
+  name, result, args, ui, onSend, onAttach,
 }: {
-  name: string; result: string; args?: string;
+  name: string; result: string; args?: string; ui?: ToolUi;
   onSend: (text: string) => void;
   onAttach: (path: string, prompt: string) => void;
 }) {
+  if (ui?.html) {
+    return <McpAppFrame ui={ui} toolName={name} onSend={onSend} />;
+  }
   if (FILE_LISTING_TOOLS.has(name)) {
     return <FileBrowserResult name={name} result={result} args={args} onSend={onSend} onAttach={onAttach} />;
   }
@@ -867,7 +1054,7 @@ export default function App() {
       });
     }).then(u => cleanup.push(u));
 
-    listen<{ name: string; result: string }>("agent-tool-result", e => {
+    listen<{ name: string; result: string; ui?: ToolUi }>("agent-tool-result", e => {
       setMessages(prev => {
         // Find args for this tool call from the most recent streaming assistant message
         const streamingMsg = [...prev].reverse().find(m => m.role === "assistant" && m.streaming);
@@ -878,6 +1065,7 @@ export default function App() {
           text: e.payload.result,
           toolName: e.payload.name,
           toolArgs: matchingCall?.args,
+          ui: e.payload.ui,
         }];
       });
     }).then(u => cleanup.push(u));
@@ -1301,6 +1489,7 @@ export default function App() {
                   name={msg.toolName ?? ""}
                   result={msg.text}
                   args={msg.toolArgs}
+                  ui={msg.ui}
                   onSend={send}
                   onAttach={(path, prompt) => { setAttachedFiles([path]); setInput(prompt); }}
                 />

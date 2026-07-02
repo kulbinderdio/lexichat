@@ -34,6 +34,7 @@ export interface StoredMCPServer {
   env: Record<string, string>;
   auth?: AuthConfig;
   enabledTools?: Record<string, boolean>;  // prefixed tool name → enabled; absent = enabled
+  enable_apps?: boolean;                    // allow this server's tools to render MCP-App UIs
 }
 
 export interface StoredOpenAPISpec {
@@ -153,8 +154,9 @@ interface MCPServerInfo {
   args: string[];
   connected: boolean;
   tool_count: number;
-  tools: { name: string; description: string }[];
+  tools: { name: string; description: string; has_ui?: boolean }[];
   error?: string;
+  enable_apps?: boolean;
 }
 
 interface Props {
@@ -1649,6 +1651,7 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
   const [command, setCommand] = useState("");
   const [argsStr, setArgsStr] = useState("");
   const [envStr, setEnvStr] = useState("");
+  const [enableApps, setEnableApps] = useState(false);
   const [auth, setAuth] = useState<AuthConfig>(DEFAULT_AUTH);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1674,13 +1677,13 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
       }
       const effectiveAuth = isHttp ? auth : DEFAULT_AUTH;
       const info = await invoke<MCPServerInfo>("add_mcp_server", {
-        args: { name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth }
+        args: { name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth, enable_apps: enableApps }
       });
-      const entry: StoredMCPServer = { id: info.id, name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth };
+      const entry: StoredMCPServer = { id: info.id, name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth, enable_apps: enableApps };
       setServers(prev => [...prev, info]);
       onChange([...stored, entry]);
       setShowAdd(false);
-      setName(""); setCommand(""); setArgsStr(""); setEnvStr(""); setAuth(DEFAULT_AUTH);
+      setName(""); setCommand(""); setArgsStr(""); setEnvStr(""); setEnableApps(false); setAuth(DEFAULT_AUTH);
     } catch (e) {
       setError(String(e));
     }
@@ -1706,6 +1709,7 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
         updated = await invoke<MCPServerInfo>("add_mcp_server", { args: {
           id: storedSrv.id, name: storedSrv.name, command: storedSrv.command,
           args: storedSrv.args, env: storedSrv.env ?? {}, auth: storedSrv.auth,
+          enable_apps: storedSrv.enable_apps ?? false,
         }});
       } else {
         updated = await invoke<MCPServerInfo>("reconnect_mcp_server", { id });
@@ -1780,6 +1784,11 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
             {expanded.has(storedSrv.id) && (
               <div style={{ paddingLeft: 28 }}>
                 {srvError && <div style={{ fontSize: 11, color: "#f87171", padding: "4px 16px" }}>{srvError}</div>}
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, padding: "4px 0", cursor: "pointer" }}>
+                  <input type="checkbox" checked={storedSrv.enable_apps ?? false}
+                    onChange={e => onChange(stored.map(s => s.id === storedSrv.id ? { ...s, enable_apps: e.target.checked } : s))} />
+                  Interactive apps (UI){tools.some(t => t.has_ui) ? " · this server offers app tools" : ""}
+                </label>
                 {tools.length > 0 && (
                   <div style={{ paddingBottom: 4, display: "flex", gap: 8 }}>
                     <button className="btn" style={{ fontSize: 10, padding: "1px 7px" }}
@@ -1841,6 +1850,10 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
                   style={{ fontFamily: "monospace", fontSize: 11, resize: "vertical" }} />
               </div>
               {isHttp && <AuthConfigForm auth={auth} onChange={setAuth} />}
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
+                <input type="checkbox" checked={enableApps} onChange={e => setEnableApps(e.target.checked)} />
+                Enable interactive apps (UI) — lets this server render sandboxed HTML in chat
+              </label>
               {error && <div style={{ color: "#f87171", fontSize: 12 }}>{error}</div>}
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn" onClick={() => { setShowAdd(false); setError(""); }}>Cancel</button>
