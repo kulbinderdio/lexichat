@@ -870,4 +870,41 @@ mod tests {
         assert!(html.is_none());
         assert!(uri.is_none());
     }
+
+    // ── stdio transport integration (spawns a Node JSON-RPC stub) ─────────────
+
+    fn node_available() -> bool {
+        std::process::Command::new("node").arg("--version").output().is_ok()
+    }
+
+    #[tokio::test]
+    async fn stdio_connect_call_and_fetch_ui_resource() {
+        if !node_available() {
+            eprintln!("node not available — skipping stdio MCP integration test");
+            return;
+        }
+        let stub = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/mcp-stub.js");
+        let config = MCPServerConfig {
+            id: "stub".into(), name: "Stub".into(),
+            command: format!("node {stub}"),
+            args: vec![], env: HashMap::new(), enabled: true,
+            auth: AuthConfig::None, enable_apps: true,
+        };
+
+        let mut conn = MCPConnection::connect(config).await.expect("connect to stub");
+
+        // tools/list parsed, and the UI tool carries its resource URI.
+        assert!(conn.tools.iter().any(|t| t.raw_name == "echo"));
+        let show = conn.tools.iter().find(|t| t.raw_name == "show_ui").expect("show_ui tool");
+        assert_eq!(show.ui_resource_uri.as_deref(), Some("ui://stub/app"));
+
+        // Plain text tool call (by prefixed name).
+        let echoed = conn.call_tool("stub_echo", &serde_json::json!({ "text": "hi" })).await;
+        assert_eq!(echoed, "hi");
+
+        // MCP-App tool → result references a ui:// resource → read_resource fetches its HTML.
+        let rich = conn.call_tool_rich("stub_show_ui", &serde_json::json!({})).await;
+        assert_eq!(rich.ui_uri.as_deref(), Some("ui://stub/app"));
+        assert!(rich.ui_html.as_deref().unwrap_or("").contains("stub app"), "ui_html: {:?}", rich.ui_html);
+    }
 }

@@ -782,7 +782,7 @@ function UrlListResult({ name, result, onSend }: { name: string; result: string;
 }
 
 // ── MCP App (SEP-1865) sandboxed iframe + postMessage bridge ──────────────────
-function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: string; onSend: (text: string) => void }) {
+export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: string; onSend: (text: string) => void }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [approved, setApproved] = useState(approvedMcpApps.has(ui.server_id));
 
@@ -949,7 +949,7 @@ function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: string; o
   );
 }
 
-function ToolResultRow({
+export function ToolResultRow({
   name, result, args, ui, onSend, onAttach,
 }: {
   name: string; result: string; args?: string; ui?: ToolUi;

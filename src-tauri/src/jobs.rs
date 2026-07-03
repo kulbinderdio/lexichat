@@ -548,3 +548,89 @@ pub fn spawn_scheduler(app: tauri::AppHandle) {
         }
     });
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{Duration, Local, Datelike, Timelike};
+
+    #[test]
+    fn manual_is_never_due() {
+        assert!(!is_due(&JobSchedule::Manual, None, Utc::now()));
+        assert!(!is_due(&JobSchedule::Manual, Some(Utc::now()), Utc::now()));
+    }
+
+    #[test]
+    fn interval_due_when_never_run() {
+        assert!(is_due(&JobSchedule::Interval { hours: 6 }, None, Utc::now()));
+    }
+
+    #[test]
+    fn interval_due_after_enough_time() {
+        let now = Utc::now();
+        assert!(is_due(&JobSchedule::Interval { hours: 6 }, Some(now - Duration::hours(7)), now));
+    }
+
+    #[test]
+    fn interval_not_due_too_soon() {
+        let now = Utc::now();
+        assert!(!is_due(&JobSchedule::Interval { hours: 6 }, Some(now - Duration::minutes(30)), now));
+    }
+
+    // Daily/Weekly compare against local wall-clock; derive the schedule from `now`
+    // so the assertions hold regardless of the machine's timezone.
+    #[test]
+    fn daily_due_at_matching_minute_then_not_after_running() {
+        let now = Utc::now();
+        let local = now.with_timezone(&Local);
+        let sched = JobSchedule::Daily { hour: local.hour(), minute: local.minute() };
+        assert!(is_due(&sched, None, now), "should be due at the matching minute");
+        assert!(!is_due(&sched, Some(now), now), "should not re-run after running today");
+    }
+
+    #[test]
+    fn daily_not_due_at_other_minute() {
+        let now = Utc::now();
+        let local = now.with_timezone(&Local);
+        let other = (local.minute() + 1) % 60;
+        let sched = JobSchedule::Daily { hour: local.hour(), minute: other };
+        assert!(!is_due(&sched, None, now));
+    }
+
+    #[test]
+    fn weekly_due_on_matching_weekday_and_time() {
+        let now = Utc::now();
+        let local = now.with_timezone(&Local);
+        let sched = JobSchedule::Weekly {
+            weekday: local.weekday().num_days_from_monday(),
+            hour: local.hour(),
+            minute: local.minute(),
+        };
+        assert!(is_due(&sched, None, now));
+        assert!(!is_due(&sched, Some(now), now));
+    }
+
+    #[test]
+    fn compile_steps_numbers_sections() {
+        let steps = vec![
+            JobStep { id: "1".into(), step_type: "text".into(),
+                      instruction: Some("First thing".into()), tool_name: None, tool_hint: None },
+            JobStep { id: "2".into(), step_type: "tool".into(),
+                      instruction: Some("Second thing".into()),
+                      tool_name: Some("read_file".into()), tool_hint: Some("path=/tmp/x".into()) },
+        ];
+        let out = compile_steps(&steps);
+        assert!(out.contains("STEP 1"));
+        assert!(out.contains("First thing"));
+        assert!(out.contains("STEP 2"));
+        assert!(out.contains("Call tool: read_file"));
+        assert!(out.contains("path=/tmp/x"));
+    }
+
+    #[test]
+    fn compile_steps_empty_is_empty() {
+        assert_eq!(compile_steps(&[]), "");
+    }
+}

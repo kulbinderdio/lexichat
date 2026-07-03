@@ -1,153 +1,78 @@
 # TESTING.md
 
+LexiChat has four automated test layers, all headless and runnable with **no external
+services** (Ollama/MCP/SPARQL are mocked or stubbed). CI runs them on every push/PR
+(`.github/workflows/test.yml`); `build.yml` stays release-only.
+
 ## Running the tests
 
 ```bash
-npm test              # Frontend tests only (Vitest, ~0.5s)
-npm run test:rust     # Rust tests only (cargo test, ~0.2s after first compile)
-npm run test:all      # Both — run this after every build
-npm run test:watch    # Frontend in watch mode during development
-npm run test:coverage # Frontend with coverage report
+npm run test          # Frontend unit + component tests (Vitest + jsdom + RTL)
+npm run test:rust     # Rust unit + HTTP-integration tests (cargo test)
+npm run test:all      # Both of the above
+npm run test:e2e      # Playwright UI e2e (headless Chromium, mocked Tauri IPC)
+
+npm run test:watch    # Frontend in watch mode
+npm run test:coverage # Frontend coverage report
 ```
 
-## What's tested
+`test:e2e` starts the Vite dev server automatically (see `playwright.config.ts`).
+First run needs the browser: `npx playwright install chromium`.
 
-**84 tests total across 5 suites.**
+## The four layers
 
-### Rust — `src-tauri/src/openapi.rs` (23 tests)
+### 1. Rust unit tests — pure logic
+`#[cfg(test)] mod tests` at the bottom of each source file. Cover parsing, serde
+round-trips, sanitization, the SPARQL read-only guard, MCP-App UI detection
+(`extract_ui`), sandbox path-gating (`tools::check_path`), the Python sandbox
+(`sandbox.rs`), wiki FS ops, and the job scheduler's cron logic (`jobs::is_due`).
 
-`sanitize_tool_name`
-- Lowercase alphanumeric preserved unchanged
-- Uppercase letters lowercased
-- Dots, spaces, hyphens converted to underscores
-- Leading/trailing underscores stripped
-- Consecutive separators collapsed to single underscore
-- Numbers preserved
-- Empty string handled
+### 2. Rust HTTP-integration tests — mocked servers (`#[tokio::test]`)
+Also in-file, using the `wiremock` dev-dependency to spin up an in-process HTTP
+server, or a spawned stub process:
+- `openapi.rs` — `execute()` against a mock (query substitution, bearer auth header, response formatting).
+- `sparql.rs` — `execute()` (SELECT→table, read-only rejection) and `probe()` (liveness + prefix derivation).
+- `mcp.rs` — **stdio transport** driven end-to-end against `src-tauri/tests/fixtures/mcp-stub.js` (a Node JSON-RPC stub): `connect` handshake, `call_tool`, and the MCP-App path (`call_tool_rich` → `read_resource` fetching a `ui://` resource).
 
-`tool_prefix`
-- Strips ` API`, ` Service`, ` Server` suffixes
-- Produces trailing underscore (e.g. `"Gmail API"` → `"gmail_"`)
-- Empty/whitespace-only input falls back to `"svc_"`
+### 3. Frontend component tests — Vitest + React Testing Library
+`src/**/*.test.tsx`, using the Tauri IPC mocks in `src/test/setup.ts`
+(`invoke`/`listen`/`emit`/`openUrl` are `vi.fn()`s). E.g. `McpAppFrame.test.tsx`
+covers the MCP-App **consent gate** (Allow → `invoke("approve_mcp_app")` → sandboxed
+iframe mounts) and `ToolResultRow` render branches. Pure-logic helpers are tested in
+`src/test/*.test.ts` (`extractSpecMeta`, `loadSettings`/`saveSettings`).
 
-`parse_spec`
-- Tool names are prefixed with the service name
-- HTTP methods are uppercased
-- Path parameters detected as `location = "path"` and marked required
-- Query parameters detected as optional by default
-- Request body properties extracted as `location = "body"`
-- Tool names capped at 64 characters
-- Non-HTTP methods (e.g. `x-custom`) ignored
-- Missing `operationId` synthesised from method + path
-- Invalid JSON returns `Err`
-- Missing `paths` key returns `Err`
+### 4. Playwright e2e — real browser, mocked backend
+`e2e/*.spec.ts` run the React app in headless Chromium with the Tauri bridge faked by
+`e2e/mock-tauri.ts` (injected via `addInitScript`): it stubs `invoke` with canned
+responses and implements the event system, exposing `window.__mockEmit(event, payload)`
+so a test can push backend events. This exercises the **real** iframe + `postMessage`
+bridge that jsdom can't — e.g. emitting an `agent-tool-result` with `ui.html`, clicking
+**Allow**, and asserting the content renders inside the sandboxed `srcdoc` iframe.
+Cross-platform (runs on macOS/Linux/Windows); the real Rust backend is not exercised
+here (that's layer 2).
 
-### Rust — `src-tauri/src/mcp.rs` (17 tests)
+## Mock seams (how each layer injects test doubles)
 
-`is_url`
-- Detects `http://` and `https://` URLs
-- Rejects shell commands and file paths
-
-`AuthConfig` serialization
-- All 5 variants round-trip through `serde_json` (`none`, `bearer`, `apikey`, `basic`, `oauth2`)
-- All type tags serialize as lowercase strings (critical: Tauri frontend sends lowercase)
-- Deserializes correctly from the JSON format the TypeScript frontend sends
-
-`parse_tools`
-- Tool names are prefixed with sanitized server name
-- Original `raw_name` is preserved (used when calling the MCP server)
-- Names capped at 64 characters
-- Empty tool list handled
-- Missing `tools` key handled
-
-### Rust — `src-tauri/src/tools.rs` (17 tests)
-
-`check_path`
-- Allowed when no restrictions configured
-- Allowed when path is within an allowed directory
-- Denied when path is outside all allowed directories
-- Denied on `../` traversal attempts
-- Non-existent files resolved via parent directory
-- Note: tests canonicalize temp dir paths to handle macOS `/var` → `/private/var` symlinks
-
-`glob_matches`
-- `*` matches any sequence including empty
-- `?` matches exactly one character
-- Exact match with no wildcards
-- Non-matching patterns return false
-- Empty pattern matches empty string only
-
-`all_builtin_schemas`
-- Returns exactly 12 schemas
-- Every schema has `name`, `description`, and `parameters` fields
-- All tool names are valid: `[a-z0-9_]`, no leading/trailing `_`, max 64 chars
-
-### Frontend — `src/test/extractSpecMeta.test.ts` (17 tests)
-
-OpenAPI 3.x extraction:
-- Title from `info.title`
-- Base URL from `servers[0].url` (trailing slash stripped)
-- Token URL and Authorization URL from `authorizationCode` flow
-- Scopes as space-separated string
-- Prefers `authorizationCode` over `clientCredentials` when both present
-- Returns `undefined` fields when no security schemes present
-- Ignores non-OAuth2 schemes (e.g. apiKey)
-
-Swagger 2.0 extraction:
-- Base URL reconstructed from `host` + `basePath` + `schemes`
-- Defaults to `https` when `schemes` is absent
-- Token URL and Authorization URL from `accessCode` flow
-- Authorization URL from `implicit` flow (no token URL)
-- Scopes extracted from Swagger 2.0 definitions
-
-Edge cases:
-- Invalid JSON returns `{}`
-- Empty string returns `{}`
-- Empty object `{}` returns `{}`
-- Missing title returns `undefined` while other fields still extracted
-
-### Frontend — `src/test/settings.test.ts` (10 tests)
-
-`loadSettings`
-- Returns all defaults when localStorage is empty
-- Merges saved values over defaults (missing keys filled from defaults)
-- Returns defaults when localStorage contains corrupted JSON
-- Preserves saved profiles array
-- Preserves saved `enabledTools` overrides
-
-`saveSettings` + `loadSettings` round-trip:
-- Host change persists
-- Model list persists
-- Active profile ID persists
-- `maxTools` persists
-- Second save overwrites first
-
-## Test infrastructure
-
-**Frontend** — Vitest + jsdom + React Testing Library
-
-- Config: `vite.config.ts` → `test` block
-- Setup file: `src/test/setup.ts`
-  - Provides a `localStorage` mock (jsdom's built-in can be incomplete)
-  - Mocks all Tauri APIs (`@tauri-apps/api/core`, `@tauri-apps/api/event`, plugins)
-
-**Rust** — built-in `cargo test`
-
-- Tests live in `#[cfg(test)] mod tests` at the bottom of each source file
-- Dev dependency: `tempfile = "3"` (temp directories for sandbox path tests)
-
-## Keeping tests up to date
-
-When changing the code, update the corresponding tests:
-
-| Changed area | Test file |
+| Dependency | Seam |
 |---|---|
-| Tool name sanitization or prefixing | `src-tauri/src/openapi.rs` tests |
-| `AuthConfig` variants or serde rename tags | `src-tauri/src/mcp.rs` tests |
-| File sandbox (`check_path`) or built-in schemas | `src-tauri/src/tools.rs` tests |
-| `extractSpecMeta` parsing logic | `src/test/extractSpecMeta.test.ts` |
-| Settings structure, keys, or defaults | `src/test/settings.test.ts` |
+| Ollama | `host` is a parameter (`ollama.rs`) → point at a mock base URL |
+| OpenAPI / SPARQL | `base_url` / `endpoint_url` struct fields → mock server; `execute` takes `app: Option<&AppHandle>` → pass `None` |
+| MCP (HTTP) | `config.command` = mock URL |
+| MCP (stdio) | `config.command` = `node tests/fixtures/mcp-stub.js` |
+| OAuth2 token | `token_url` → mock server |
+| Frontend IPC | `src/test/setup.ts` `vi.mock`s (unit) / `e2e/mock-tauri.ts` init-script (e2e) |
 
-When adding a new Rust module with pure functions, add a `#[cfg(test)] mod tests` block at the bottom of that file following the same pattern.
+## Adding tests
+- **Rust pure logic** → add to the file's `#[cfg(test)] mod tests`.
+- **Rust HTTP path** → `#[tokio::test]` with a `wiremock::MockServer` (see `sparql.rs`/`openapi.rs`).
+- **React component** → `src/**/*.test.tsx`; drive `vi.mocked(invoke)` return values.
+- **User flow** → `e2e/*.spec.ts`; use `window.__mockEmit` to simulate backend events.
 
-When adding a new pure TypeScript utility function, add a `.test.ts` file under `src/test/`.
+## Known gaps / future work
+- **`agent_loop` behavioural tests** — the core orchestration in `ollama.rs` is coupled
+  to `&AppHandle` (it `emit`s directly). Testing it needs Tauri's `MockRuntime` to
+  capture events, or an event-sink abstraction. Deferred.
+- **`web_search` / `fetch_webpage`** hardcode their endpoints (`tools.rs`) — thread an
+  injectable base URL to make them mockable.
+- **Real-app E2E** via `tauri-driver` (Linux/Windows CI only — not macOS) for true
+  full-stack coverage.

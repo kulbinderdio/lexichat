@@ -551,4 +551,52 @@ mod tests {
         let result = parse_spec("Test", "https://example.com", r#"{"info":{}}"#);
         assert!(result.is_err());
     }
+
+    // ── HTTP integration (wiremock) ───────────────────────────────────────────
+
+    fn get_spec(base_url: &str) -> RegisteredSpec {
+        let spec_json = serde_json::json!({
+            "paths": { "/search": { "get": {
+                "operationId": "search",
+                "summary": "Search",
+                "parameters": [{ "name": "q", "in": "query", "required": true, "schema": { "type": "string" } }]
+            }}}
+        }).to_string();
+        let tools = parse_spec("Test", base_url, &spec_json).unwrap();
+        RegisteredSpec { id: "id".into(), title: "Test".into(), base_url: base_url.into(),
+                         auth: crate::mcp::AuthConfig::None, tools }
+    }
+
+    #[tokio::test]
+    async fn execute_get_substitutes_query_and_returns_body() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::{method, path, query_param};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search"))
+            .and(query_param("q", "hello"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .mount(&server).await;
+
+        let spec = get_spec(&server.uri());
+        let out = execute(&spec, &spec.tools[0], &serde_json::json!({ "q": "hello" }), None).await;
+        assert!(out.contains("HTTP 200"), "got: {out}");
+        assert!(out.contains("\"ok\""), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn execute_applies_bearer_auth_header() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::{method, header};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("authorization", "Bearer tok-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .mount(&server).await;
+
+        let mut spec = get_spec(&server.uri());
+        spec.auth = crate::mcp::AuthConfig::Bearer { bearer_token: "tok-123".into() };
+        let out = execute(&spec, &spec.tools[0], &serde_json::json!({ "q": "x" }), None).await;
+        assert!(out.contains("HTTP 200"), "auth header not accepted: {out}");
+    }
 }

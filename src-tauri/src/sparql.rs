@@ -519,4 +519,68 @@ mod tests {
         assert_eq!(suggest_prefix("http://www.w3.org/2000/01/rdf-schema#", 3), "rdfs");
         assert_eq!(suggest_prefix("https://novel.example/ns#", 2), "ns2");
     }
+
+    // ── HTTP integration (wiremock) ───────────────────────────────────────────
+
+    fn endpoint_at(url: &str) -> RegisteredSparqlEndpoint {
+        RegisteredSparqlEndpoint {
+            id: "id".into(), title: "Test".into(), endpoint_url: url.into(),
+            prefixes: String::new(), schema_summary: String::new(),
+            example_queries: vec![], usage_hint: String::new(),
+            auth: AuthConfig::default(), read_only: true, tools: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_flattens_select_results() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::method;
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "head": { "vars": ["s", "label"] },
+            "results": { "bindings": [
+                { "s": { "type": "uri", "value": "https://ex/1" }, "label": { "type": "literal", "value": "One" } }
+            ] }
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server).await;
+
+        let ep = endpoint_at(&server.uri());
+        let out = execute(&ep, "SELECT ?s ?label WHERE { ?s ?p ?label } LIMIT 1", None).await;
+        assert!(out.contains("1 row(s)"), "got: {out}");
+        assert!(out.contains("https://ex/1 | One"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_update_without_calling_server() {
+        // read_only guard must reject before any HTTP call — an unroutable URL proves it.
+        let ep = endpoint_at("http://127.0.0.1:9/never");
+        let out = execute(&ep, "DELETE WHERE { ?s ?p ?o }", None).await;
+        assert!(out.starts_with("Rejected"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn probe_reports_live_and_derives_prefixes() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::method;
+        let server = MockServer::start().await;
+        // One response satisfies the liveness (?s), class (?c) and property (?p) probes.
+        let body = serde_json::json!({
+            "head": { "vars": ["s", "c", "p"] },
+            "results": { "bindings": [{
+                "s": { "type": "uri", "value": "https://ex/1" },
+                "c": { "type": "uri", "value": "http://www.w3.org/2000/01/rdf-schema#Class" },
+                "p": { "type": "uri", "value": "https://ex/prop#name" }
+            }] }
+        });
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server).await;
+
+        let res = probe(&server.uri(), &AuthConfig::default()).await;
+        assert!(res.live);
+        assert!(res.suggested_prefixes.contains("rdfs"), "prefixes: {}", res.suggested_prefixes);
+        assert!(res.suggested_schema.contains("Class"), "schema: {}", res.suggested_schema);
+    }
 }

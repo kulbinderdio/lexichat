@@ -43,4 +43,6 @@ monty = { git = "https://github.com/pydantic/monty", rev = "8feace1a5f7335970ceb
 
 [dev-dependencies]
 tempfile = "3"
+# In-process HTTP mock server for integration tests (async, reqwest-friendly).
+wiremock = "0.6"
 
