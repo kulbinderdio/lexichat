@@ -129,19 +129,28 @@ Output: `src-tauri/target/release/bundle/deb/` (.deb) and `appimage/` (.AppImage
 
 ## Running Tests
 
+All suites are headless and need **no external services** — Ollama, MCP servers, and
+HTTP endpoints are mocked or stubbed.
+
 ```bash
-# Frontend tests (Vitest)
-npm test
+npm run test          # Frontend: unit + React component tests (Vitest + jsdom)
+npm run test:rust     # Rust: unit + HTTP-integration tests (cargo test)
+npm run test:all      # Both of the above
+npm run test:e2e      # End-to-end UI tests (Playwright, headless Chromium)
 
-# Rust tests
-npm run test:rust
-
-# Both together
-npm run test:all
-
-# Frontend with coverage
-npm run test:coverage
+npm run test:coverage # Frontend coverage report
 ```
+
+First e2e run needs the browser: `npx playwright install chromium`.
+
+### What's covered
+
+- **Rust unit** — parsing, serde, tool-name sanitization, SPARQL read-only guard, MCP-App UI detection, sandbox path-gating, wiki FS ops, job cron logic.
+- **Rust integration** — real HTTP calls against an in-process mock (`wiremock`) for OpenAPI / SPARQL / MCP-HTTP, plus the MCP **stdio** transport driven end-to-end against a Node JSON-RPC stub (`src-tauri/tests/fixtures/mcp-stub.js`).
+- **Frontend components** — React Testing Library with mocked Tauri IPC (`src/test/setup.ts`); e.g. the MCP-App consent gate.
+- **End-to-end** — Playwright runs the real UI in a browser with the Tauri bridge mocked (`e2e/mock-tauri.ts`), exercising the real sandboxed-iframe / postMessage MCP-App flow.
+
+**CI:** `.github/workflows/test.yml` runs the entire suite on every push and pull request. See **[TESTING.md](TESTING.md)** for the full breakdown, mock seams, and how to add tests.
 
 ---
 
