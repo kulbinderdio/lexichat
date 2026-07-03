@@ -77,6 +77,8 @@ tailwind.config = {
       <a href="#sparql" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">SPARQL Endpoints</a>
       <a href="#sparql-fields" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Endpoint fields</a>
       <a href="#sparql-example" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">Example: Land Registry</a>
+      <a href="#mcp" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">MCP Servers</a>
+      <a href="#mcp-apps" class="block text-sm text-slate-600 hover:text-accent py-1 pl-4 transition-colors">MCP Apps (interactive UI)</a>
       <a href="#auth" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Authentication</a>
       <a href="#managing" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Managing Tools</a>
       <a href="#limitations" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">Limitations</a>
@@ -91,16 +93,16 @@ tailwind.config = {
       </a>
     </div>
 
-    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">OpenAPI &amp; Custom Integrations</h1>
-    <p class="text-lg text-slate-600 mb-10">Connect LexiChat to any REST API — paste an OpenAPI spec or define your own HTTP endpoint in seconds.</p>
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">OpenAPI, SPARQL, MCP &amp; Custom Integrations</h1>
+    <p class="text-lg text-slate-600 mb-10">Connect LexiChat to any REST API, SPARQL endpoint, or MCP server — including interactive MCP Apps that render live UI in the chat.</p>
 
     <!-- Overview -->
     <section id="overview" class="mb-12">
       <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
         <span class="material-symbols-outlined text-accent">hub</span> Overview
       </h2>
-      <p class="text-slate-600 mb-5">Beyond the built-in tools, LexiChat lets you connect external data sources as callable tools. There are three ways to do this:</p>
-      <div class="grid sm:grid-cols-3 gap-4">
+      <p class="text-slate-600 mb-5">Beyond the built-in tools, LexiChat lets you connect external data sources as callable tools. There are four ways to do this:</p>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div class="bg-white border border-slate-200 rounded-xl p-5">
           <div class="flex items-center gap-2 mb-3">
             <span class="material-symbols-outlined text-accent">description</span>
@@ -121,6 +123,13 @@ tailwind.config = {
             <div class="font-semibold">Custom Tools</div>
           </div>
           <p class="text-sm text-slate-600">Define a single HTTP endpoint with a form — name, URL template, method, and parameters. Best for simple webhooks or internal APIs without a full spec.</p>
+        </div>
+        <div class="bg-white border border-slate-200 rounded-xl p-5">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-symbols-outlined text-accent">dashboard_customize</span>
+            <div class="font-semibold">MCP Servers &amp; Apps</div>
+          </div>
+          <p class="text-sm text-slate-600">Connect Model Context Protocol servers (stdio or HTTP) to add whole toolsets — and let them render interactive <strong>MCP Apps</strong> (live UI) right in the chat.</p>
         </div>
       </div>
     </section>
@@ -460,6 +469,72 @@ tailwind.config = {
       <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3 mt-5">
         <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">psychology</span>
         <div class="text-sm text-slate-700"><strong>Helping the model choose SPARQL over web search.</strong> Smaller local models often reach for <code class="prose-code">web_search</code> by default. Filling in the <strong>When to use</strong> field and adding concrete example queries is what reliably steers the model to the SPARQL tool. Naming the endpoint in your request ("use HM Land Registry…") also works.</div>
+      </div>
+    </section>
+
+    <!-- MCP Servers -->
+    <section id="mcp" class="mb-10">
+      <h2 class="text-xl font-semibold mb-4 flex items-center gap-2">
+        <span class="material-symbols-outlined text-accent">dashboard_customize</span> MCP Servers
+      </h2>
+      <p class="text-slate-600 mb-5"><a href="https://modelcontextprotocol.io" target="_blank" rel="noopener" class="text-accent hover:underline">Model Context Protocol</a> (MCP) servers expose whole toolsets — filesystems, databases, SaaS integrations, and more. LexiChat connects to them over <strong>stdio</strong> (a local command) or <strong>HTTP</strong>, discovers their tools, and makes them callable by the model.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Add a server (Admin → MCP)</div>
+        <div class="space-y-3 text-sm text-slate-600">
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-accent bg-accent/10 px-2 py-0.5 rounded text-xs flex-shrink-0 mt-0.5">stdio</span>
+            <p>Enter a launch command, e.g. <code class="prose-code bg-slate-100 px-1 rounded text-xs">npx -y @modelcontextprotocol/server-filesystem /path</code>. LexiChat spawns it and speaks JSON-RPC over its stdin/stdout.</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="prose-code font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded text-xs flex-shrink-0 mt-0.5">http</span>
+            <p>Enter an <code class="prose-code bg-slate-100 px-1 rounded text-xs">https://…</code> URL. Add authentication (bearer, API key, OAuth2) if the server requires it.</p>
+          </div>
+        </div>
+      </div>
+      <p class="text-sm text-slate-600">Expand any server to enable/disable individual tools, and remember: MCP selections are <strong>per-profile</strong>. See <a href="#managing" class="text-accent hover:underline">Managing Tools</a>.</p>
+    </section>
+
+    <!-- MCP Apps -->
+    <section id="mcp-apps" class="mb-12">
+      <h3 class="text-lg font-semibold mb-3 flex items-center gap-2">
+        MCP Apps <span class="px-2 py-0.5 bg-accent/10 text-accent text-[10px] font-black tracking-widest uppercase rounded-full not-italic">interactive UI</span>
+      </h3>
+      <p class="text-slate-600 mb-5">MCP servers can go beyond text: with <a href="https://modelcontextprotocol.io/extensions/apps/overview" target="_blank" rel="noopener" class="text-accent hover:underline">MCP Apps</a> (the SEP-1865 extension, built with the MCP-UI and OpenAI Apps SDK teams) a tool can return an <strong>interactive HTML interface</strong> — a form, dashboard, chart, viewer, or generator — that renders directly in the conversation. LexiChat supports both the official <em>ext-apps</em> and the community <em>MCP-UI</em> dialects.</p>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">How it works</div>
+        <div class="space-y-3">
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">1</div>
+            <p class="text-sm text-slate-600">Turn on <strong>Enable interactive apps (UI)</strong> for the server (in the Add form, or per-server after expanding it). Apps are <strong>off by default</strong>.</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">2</div>
+            <p class="text-sm text-slate-600">When the model calls an app-enabled tool, LexiChat fetches the tool's UI resource and shows a <strong>consent prompt</strong> — the app renders only after you click <strong>Allow</strong>.</p>
+          </div>
+          <div class="flex items-start gap-3">
+            <div class="w-6 h-6 bg-accent/10 rounded-full flex items-center justify-center text-accent text-xs font-bold flex-shrink-0 mt-0.5">3</div>
+            <p class="text-sm text-slate-600">The app runs in a <strong>sandboxed iframe</strong> and can call the server's tools or send messages back to the chat — every UI-initiated tool call is proxied through the host with your permission.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white border border-slate-200 rounded-xl p-5 mb-5">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Security model</div>
+        <div class="grid sm:grid-cols-2 gap-3 text-sm text-slate-600 mt-3">
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">shield</span> Sandboxed iframe — no access to the app, your files, cookies, or storage</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">toggle_off</span> Off by default; enabled per-server</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">verified_user</span> Explicit consent before an app renders or calls a tool</div>
+          <div class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0">visibility</span> All bridge traffic is visible in the Debug panel</div>
+        </div>
+      </div>
+
+      <p class="text-sm text-slate-600">Try it with the ready-to-run examples in the <a href="https://github.com/modelcontextprotocol/ext-apps/tree/main/examples" target="_blank" rel="noopener" class="text-accent hover:underline">MCP ext-apps repo</a> (e.g. a QR generator, PDF viewer, or map). Add the server, enable apps, and ask the model to use its tool.</p>
+
+      <div class="bg-amber-50 border border-amber-100 rounded-xl p-4 flex gap-3 mt-5">
+        <span class="material-symbols-outlined text-amber-500 flex-shrink-0 mt-0.5">info</span>
+        <div class="text-sm text-slate-700"><strong>Only enable apps for servers you trust.</strong> An app is third-party HTML running locally. The sandbox and consent prompts contain it, but treat enabling apps like installing an extension.</div>
       </div>
     </section>
 
