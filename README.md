@@ -73,10 +73,10 @@ The CI/CD workflow builds installers for all platforms automatically. To trigger
 
 ```bash
 # 1. Tag the commit you want to release
-git tag v1.8.0
+git tag v1.9.0
 
 # 2. Push the tag — this kicks off the build
-git push origin v1.8.0
+git push origin v1.9.0
 ```
 
 GitHub Actions will run 4 parallel jobs (macOS, Windows, Linux x86-64, Linux ARM64). When all finish (typically 15–25 minutes), a **draft release** appears at:
