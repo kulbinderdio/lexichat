@@ -4,6 +4,7 @@ mod openapi;
 mod sparql;
 mod mcp;
 mod jobs;
+mod history;
 mod wiki;
 mod sandbox;
 
@@ -44,6 +45,9 @@ pub struct AppState {
     /// MCP server ids the user has approved to render/interact with apps this
     /// session (set by `approve_mcp_app`; reset on restart).
     pub apps_allowed: Mutex<std::collections::HashSet<String>>,
+    /// Id of the saved conversation the current chat maps to, so auto-save
+    /// updates the same record. `None` = a fresh chat not yet persisted.
+    pub active_conversation_id: Mutex<Option<String>>,
 }
 
 impl Default for AppState {
@@ -68,6 +72,7 @@ impl Default for AppState {
             pending_code_permission: Mutex::new(None),
             pending_tool_ui: Mutex::new(None),
             apps_allowed: Mutex::new(std::collections::HashSet::new()),
+            active_conversation_id: Mutex::new(None),
         }
     }
 }
@@ -108,7 +113,120 @@ async fn set_ollama_host(host: String, state: State<'_, AppState>) -> Result<(),
 #[tauri::command]
 async fn reset_conversation(state: State<'_, AppState>) -> Result<(), String> {
     state.conversation.lock().unwrap().clear();
+    *state.active_conversation_id.lock().unwrap() = None;
     Ok(())
+}
+
+// ── Chat history commands ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ListConversationsArgs {
+    #[serde(default)]
+    pub profile_id: Option<String>,
+}
+
+/// List saved conversations scoped to the given profile (per-profile history).
+/// A `None` profile matches conversations saved with no active profile.
+#[tauri::command]
+fn list_conversations(args: ListConversationsArgs) -> Vec<history::ConversationMeta> {
+    history::load_index()
+        .into_iter()
+        .filter(|m| m.profile_id == args.profile_id)
+        .collect()
+}
+
+#[derive(Deserialize)]
+pub struct SaveConversationArgs {
+    /// Opaque frontend ChatMessage[] for rendering.
+    pub display: serde_json::Value,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub message_count: usize,
+}
+
+/// Persist the current chat, creating a record on first save and updating it
+/// thereafter. The backend `conversation` (wire history) is the source of truth
+/// for context; `display` is stored opaquely for rendering.
+#[tauri::command]
+fn save_active_conversation(
+    args: SaveConversationArgs,
+    state: State<'_, AppState>,
+) -> Result<history::ConversationMeta, String> {
+    let wire = state.conversation.lock().unwrap().clone();
+    if wire.is_empty() {
+        return Err("no conversation to save".into());
+    }
+
+    let mut active = state.active_conversation_id.lock().unwrap();
+    let id = active.clone().unwrap_or_else(history::new_id);
+    let now = history::now_secs();
+
+    // Preserve created_at and any user-set title from an existing record.
+    let existing = history::load_one(&id);
+    let created_at = existing.as_ref().map(|c| c.meta.created_at).unwrap_or(now);
+    let title = existing
+        .as_ref()
+        .map(|c| c.meta.title.clone())
+        .unwrap_or_else(|| history::derive_title(&wire));
+
+    let meta = history::ConversationMeta {
+        id: id.clone(),
+        title,
+        profile_id: args.profile_id,
+        model: args.model,
+        created_at,
+        updated_at: now,
+        message_count: args.message_count,
+    };
+    let conv = history::Conversation { meta: meta.clone(), wire, display: args.display };
+    history::save_one(&conv).map_err(|e| e.to_string())?;
+    *active = Some(id);
+    Ok(meta)
+}
+
+#[derive(Deserialize)]
+pub struct ConversationIdArgs {
+    pub id: String,
+}
+
+/// Load a saved conversation: restore its wire history as the active backend
+/// context and return the display messages for the frontend to render.
+#[tauri::command]
+fn load_conversation(
+    args: ConversationIdArgs,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let conv = history::load_one(&args.id).ok_or("conversation not found")?;
+    *state.conversation.lock().unwrap() = conv.wire;
+    *state.active_conversation_id.lock().unwrap() = Some(args.id);
+    Ok(conv.display)
+}
+
+#[tauri::command]
+fn delete_conversation(
+    args: ConversationIdArgs,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    history::delete_one(&args.id).map_err(|e| e.to_string())?;
+    let mut active = state.active_conversation_id.lock().unwrap();
+    if active.as_deref() == Some(args.id.as_str()) {
+        *active = None;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct RenameConversationArgs {
+    pub id: String,
+    pub title: String,
+}
+
+#[tauri::command]
+fn rename_conversation(args: RenameConversationArgs) -> Result<(), String> {
+    history::rename(&args.id, &args.title).map_err(|e| e.to_string())
 }
 
 // ── Send message ──────────────────────────────────────────────────────────────
@@ -1293,6 +1411,11 @@ pub fn run() {
             run_job_now,
             get_job_runs,
             clear_job_runs,
+            list_conversations,
+            save_active_conversation,
+            load_conversation,
+            delete_conversation,
+            rename_conversation,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

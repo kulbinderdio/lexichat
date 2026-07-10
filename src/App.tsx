@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Settings, RotateCcw, Bug, Paperclip, Info, Clock } from "lucide-react";
+import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft } from "lucide-react";
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
@@ -12,6 +12,7 @@ import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { DebugPanel } from "./DebugPanel";
+import { HistoryPanel, ConversationMeta } from "./HistoryPanel";
 import "./App.css";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -835,7 +836,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "1.9.0" },
+              hostInfo: { name: "LexiChat", version: "1.9.5" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -990,6 +991,9 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [showHistory, setShowHistory] = useState(true);
+  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
   const [view,     setView]     = useState<"chat" | "jobs">("chat");
   const [jobBadge, setJobBadge] = useState(0);
@@ -1025,6 +1029,70 @@ export default function App() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // ── Chat history ──────────────────────────────────────────────────────────
+  // Reload the per-profile conversation list. Re-runs on profile switch since it
+  // depends on activeProfileId.
+  const refreshConversations = useCallback(async () => {
+    try {
+      const list = await invoke<ConversationMeta[]>("list_conversations", {
+        args: { profile_id: settings.activeProfileId ?? null },
+      });
+      setConversations(list);
+    } catch { /* history unavailable */ }
+  }, [settings.activeProfileId]);
+
+  useEffect(() => { refreshConversations(); }, [refreshConversations]);
+
+  // Auto-save the conversation when an agent run finishes (transition running→idle).
+  const prevRunning = useRef(false);
+  useEffect(() => {
+    const justFinished = prevRunning.current && !isRunning;
+    prevRunning.current = isRunning;
+    if (!justFinished || messages.length === 0) return;
+    (async () => {
+      try {
+        const meta = await invoke<ConversationMeta>("save_active_conversation", {
+          args: {
+            display: messages,
+            profile_id: settings.activeProfileId ?? null,
+            model: selectedModel,
+            message_count: messages.length,
+          },
+        });
+        setActiveConversationId(meta.id);
+        refreshConversations();
+      } catch { /* empty wire — nothing to save */ }
+    })();
+  }, [isRunning]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSelectConversation = async (id: string) => {
+    if (isRunning) return;
+    try {
+      const display = await invoke<ChatMessage[]>("load_conversation", { args: { id } });
+      setMessages(Array.isArray(display) ? display : []);
+      setActiveConversationId(id);
+    } catch { /* conversation missing */ }
+  };
+
+  const handleDeleteConversation = async (id: string) => {
+    try {
+      await invoke("delete_conversation", { args: { id } });
+      if (id === activeConversationId) {
+        await invoke("reset_conversation");
+        setActiveConversationId(null);
+        setMessages([]);
+      }
+      refreshConversations();
+    } catch { /* ignore */ }
+  };
+
+  const handleRenameConversation = async (id: string, title: string) => {
+    try {
+      await invoke("rename_conversation", { args: { id, title } });
+      refreshConversations();
+    } catch { /* ignore */ }
+  };
 
   // Listen to agent events from Rust
   useEffect(() => {
@@ -1299,6 +1367,7 @@ export default function App() {
   const handleReset = async () => {
     await invoke("reset_conversation");
     setMessages([]);
+    setActiveConversationId(null);
     setDebugClearKey(k => k + 1);
     setChatParams(defaultChatParams());
   };
@@ -1415,6 +1484,10 @@ export default function App() {
             ))}
           </select>
         )}
+        <button className="btn icon-only" onClick={() => setShowHistory(v => !v)} title="Chat history"
+          style={{ opacity: showHistory ? 1 : 0.55 }}>
+          <PanelLeft size={13} />
+        </button>
         <button className="btn" onClick={handleReset} disabled={isRunning}>
           <RotateCcw size={12} /> New chat
         </button>
@@ -1455,8 +1528,18 @@ export default function App() {
         />
       )}
 
-      {/* Main content: chat + optional debug panel */}
+      {/* Main content: history sidebar + chat + optional debug panel */}
       <div style={{ display: view === "jobs" ? "none" : "flex", flex: 1, overflow: "hidden" }}>
+      <HistoryPanel
+        visible={showHistory}
+        conversations={conversations}
+        activeId={activeConversationId}
+        onSelect={handleSelectConversation}
+        onNew={handleReset}
+        onDelete={handleDeleteConversation}
+        onRename={handleRenameConversation}
+        onHide={() => setShowHistory(false)}
+      />
       <div style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden" }}>
       {/* Chat area */}
       <div className="chat-scroll">
@@ -1591,7 +1674,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 1.9.0</div>
+            <div className="about-version">Version 1.9.5</div>
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>
