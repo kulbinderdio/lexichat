@@ -1039,7 +1039,7 @@ export default function App() {
       const list = await invoke<ConversationMeta[]>("list_conversations", {
         args: { profile_id: settings.activeProfileId ?? null },
       });
-      setConversations(list);
+      setConversations(Array.isArray(list) ? list : []);
     } catch { /* history unavailable */ }
   }, [settings.activeProfileId]);
 

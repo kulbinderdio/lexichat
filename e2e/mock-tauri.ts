@@ -11,6 +11,7 @@ export function tauriMockInit() {
     get_allowed_dirs: [],
     get_jobs: [],
     get_job_runs: [],
+    list_conversations: [],
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
