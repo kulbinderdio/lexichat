@@ -81,6 +81,14 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple code signing + notarization — injected only on the macOS
+          # runner; empty (and therefore ignored) on Windows/Linux.
+          APPLE_CERTIFICATE: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: LexiChat ${{ github.ref_name }}
