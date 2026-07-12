@@ -32,6 +32,29 @@ pub struct APIParam {
     pub description: String,
 }
 
+/// Convert a JSON scalar arg (string, number, or bool) into its string form for
+/// use in a URL path or query string. Numbers — including floats such as lat/lng —
+/// and booleans are stringified; null/array/object yield `None` so the parameter
+/// is simply omitted. Models emit numeric params as JSON numbers, not strings, so
+/// without this they would be silently dropped and the request sent malformed.
+fn arg_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// Build the `(key, value)` query-string pairs for a tool call, skipping any
+/// parameter the caller didn't supply (or supplied as null/array/object).
+fn build_query_params(params: &[APIParam], args: &Value) -> Vec<(String, String)> {
+    params.iter()
+        .filter(|p| p.location == "query")
+        .filter_map(|p| arg_to_string(&args[&p.name]).map(|v| (p.name.clone(), v)))
+        .collect()
+}
+
 /// Sanitize a string into a valid Ollama tool-name segment: [a-z0-9_], no leading/trailing _.
 pub fn sanitize_tool_name(s: &str) -> String { sanitize_ident(s) }
 
@@ -178,21 +201,15 @@ pub async fn execute(
     // Build URL: substitute path parameters
     let mut url_path = tool.path.clone();
     for param in tool.parameters.iter().filter(|p| p.location == "path") {
-        if let Some(val) = args[&param.name].as_str() {
-            url_path = url_path.replace(&format!("{{{}}}", param.name), val);
+        if let Some(val) = arg_to_string(&args[&param.name]) {
+            url_path = url_path.replace(&format!("{{{}}}", param.name), &val);
         }
     }
     let base = spec.base_url.trim_end_matches('/');
     let mut url = format!("{base}{url_path}");
 
     // Query parameters
-    let query_params: Vec<(String,String)> = tool.parameters.iter()
-        .filter(|p| p.location == "query")
-        .filter_map(|p| {
-            args[&p.name].as_str().map(|v| (p.name.clone(), v.to_string()))
-                .or_else(|| args[&p.name].as_i64().map(|v| (p.name.clone(), v.to_string())))
-        })
-        .collect();
+    let query_params = build_query_params(&tool.parameters, args);
 
     if !query_params.is_empty() {
         let qs = query_params.iter().map(|(k,v)| format!("{k}={}", urlencoding::encode(v))).collect::<Vec<_>>().join("&");
@@ -357,6 +374,32 @@ mod tests {
     #[test]
     fn sanitize_empty_string() {
         assert_eq!(sanitize_tool_name(""), "");
+    }
+
+    // ── query param building ──────────────────────────────────────────────────
+
+    /// Regression: models emit numeric params (e.g. lat/lng) as JSON numbers, not
+    /// strings. Floats, ints and bools must all reach the query string; absent
+    /// params must be omitted. Previously floats were silently dropped, sending a
+    /// malformed request (e.g. the UK Police API returning HTTP 400 for no coords).
+    #[test]
+    fn query_params_include_non_string_scalars() {
+        let p = |name: &str| APIParam {
+            name: name.into(), location: "query".into(), required: false, description: String::new(),
+        };
+        let params = vec![p("lat"), p("lng"), p("limit"), p("active"), p("q"), p("missing")];
+        let args = serde_json::json!({
+            "lat": 51.438066, "lng": 0.361697, "limit": 25, "active": true, "q": "hello"
+            // "missing" intentionally absent
+        });
+        let qp = build_query_params(&params, &args);
+        assert!(qp.contains(&("lat".into(), "51.438066".into())), "float lat dropped: {qp:?}");
+        assert!(qp.contains(&("lng".into(), "0.361697".into())), "float lng dropped: {qp:?}");
+        assert!(qp.contains(&("limit".into(), "25".into())));
+        assert!(qp.contains(&("active".into(), "true".into())));
+        assert!(qp.contains(&("q".into(), "hello".into())));
+        assert!(!qp.iter().any(|(k, _)| k == "missing"), "absent param must be omitted: {qp:?}");
+        assert_eq!(qp.len(), 5);
     }
 
     // ── tool_prefix ───────────────────────────────────────────────────────────
