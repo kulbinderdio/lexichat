@@ -836,7 +836,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "1.9.5" },
+              hostInfo: { name: "LexiChat", version: "1.9.6" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -995,6 +995,7 @@ export default function App() {
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
+  const [btcCopied, setBtcCopied] = useState(false);
   const [view,     setView]     = useState<"chat" | "jobs">("chat");
   const [jobBadge, setJobBadge] = useState(0);
   // Pending run_python execution awaiting the user's approval.
@@ -1674,7 +1675,33 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 1.9.5</div>
+            <div className="about-version">Version 1.9.6</div>
+
+            <div className="about-support">
+              <div className="about-support-label">Support the project</div>
+              <button
+                className="donate-btn donate-bmc"
+                onClick={() => openUrl("https://buymeacoffee.com/lexichat")}
+              >
+                <span className="donate-emoji">☕</span> Buy me a coffee
+              </button>
+              <button
+                className="donate-btn donate-btc"
+                title="bc1q4faazp4qndldfsa8ahqeens3mej0svgwtl7h4v"
+                onClick={() => {
+                  navigator.clipboard.writeText("bc1q4faazp4qndldfsa8ahqeens3mej0svgwtl7h4v");
+                  setBtcCopied(true);
+                  setTimeout(() => setBtcCopied(false), 2000);
+                }}
+              >
+                <span className="donate-btc-top">
+                  <span className="donate-emoji">₿</span>
+                  {btcCopied ? "Address copied!" : "Donate Bitcoin"}
+                </span>
+                <span className="donate-btc-addr">bc1q4faazp4q…j0svgwtl7h4v</span>
+              </button>
+            </div>
+
             <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowAbout(false)}>
               Close
             </button>
