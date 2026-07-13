@@ -247,6 +247,11 @@ fn write_pdf(path: &str, content: &str) -> String {
     use printpdf::*;
     use std::io::BufWriter;
 
+    // The built-in PDF font renders WinAnsi/Latin-1 only; transliterate anything
+    // outside it (arrows, Greek, subscripts, math) to ASCII so it isn't dropped.
+    let content = pdf_safe_text(content);
+    let content = content.as_str();
+
     const W: f32 = 210.0_f32;
     const H: f32 = 297.0_f32;
     const ML: f32 = 22.0_f32;
@@ -529,16 +534,62 @@ fn write_pdf(path: &str, content: &str) -> String {
     }
 }
 
-/// Word-wrap text into segments of at most `max_chars` characters.
+/// Map characters the built-in PDF font (WinAnsi/Latin-1) can't render into safe
+/// ASCII equivalents, so scientific text (arrows, Greek letters, subscript digits,
+/// math symbols) isn't silently dropped from the page. Characters already in
+/// Latin-1 are kept as-is; unknown non-Latin-1 glyphs are dropped (rare).
+fn pdf_safe_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let c = ch as u32;
+        if c < 0x100 { out.push(ch); continue; } // ASCII + Latin-1 render fine
+        match ch {
+            '→' => out.push_str("->"),
+            '←' => out.push_str("<-"),
+            '↔' => out.push_str("<->"),
+            '⇒' => out.push_str("=>"),
+            '−' => out.push('-'),
+            '≤' => out.push_str("<="),
+            '≥' => out.push_str(">="),
+            '≠' => out.push_str("!="),
+            '≈' => out.push('~'),
+            '…' => out.push_str("..."),
+            '•' | '●' | '▪' | '◦' => out.push('-'),
+            'α' => out.push_str("alpha"),
+            'β' => out.push_str("beta"),
+            'γ' => out.push_str("gamma"),
+            'δ' => out.push_str("delta"),
+            'μ' => out.push('u'),
+            '\u{2080}'..='\u{2089}' => out.push(char::from(b'0' + (c - 0x2080) as u8)), // ₀-₉
+            '⁰' => out.push('0'),
+            '\u{2074}'..='\u{2079}' => out.push(char::from(b'0' + (c - 0x2070) as u8)), // ⁴-⁹
+            '\u{2009}' | '\u{200a}' | '\u{202f}' | '\u{2007}' => out.push(' '), // thin/nbsp spaces
+            _ => {} // unknown glyph: drop
+        }
+    }
+    out
+}
+
+/// Word-wrap text into segments of at most `max_chars` characters. A single token
+/// longer than the line width is hard-broken so it can't overflow the page/cell.
 fn pdf_word_wrap(text: &str, max_chars: usize) -> Vec<String> {
     if text.is_empty() { return vec![String::new()]; }
+    let max_chars = max_chars.max(1);
     if text.chars().count() <= max_chars { return vec![text.to_string()]; }
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
-        if current.is_empty() {
+        if word.chars().count() > max_chars {
+            // Hard-break an over-long token into fixed-width chunks.
+            if !current.is_empty() { lines.push(std::mem::take(&mut current)); }
+            let chars: Vec<char> = word.chars().collect();
+            for chunk in chars.chunks(max_chars) {
+                lines.push(chunk.iter().collect());
+            }
+            current = lines.pop().unwrap_or_default(); // keep last chunk open for following words
+        } else if current.is_empty() {
             current.push_str(word);
-        } else if current.len() + 1 + word.len() <= max_chars {
+        } else if current.chars().count() + 1 + word.chars().count() <= max_chars {
             current.push(' ');
             current.push_str(word);
         } else {
@@ -1180,6 +1231,29 @@ async fn web_search(args: &Value, max_results: usize) -> String {
     }
 }
 
+/// How `fetch_webpage` should treat a response based on its Content-Type.
+#[derive(Debug, PartialEq)]
+enum FetchKind { Pdf, Html, Binary }
+
+/// Classify a Content-Type so fetch_webpage can extract PDFs, parse HTML/text,
+/// and avoid decoding binary files (images, archives, …) as garbage "HTML".
+fn classify_content_type(ctype: &str) -> FetchKind {
+    let c = ctype.to_ascii_lowercase();
+    if c.contains("pdf") {
+        FetchKind::Pdf
+    } else if c.is_empty()
+        || c.starts_with("text/")
+        || c.contains("html")
+        || c.contains("xml")
+        || c.contains("json")
+        || c.contains("javascript")
+    {
+        FetchKind::Html
+    } else {
+        FetchKind::Binary
+    }
+}
+
 async fn fetch_webpage(args: &Value) -> String {
     let url = args["url"].as_str().unwrap_or("");
     if url.is_empty() { return "No URL provided".into(); }
@@ -1187,7 +1261,7 @@ async fn fetch_webpage(args: &Value) -> String {
         return format!("Invalid URL '{url}': must start with http:// or https://");
     }
 
-    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, REFERER, UPGRADE_INSECURE_REQUESTS};
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CACHE_CONTROL, CONTENT_TYPE, REFERER, UPGRADE_INSECURE_REQUESTS};
 
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT, HeaderValue::from_static(
@@ -1225,6 +1299,36 @@ async fn fetch_webpage(args: &Value) -> String {
     };
 
     let status = resp.status();
+    let ctype = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // Route by content type: extract PDFs, refuse other binaries, else parse HTML.
+    match classify_content_type(&ctype) {
+        FetchKind::Pdf => {
+            let bytes = match resp.bytes().await {
+                Ok(b) => b,
+                Err(e) => return format!("Error downloading PDF from '{url}': {e}"),
+            };
+            return match pdf_extract::extract_text_from_mem(&bytes) {
+                Ok(t) if !t.trim().is_empty() => format!("[PDF document at {url} — extracted text]\n\n{t}"),
+                Ok(_) => format!("[The document at '{url}' is a PDF with no extractable text — likely a scanned/image-only PDF.]"),
+                Err(e) => format!("[Could not extract text from the PDF at '{url}': {e}]"),
+            };
+        }
+        FetchKind::Binary => {
+            let kind = if ctype.is_empty() { "unknown type".to_string() } else { ctype };
+            return format!(
+                "[The URL '{url}' returned non-text content ({kind}), which fetch_webpage cannot read. \
+                 It is a binary file (image, archive, etc.) — skip it or find an HTML/text source.]"
+            );
+        }
+        FetchKind::Html => {}
+    }
+
     let html = match resp.text().await {
         Ok(t) => t,
         Err(e) => return format!("Error reading response from '{url}': {e}"),
@@ -1588,6 +1692,67 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ── content-type classification (fetch_webpage) ──────────────────────────
+
+    #[test]
+    fn classify_content_type_routes_correctly() {
+        // PDFs (the bug: an FDA "…/download" PDF that stalled fetch_webpage).
+        assert_eq!(classify_content_type("application/pdf"), FetchKind::Pdf);
+        assert_eq!(classify_content_type("application/pdf; charset=binary"), FetchKind::Pdf);
+        // HTML / text / structured all take the normal text path.
+        assert_eq!(classify_content_type("text/html; charset=utf-8"), FetchKind::Html);
+        assert_eq!(classify_content_type("application/xhtml+xml"), FetchKind::Html);
+        assert_eq!(classify_content_type("text/plain"), FetchKind::Html);
+        assert_eq!(classify_content_type("application/json"), FetchKind::Html);
+        assert_eq!(classify_content_type(""), FetchKind::Html); // missing header → try as HTML
+        // Real binaries must NOT be decoded as garbage HTML.
+        assert_eq!(classify_content_type("image/png"), FetchKind::Binary);
+        assert_eq!(classify_content_type("application/zip"), FetchKind::Binary);
+        assert_eq!(classify_content_type("application/octet-stream"), FetchKind::Binary);
+    }
+
+    // ── PDF glyph safety & wrapping ──────────────────────────────────────────
+
+    #[test]
+    fn pdf_safe_text_transliterates_scientific_glyphs() {
+        // The exact bug: a subscript chemical formula rendered as "CHNO".
+        assert_eq!(pdf_safe_text("C₁₈₇H₂₉₁N₄₅O₅₉"), "C187H291N45O59");
+        assert_eq!(pdf_safe_text("0.25 mg → 0.5 mg"), "0.25 mg -> 0.5 mg");
+        assert_eq!(pdf_safe_text("β-cells"), "beta-cells");
+        assert_eq!(pdf_safe_text("BMI ≥30"), "BMI >=30");
+        assert_eq!(pdf_safe_text("plain ASCII stays"), "plain ASCII stays");
+        // Latin-1 chars the font CAN render are kept untouched.
+        assert_eq!(pdf_safe_text("café ® 25²"), "café ® 25²");
+    }
+
+    #[test]
+    fn write_pdf_renders_scientific_glyphs_end_to_end() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("dossier.pdf");
+        let p = path.to_str().unwrap();
+        let content = "# Drug\n\nChemical Formula: C₁₈₇H₂₉₁N₄₅O₅₉\n\nDose 0.25 mg → 0.5 mg. Pancreatic β-cells.\n";
+        let out = write_pdf(p, content);
+        assert!(out.contains("Written PDF"), "write failed: {out}");
+        let text = pdf_extract::extract_text(p).unwrap();
+        assert!(text.contains("C187H291N45O59"), "formula dropped its digits: {text:?}");
+        assert!(!text.contains("CHNO"), "still rendering the broken formula: {text:?}");
+        assert!(text.contains("->"), "arrow was dropped: {text:?}");
+        assert!(text.contains("beta"), "beta was dropped: {text:?}");
+    }
+
+    #[test]
+    fn pdf_word_wrap_hard_breaks_long_tokens() {
+        let long = "A".repeat(200);
+        let lines = pdf_word_wrap(&long, 50);
+        assert!(lines.iter().all(|l| l.chars().count() <= 50), "line over width: {lines:?}");
+        assert_eq!(lines.concat(), long, "content lost during hard-break");
+        // Over-long token then a short word: still no overflow, tail preserved.
+        let mixed = format!("{} tail", "B".repeat(120));
+        let w = pdf_word_wrap(&mixed, 40);
+        assert!(w.iter().all(|l| l.chars().count() <= 40), "line over width: {w:?}");
+        assert!(w.last().unwrap().contains("tail"));
+    }
 
     // ── strip_tags ────────────────────────────────────────────────────────────
 
