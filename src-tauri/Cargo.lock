@@ -2595,7 +2595,7 @@ checksum = "2604dd126bb14f13fb5d1bd6a66155079cb9fa655b37f875b3a742c705dbed17"
 
 [[package]]
 name = "lexichat"
-version = "1.9.6"
+version = "1.9.7"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

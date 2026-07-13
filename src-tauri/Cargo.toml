@@ -1,6 +1,6 @@
 [package]
 name = "lexichat"
-version = "1.9.6"
+version = "1.9.7"
 description = "LexiChat — Local AI Agent"
 authors = ["you"]
 edition = "2021"
