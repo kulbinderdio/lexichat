@@ -110,6 +110,7 @@ export interface AppSettings {
   host: string;
   maxTools: number;
   webSearchResults: number;
+  maxSteps: number;
   numGPULayers: number | null;
   models: string[];
   enabledTools: Record<string, boolean>;
@@ -843,6 +844,7 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
     onChange({ ...settings, enabledTools: { ...settings.enabledTools, [name]: val } });
   const setMaxTools = (v: number) => onChange({ ...settings, maxTools: v });
   const setWebSearchResults = (v: number) => onChange({ ...settings, webSearchResults: v });
+  const setMaxSteps = (v: number) => onChange({ ...settings, maxSteps: v });
   const setWikiEnabled = (val: boolean) => onChange({ ...settings, wikiEnabled: val });
 
   return (
@@ -928,6 +930,22 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
           </div>
           {settings.webSearchResults !== 10 && (
             <button className="link-btn" onClick={() => setWebSearchResults(10)}>Reset to default (10)</button>
+          )}
+        </div>
+        <div className="admin-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
+            <div style={{ flex: 1 }}>
+              <div className="admin-row-title">Max agent steps</div>
+              <div className="admin-row-sub">Tool-calling rounds the agent may take before it must answer. Raise for deep multi-source research.</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button className="stepper-btn" onClick={() => setMaxSteps(Math.max(5, (settings.maxSteps ?? 20) - 5))}>−</button>
+              <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "monospace", minWidth: 28, textAlign: "center" }}>{settings.maxSteps ?? 20}</span>
+              <button className="stepper-btn" onClick={() => setMaxSteps(Math.min(50, (settings.maxSteps ?? 20) + 5))}>+</button>
+            </div>
+          </div>
+          {(settings.maxSteps ?? 20) !== 20 && (
+            <button className="link-btn" onClick={() => setMaxSteps(20)}>Reset to default (20)</button>
           )}
         </div>
       </section>

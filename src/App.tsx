@@ -319,6 +319,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   host: "http://localhost:11434",
   maxTools: 30,
   webSearchResults: 10,
+  maxSteps: 20,
   numGPULayers: null,
   models: [],
   enabledTools: { read_file: true, list_files: true, web_search: true },
@@ -1338,6 +1339,7 @@ export default function App() {
           stop: resolved.stop ?? null,
           keep_alive: resolved.keepAlive ?? null,
           web_search_results: settings.webSearchResults ?? 10,
+          max_steps: settings.maxSteps ?? 20,
           disabled_mcp_tools: disabledMcpTools,
           enabled_mcp_server_ids: enabledMcpServerIds,
         }

@@ -264,6 +264,9 @@ pub struct SendMessageArgs {
     pub keep_alive: Option<String>,
     #[serde(default = "default_web_search_results")]
     pub web_search_results: usize,
+    /// Max tool-calling rounds the agent loop may take before answering.
+    #[serde(default = "default_max_steps")]
+    pub max_steps: usize,
     #[serde(default)]
     pub disabled_mcp_tools: Vec<String>,
     /// Server IDs the active profile has enabled. Empty = no profile active (use all servers).
@@ -272,6 +275,7 @@ pub struct SendMessageArgs {
 }
 
 fn default_web_search_results() -> usize { 10 }
+fn default_max_steps() -> usize { 20 }
 
 #[tauri::command]
 async fn send_message(
@@ -380,7 +384,7 @@ async fn send_message(
         args.web_search_results,
         &app,
         false, // silent = false for interactive chat
-        10,    // max_steps for interactive chat
+        args.max_steps.clamp(1, 50), // configurable; default 20
     )
     .await
     .map_err(|e| e.to_string())
