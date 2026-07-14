@@ -103,6 +103,15 @@ pub struct DoneEvent {
     pub error: Option<String>,
 }
 
+/// A step is being re-sampled after the model emitted an unparseable tool call.
+/// The frontend drops any partial text streamed by the failed attempt.
+#[derive(Clone, Serialize)]
+pub struct RetryEvent {
+    pub step: usize,
+    pub attempt: usize,
+    pub error: String,
+}
+
 // Debug events
 #[derive(Clone, Serialize)]
 pub struct DebugStepEvent {
@@ -191,16 +200,28 @@ struct ChunkMessage {
     tool_calls: Option<Vec<WireToolCall>>,
 }
 
+/// True when an Ollama error is its tool-call parser rejecting the model's own output
+/// (models emitting XML-dialect tool calls — e.g. `<function=x><parameter=y>` — sometimes
+/// drop a closing tag). The next sample almost always parses, so the step is worth retrying
+/// rather than killing the run.
+fn is_malformed_tool_call_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("syntax error")
+        || m.contains("unexpected eof")
+        || m.contains("invalid character")
+        || m.contains("closed by")
+}
+
 /// Stream one LLM turn. Returns (full_text, tool_calls).
 /// When `silent` is true all `app.emit` calls are skipped (used by background jobs).
-async fn stream_chat(
+async fn stream_chat<R: tauri::Runtime>(
     host: &str,
     model: &str,
     messages: &[WireMessage],
     tools: &[ToolSchema],
     options: Option<&ChatOptions>,
     keep_alive: Option<&str>,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     silent: bool,
 ) -> anyhow::Result<(String, Vec<WireToolCall>)> {
     let client = reqwest::Client::builder()
@@ -282,6 +303,9 @@ async fn stream_chat(
     Ok((full_text, tool_calls))
 }
 
+/// How many times to re-sample a step whose tool call Ollama couldn't parse.
+const MALFORMED_TOOL_CALL_RETRIES: usize = 2;
+
 // ── Tool discovery pre-flight ─────────────────────────────────────────────────
 
 /// Minimum number of tools that triggers a pre-flight discovery call.
@@ -329,6 +353,11 @@ pub async fn discover_tools(
         model: &'a str,
         messages: &'a [WireMessage],
         stream: bool,
+        /// Picking tool names needs no reasoning. Left on, a thinking model spends thousands
+        /// of tokens (tens of seconds) here — and this call blocks the whole run, before the
+        /// first debug event, so the UI just sits there.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        think: Option<bool>,
     }
 
     let client = match reqwest::Client::builder()
@@ -340,13 +369,21 @@ pub async fn discover_tools(
     };
 
     let url = format!("{}/api/chat", host);
-    let body = DiscoverReq { model, messages: &messages, stream: false };
 
-    let resp_text = match client.post(&url).json(&body).send().await
-        .and_then(|r| r.error_for_status())
-    {
-        Ok(r) => match r.text().await { Ok(t) => t, Err(_) => return all_tools.to_vec() },
-        Err(_) => return all_tools.to_vec(),
+    let mut resp_text: Option<String> = None;
+    // Models without a thinking capability may reject `think`; fall back to a plain request.
+    for think in [Some(false), None] {
+        let body = DiscoverReq { model, messages: &messages, stream: false, think };
+        if let Ok(r) = client.post(&url).json(&body).send().await.and_then(|r| r.error_for_status()) {
+            if let Ok(t) = r.text().await {
+                resp_text = Some(t);
+                break;
+            }
+        }
+    }
+    let resp_text = match resp_text {
+        Some(t) => t,
+        None => return all_tools.to_vec(),
     };
 
     // Ollama non-streaming: {"message":{"content":"..."}, ...}
@@ -395,7 +432,7 @@ fn extract_json_array(s: &str) -> String {
 
 // ── Agent loop ────────────────────────────────────────────────────────────────
 
-pub async fn agent_loop(
+pub async fn agent_loop<R: tauri::Runtime>(
     host: &str,
     model: &str,
     system_prompt: &str,
@@ -411,7 +448,7 @@ pub async fn agent_loop(
     // in addition to `allowed_dirs`. Empty for background jobs.
     sandbox_paths: Vec<String>,
     web_search_results: usize,
-    app: &AppHandle,
+    app: &AppHandle<R>,
     silent: bool,
     max_steps: usize,
 ) -> anyhow::Result<()> {
@@ -439,17 +476,34 @@ pub async fn agent_loop(
             w
         };
 
-        let (full_text, tool_calls) = match stream_chat(host, model, &wire, tools, options.as_ref(), keep_alive.as_deref(), app, silent).await {
-            Ok(v) => v,
-            Err(e) => {
-                if !silent {
-                    let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
-                    let _ = app.emit("debug-run-done", DebugRunDoneEvent {
-                        total_ms: run_start.elapsed().as_millis() as u64,
-                        error: Some(e.to_string()),
-                    });
+        // Re-sample the step when the model emits a tool call Ollama can't parse; only a
+        // persistent failure (or any other error) ends the run.
+        let mut attempt = 0usize;
+        let (full_text, tool_calls) = loop {
+            match stream_chat(host, model, &wire, tools, options.as_ref(), keep_alive.as_deref(), app, silent).await {
+                Ok(v) => break v,
+                Err(e) if attempt < MALFORMED_TOOL_CALL_RETRIES
+                    && is_malformed_tool_call_error(&e.to_string()) =>
+                {
+                    attempt += 1;
+                    if !silent {
+                        let _ = app.emit("agent-retry", RetryEvent {
+                            step,
+                            attempt,
+                            error: e.to_string(),
+                        });
+                    }
                 }
-                return Err(e);
+                Err(e) => {
+                    if !silent {
+                        let _ = app.emit("agent-done", DoneEvent { error: Some(e.to_string()) });
+                        let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                            total_ms: run_start.elapsed().as_millis() as u64,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                    return Err(e);
+                }
             }
         };
 
@@ -606,7 +660,7 @@ fn needs_base64url_encoding(s: &str) -> bool {
 }
 
 /// Route a tool call to the right executor.
-async fn dispatch_tool(
+async fn dispatch_tool<R: tauri::Runtime>(
     name: &str,
     args: &serde_json::Value,
     openapi_specs: &[RegisteredSpec],
@@ -616,7 +670,7 @@ async fn dispatch_tool(
     sandbox_paths: &[String],
     web_search_results: usize,
     silent: bool,
-    app: &AppHandle,
+    app: &AppHandle<R>,
 ) -> String {
     // 0. Code-execution sandbox — gated behind a per-session permission prompt.
     if name == "run_python" {
@@ -786,12 +840,12 @@ async fn dispatch_tool(
 /// Handle a `run_python` call: enforce the per-session execution permission, then
 /// run the code in the Monty sandbox with file access scoped to `allowed_dirs`
 /// plus any attached files (`sandbox_paths`).
-async fn dispatch_run_python(
+async fn dispatch_run_python<R: tauri::Runtime>(
     args: &serde_json::Value,
     allowed_dirs: &[String],
     sandbox_paths: &[String],
     silent: bool,
-    app: &AppHandle,
+    app: &AppHandle<R>,
 ) -> String {
     let code = args["code"].as_str().unwrap_or("").to_string();
     if code.trim().is_empty() {
@@ -829,4 +883,184 @@ async fn dispatch_run_python(
     let mut allow = allowed_dirs.to_vec();
     allow.extend(sandbox_paths.iter().cloned());
     crate::sandbox::run_python(code, allow).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_tool_call_errors_are_retryable() {
+        // The error Ollama returns when a model drops a closing tag in an XML-dialect tool call.
+        assert!(is_malformed_tool_call_error(
+            "XML syntax error on line 14: element <parameter> closed by </function>"
+        ));
+        assert!(is_malformed_tool_call_error("unexpected EOF"));
+        assert!(is_malformed_tool_call_error("invalid character '<' looking for beginning of value"));
+    }
+
+    #[test]
+    fn real_failures_are_not_retryable() {
+        assert!(!is_malformed_tool_call_error("model \"qwen3.6\" not found, try pulling it first"));
+        assert!(!is_malformed_tool_call_error("connection refused"));
+        assert!(!is_malformed_tool_call_error("HTTP 500: internal server error"));
+    }
+
+    /// Drive the real agent loop against an Ollama that rejects the first sample's tool call
+    /// (the exact error qwen3.6 produced) and answers on the second. The run must survive.
+    #[tokio::test]
+    async fn agent_loop_retries_a_malformed_tool_call_and_completes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        /// Sample 1 fails the way qwen3.6 did; every later sample answers cleanly.
+        struct FailFirstSample(Arc<AtomicUsize>);
+        impl Respond for FailFirstSample {
+            fn respond(&self, _: &Request) -> ResponseTemplate {
+                let n = self.0.fetch_add(1, Ordering::SeqCst);
+                let body = if n == 0 {
+                    "{\"error\":\"XML syntax error on line 14: element <parameter> closed by </function>\"}\n"
+                        .to_string()
+                } else {
+                    "{\"message\":{\"role\":\"assistant\",\"content\":\"Saved your DIY list.\"},\"done\":false}\n\
+                     {\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n"
+                        .to_string()
+                };
+                ResponseTemplate::new(200).set_body_raw(body, "application/x-ndjson")
+            }
+        }
+
+        let server = MockServer::start().await;
+        let samples = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(FailFirstSample(samples.clone()))
+            .mount(&server)
+            .await;
+
+        let app = tauri::test::mock_app();
+        let conversation = Mutex::new(vec![WireMessage {
+            role: "user".into(),
+            content: Some("track my House DIY todo list".into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            images: None,
+        }]);
+        let mcp: tokio::sync::Mutex<HashMap<String, MCPConnection>> =
+            tokio::sync::Mutex::new(HashMap::new());
+
+        let result = agent_loop(
+            &server.uri(),
+            "qwen3.6:latest",
+            "You are a helpful assistant.",
+            &[],
+            None,
+            None,
+            &conversation,
+            vec![],
+            vec![],
+            &mcp,
+            vec![],
+            vec![],
+            10,
+            app.handle(),
+            false, // interactive chat, as in the failing session
+            20,
+        )
+        .await;
+
+        assert!(result.is_ok(), "run should survive a malformed tool call: {result:?}");
+        // Exactly one re-sample: the bad one, then the good one.
+        assert_eq!(samples.load(Ordering::SeqCst), 2, "step should be retried once");
+        let convo = conversation.lock().unwrap();
+        let last = convo.last().expect("assistant reply appended");
+        assert_eq!(last.role, "assistant");
+        assert_eq!(last.content.as_deref(), Some("Saved your DIY list."));
+    }
+
+    fn tool(name: &str) -> ToolSchema {
+        ToolSchema {
+            r#type: "function".into(),
+            function: ToolFunction {
+                name: name.into(),
+                description: format!("does {name}"),
+                parameters: serde_json::json!({ "type": "object", "properties": {} }),
+            },
+        }
+    }
+
+    /// The pre-flight blocks the run before the first debug event fires, so it must not let a
+    /// thinking model reason its way through tool selection (qwen3.6 spent 22s doing exactly that).
+    #[tokio::test]
+    async fn discovery_disables_thinking() {
+        use wiremock::matchers::{body_partial_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({ "think": false })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "role": "assistant", "content": "[\"read_file\"]" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // More than DISCOVERY_THRESHOLD tools, or the pre-flight is skipped entirely.
+        let all: Vec<ToolSchema> = (0..DISCOVERY_THRESHOLD + 3)
+            .map(|i| tool(&format!("tool_{i}")))
+            .chain(std::iter::once(tool("read_file")))
+            .collect();
+
+        let picked = discover_tools(&server.uri(), "qwen3.6:latest", "read my notes", &all).await;
+
+        let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
+        assert_eq!(names, ["read_file"], "should narrow to the model's selection");
+        // The mock only matches requests carrying `think: false`; `.expect(1)` proves it was sent.
+    }
+
+    /// A model that never emits a parseable tool call must give up and surface the error,
+    /// not retry forever.
+    #[tokio::test]
+    async fn agent_loop_gives_up_after_persistent_malformed_tool_calls() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "{\"error\":\"XML syntax error on line 14: element <parameter> closed by </function>\"}\n",
+                "application/x-ndjson",
+            ))
+            // One initial sample plus MALFORMED_TOOL_CALL_RETRIES re-samples, then stop.
+            .expect(1 + MALFORMED_TOOL_CALL_RETRIES as u64)
+            .mount(&server)
+            .await;
+
+        let app = tauri::test::mock_app();
+        let conversation = Mutex::new(vec![WireMessage {
+            role: "user".into(),
+            content: Some("track my House DIY todo list".into()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            images: None,
+        }]);
+        let mcp: tokio::sync::Mutex<HashMap<String, MCPConnection>> =
+            tokio::sync::Mutex::new(HashMap::new());
+
+        let result = agent_loop(
+            &server.uri(), "qwen3.6:latest", "You are a helpful assistant.", &[], None, None,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, app.handle(), false, 20,
+        )
+        .await;
+
+        assert!(result.is_err(), "a persistent parse failure must surface, not hang");
+        // The mock's `.expect(...)` verifies the retry count when `server` drops.
+    }
 }

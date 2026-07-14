@@ -312,9 +312,18 @@ async fn send_message(
     // Collect built-in tool schemas (frontend-provided: file tools, wiki, etc.)
     let builtin_tools = args.tools.clone();
 
+    // The wiki tools are one workflow, not independent tools: the system prompt requires a
+    // wiki_search before every write and a wiki_append to log.md after it. Discovery picks
+    // tools per-message and would hand back only wiki_write, leaving the model unable to obey
+    // its own rules — so hold them out of the pre-flight and always offer the whole group.
+    let (wiki_tools, discoverable): (Vec<_>, Vec<_>) = builtin_tools
+        .into_iter()
+        .partition(|t| t.function.name.starts_with("wiki_"));
+
     // Tool discovery pre-flight: filter built-ins only — MCP/OpenAPI tools are
     // user-curated and must always be available regardless of the message content.
-    let mut all_tools = ollama::discover_tools(&host, &args.model, &args.message, &builtin_tools).await;
+    let mut all_tools = ollama::discover_tools(&host, &args.model, &args.message, &discoverable).await;
+    all_tools.extend(wiki_tools);
 
     // Always append OpenAPI tools (profile-scoped by set_openapi_specs)
     {

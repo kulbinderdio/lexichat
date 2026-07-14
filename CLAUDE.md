@@ -121,11 +121,13 @@ Backend emits via `app.emit()`, frontend listens via Tauri `listen()` in `useEff
 | `debug-step-start` | `{ step, tools }` | DebugPanel: step began |
 | `debug-step-done` | `{ step, text, duration_ms }` | DebugPanel: step complete |
 | `debug-run-done` | `{ total_ms, error? }` | DebugPanel: run complete |
+| `agent-retry` | `{ step, attempt, error }` | Step is being re-sampled after an unparseable tool call; frontend drops the failed attempt's partial text |
 | `agent-done` | `{ error? }` | Agent loop finished |
 
 ## Non-obvious behaviours
 
 - **Empty response nudging**: if the model returns empty text with no tool calls at step 0, the agent sends a follow-up nudge message once to prompt a response
+- **Malformed tool-call retry**: models that emit XML-dialect tool calls (`<function=x><parameter=y>`, e.g. Qwen) sometimes drop a closing tag, and Ollama rejects the whole response with a Go parser error (`XML syntax error … element <parameter> closed by </function>`). This is a sampling slip, not a real failure, so `agent_loop` re-samples the step up to `MALFORMED_TOOL_CALL_RETRIES` (2) times before surfacing the error — otherwise one bad sample kills a run that had already done its work
 - **HTTP error surfacing**: `stream_chat` checks `resp.status().is_success()` and scans stream lines for `{"error":...}` — errors are returned as `Err(String)` so they surface in chat rather than silently dropping
 - **Model not found**: profile's stored model is only applied if it exists in the current Ollama models list (prevents stale model names overriding the UI selection)
 - **MCP HTTP transport**: supports both plain JSON and SSE (`text/event-stream`) responses for JSON-RPC

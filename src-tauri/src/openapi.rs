@@ -187,11 +187,11 @@ pub fn parse_spec(title: &str, _base_url: &str, spec_json: &str) -> Result<Vec<A
 /// Execute an OpenAPI tool call.
 /// `app` is optional: when provided, a refreshed OAuth2 access_token is persisted
 /// back to AppState and emitted to the frontend for localStorage persistence.
-pub async fn execute(
+pub async fn execute<R: tauri::Runtime>(
     spec: &RegisteredSpec,
     tool: &APITool,
     args: &Value,
-    app: Option<&tauri::AppHandle>,
+    app: Option<&tauri::AppHandle<R>>,
 ) -> String {
     let client = reqwest::Client::builder()
         .use_rustls_tls()
@@ -304,7 +304,7 @@ async fn send_and_format(req: reqwest::RequestBuilder) -> String {
 }
 
 /// Update the in-memory AppState with the new access_token and notify the frontend to persist it.
-async fn persist_refreshed_token(app: &tauri::AppHandle, spec_id: &str, new_token: &str) {
+async fn persist_refreshed_token<R: tauri::Runtime>(app: &tauri::AppHandle<R>, spec_id: &str, new_token: &str) {
     use tauri::Manager;
     let state = app.state::<crate::AppState>();
     {
@@ -622,7 +622,7 @@ mod tests {
             .mount(&server).await;
 
         let spec = get_spec(&server.uri());
-        let out = execute(&spec, &spec.tools[0], &serde_json::json!({ "q": "hello" }), None).await;
+        let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "q": "hello" }), None).await;
         assert!(out.contains("HTTP 200"), "got: {out}");
         assert!(out.contains("\"ok\""), "got: {out}");
     }
@@ -639,7 +639,7 @@ mod tests {
 
         let mut spec = get_spec(&server.uri());
         spec.auth = crate::mcp::AuthConfig::Bearer { bearer_token: "tok-123".into() };
-        let out = execute(&spec, &spec.tools[0], &serde_json::json!({ "q": "x" }), None).await;
+        let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "q": "x" }), None).await;
         assert!(out.contains("HTTP 200"), "auth header not accepted: {out}");
     }
 }

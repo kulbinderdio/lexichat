@@ -1141,6 +1141,16 @@ export default function App() {
       });
     }).then(u => cleanup.push(u));
 
+    // The step is being re-sampled: discard the partial text the failed attempt streamed,
+    // otherwise the retry's tokens append to it.
+    listen<{ step: number; attempt: number; error: string }>("agent-retry", () => {
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.streaming) return prev.slice(0, -1);
+        return prev;
+      });
+    }).then(u => cleanup.push(u));
+
     listen<{ error: string | null }>("agent-done", e => {
       setIsRunning(false);
       setMessages(prev => {
@@ -1346,7 +1356,14 @@ export default function App() {
       });
     } catch (err) {
       setIsRunning(false);
-      setMessages(prev => [...prev, { id: uid(), role: "error", text: String(err) }]);
+      // A failed agent run rejects here *and* emits agent-done with the same error — don't
+      // render it twice. Errors thrown before the loop starts still surface.
+      const text = String(err);
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "error" && last.text === text) return prev;
+        return [...prev, { id: uid(), role: "error", text }];
+      });
     }
   };
 

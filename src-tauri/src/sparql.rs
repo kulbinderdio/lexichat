@@ -161,10 +161,10 @@ fn forbidden_keyword(query: &str) -> Option<String> {
 }
 
 /// Execute a SPARQL query against the endpoint, applying auth and a single 401 refresh+retry.
-pub async fn execute(
+pub async fn execute<R: tauri::Runtime>(
     ep: &RegisteredSparqlEndpoint,
     query: &str,
-    app: Option<&tauri::AppHandle>,
+    app: Option<&tauri::AppHandle<R>>,
 ) -> String {
     if ep.read_only {
         if let Some(kw) = forbidden_keyword(query) {
@@ -382,7 +382,7 @@ fn suggest_prefix(ns: &str, n: usize) -> String {
 }
 
 /// Update in-memory AppState with a refreshed OAuth2 token and notify the frontend.
-async fn persist_refreshed_token(app: &tauri::AppHandle, ep_id: &str, new_token: &str) {
+async fn persist_refreshed_token<R: tauri::Runtime>(app: &tauri::AppHandle<R>, ep_id: &str, new_token: &str) {
     use tauri::Manager;
     let state = app.state::<crate::AppState>();
     {
@@ -547,7 +547,7 @@ mod tests {
             .mount(&server).await;
 
         let ep = endpoint_at(&server.uri());
-        let out = execute(&ep, "SELECT ?s ?label WHERE { ?s ?p ?label } LIMIT 1", None).await;
+        let out = execute::<tauri::Wry>(&ep, "SELECT ?s ?label WHERE { ?s ?p ?label } LIMIT 1", None).await;
         assert!(out.contains("1 row(s)"), "got: {out}");
         assert!(out.contains("https://ex/1 | One"), "got: {out}");
     }
@@ -556,7 +556,7 @@ mod tests {
     async fn execute_rejects_update_without_calling_server() {
         // read_only guard must reject before any HTTP call — an unroutable URL proves it.
         let ep = endpoint_at("http://127.0.0.1:9/never");
-        let out = execute(&ep, "DELETE WHERE { ?s ?p ?o }", None).await;
+        let out = execute::<tauri::Wry>(&ep, "DELETE WHERE { ?s ?p ?o }", None).await;
         assert!(out.starts_with("Rejected"), "got: {out}");
     }
 

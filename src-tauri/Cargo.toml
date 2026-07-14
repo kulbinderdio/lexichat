@@ -45,4 +45,6 @@ monty = { git = "https://github.com/pydantic/monty", rev = "8feace1a5f7335970ceb
 tempfile = "3"
 # In-process HTTP mock server for integration tests (async, reqwest-friendly).
 wiremock = "0.6"
+# Mock AppHandle so the agent loop can be driven in tests.
+tauri = { version = "2", features = ["tray-icon", "test"] }
 
