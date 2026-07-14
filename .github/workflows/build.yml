@@ -82,10 +82,8 @@ jobs:
       #
       # Apple credentials are deliberately split: the certificate vars make tauri sign the
       # app, but APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are withheld so tauri skips its own
-      # notarization. Tauri's built-in notarizer fails with a spurious "HTTP 500 Internal
-      # Server Error" from the Apple notary service (it blocked the macOS DMG on v1.9.6,
-      # v1.9.7 and v1.9.8) while `xcrun notarytool` submits the very same bundle to the very
-      # same service successfully. So we notarize with notarytool in the next step instead.
+      # notarization — we notarize explicitly in the next step, which lets us staple the
+      # ticket and assert Gatekeeper's verdict rather than trusting the bundler.
       - name: Build app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -106,6 +104,10 @@ jobs:
           DMG=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
           echo "Notarizing $DMG"
 
+          # NB: Apple reports bad credentials (e.g. a truncated APPLE_TEAM_ID) as a generic
+          # "HTTP status code: 500 ... Please try again at a later time", which reads like an
+          # outage. If this step starts 500ing, check the secrets before blaming Apple.
+          #
           # --wait blocks until Apple returns Accepted or Invalid; a non-Accepted status
           # exits non-zero, so a rejected build fails the job rather than shipping unnotarized.
           xcrun notarytool submit "$DMG" \
