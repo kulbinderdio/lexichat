@@ -77,22 +77,81 @@ jobs:
       - name: Install JS dependencies
         run: npm ci
 
-      - name: Build & publish release
+      # Build only — the release is assembled by the `release` job below, so that the
+      # macOS DMG can be notarized *before* it is uploaded.
+      #
+      # Apple credentials are deliberately split: the certificate vars make tauri sign the
+      # app, but APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are withheld so tauri skips its own
+      # notarization. Tauri's built-in notarizer fails with a spurious "HTTP 500 Internal
+      # Server Error" from the Apple notary service (it blocked the macOS DMG on v1.9.6,
+      # v1.9.7 and v1.9.8) while `xcrun notarytool` submits the very same bundle to the very
+      # same service successfully. So we notarize with notarytool in the next step instead.
+      - name: Build app
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Apple code signing + notarization — injected only on the macOS
-          # runner; empty (and therefore ignored) on Windows/Linux.
           APPLE_CERTIFICATE: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: LexiChat ${{ github.ref_name }}
-          releaseBody: |
+          args: ${{ matrix.args }}
+
+      - name: Notarize & staple macOS DMG
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          DMG=$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          echo "Notarizing $DMG"
+
+          # --wait blocks until Apple returns Accepted or Invalid; a non-Accepted status
+          # exits non-zero, so a rejected build fails the job rather than shipping unnotarized.
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the ticket so the DMG validates offline, on a machine that has never
+          # contacted Apple.
+          xcrun stapler staple "$DMG"
+
+          # Gatekeeper's verdict on the artefact users will actually download.
+          # Expect: "accepted / source=Notarized Developer ID".
+          spctl -a -vvv -t install "$DMG"
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundles-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+
+  # Single job assembling the draft release, so the four build jobs never race to create it.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LexiChat ${{ github.ref_name }}
+          body: |
             ## Downloads
 
             | Platform | File |
@@ -103,6 +162,6 @@ jobs:
             | Linux ARM64 | `lexichat_*_arm64.deb` / `LexiChat_*_aarch64.AppImage` |
 
             See the Assets section below for all downloadable files.
-          releaseDraft: true
+          draft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          files: artifacts/**/*
