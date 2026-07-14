@@ -1,0 +1,29 @@
+#  TEMPORARY diagnostic — delete once the notarization credentials are confirmed.
+#  Authenticates against Apple's notary service without building anything.
+name: Notary credential check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - name: Probe notary credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Shape only — never the values. GitHub masks the secrets themselves, but not
+          # transformations of them, so alphanumerics are replaced with 'x'.
+          echo "APPLE_ID      length=${#APPLE_ID} shape=$(printf '%s' "$APPLE_ID" | tr '[:alnum:]' 'x')"
+          echo "APPLE_TEAM_ID length=${#APPLE_TEAM_ID}"
+          echo "APPLE_PASSWORD length=${#APPLE_PASSWORD} shape=$(printf '%s' "$APPLE_PASSWORD" | tr '[:alnum:]' 'x')"
+          echo "---"
+          # `history` needs no upload: it authenticates and returns in seconds.
+          # Succeeds => credentials are good and Apple is reachable from this runner.
+          xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" 2>&1 | head -12
