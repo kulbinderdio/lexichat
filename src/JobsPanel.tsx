@@ -527,6 +527,10 @@ function StepBuilder({ steps, onChange, toolOptions, toolsLoading }: {
                       placeholder={toolsLoading ? "Loading tools…" : "Search tools…"}
                       value={searchState[step.id] ?? ""}
                       onFocus={() => setDropdownOpen(step.id)}
+                      // Close on click-away/tab-out. Options use onMouseDown+preventDefault, so
+                      // picking one doesn't blur first — selection still registers.
+                      onBlur={() => setDropdownOpen(null)}
+                      onKeyDown={e => { if (e.key === "Escape") { setDropdownOpen(null); e.currentTarget.blur(); } }}
                       onChange={e => setSearchState(prev => ({ ...prev, [step.id]: e.target.value }))}
                     />
                     {step.tool_name && (
