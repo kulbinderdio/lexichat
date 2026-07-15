@@ -259,9 +259,10 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
     setJobs(prev => prev.filter(j => j.id !== id));
   };
 
-  // Draft a job from a plain-English goal, then open it in the normal form for review.
-  // The backend returns it disabled and never saves anything itself.
-  const designJob = async (goal: string, model: string) => {
+  // Draft a job from a plain-English goal. When `dryRun` is false, open it in the normal
+  // form for review. When true, save it (disabled) and run it once so the user can see the
+  // real artifact before enabling the schedule. The backend never enables anything itself.
+  const designJob = async (goal: string, model: string, dryRun: boolean) => {
     const tool_catalog = BUILTIN_TOOLS.map(t => ({ name: t.name, description: t.label }));
     const ap = profiles.find(p => p.id === activeProfileId) ?? null;
     const res = await invoke<{ job: ScheduledJob; warnings: string[] }>("draft_job_from_goal", {
@@ -274,7 +275,19 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
       },
     });
     setDesignWarnings(res.warnings);
-    setEditingJob(res.job);
+
+    if (!dryRun) {
+      setEditingJob(res.job);
+      return;
+    }
+
+    // Persist disabled, then dry-run and show the result in Run History.
+    const job = res.job;
+    await invoke("save_job", { job });
+    setJobs(prev => [...prev, job]);
+    setFilterJobId(job.id);
+    setTab("history");
+    runNow(job.id);
   };
 
   // Fire-and-forget — the job runs in Rust until completion.
@@ -326,8 +339,8 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
       </div>
       <div className="admin-divider" />
 
-      {/* AI-designer review notes — shown over the pre-filled form so the user sees them before saving */}
-      {editingJob && designWarnings.length > 0 && (
+      {/* AI-designer review notes — shown over the pre-filled form (or the dry-run result) */}
+      {designWarnings.length > 0 && (
         <div style={{ margin: "8px 16px", padding: "8px 12px", borderRadius: 8,
           background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)", fontSize: 12 }}>
           <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠ Review before saving</div>
@@ -400,7 +413,7 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
   onCancel: () => void;
   onDelete: (id: string) => void;
   onRunNow: (id: string) => void;
-  onDesign: (goal: string, model: string) => Promise<void>;
+  onDesign: (goal: string, model: string, dryRun: boolean) => Promise<void>;
   onNew: () => void;
   onToggle: (j: ScheduledJob) => void;
 }) {
@@ -411,12 +424,13 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
   const [designBusy, setDesignBusy] = useState(false);
   const [designErr, setDesignErr] = useState("");
 
-  const runDesign = async () => {
+  const runDesign = async (dryRun: boolean) => {
     if (!goal.trim() || !designModel) return;
     setDesignBusy(true);
     setDesignErr("");
     try {
-      await onDesign(goal.trim(), designModel);  // opens the pre-filled form on success
+      // On success: opens the pre-filled form, or (dryRun) saves disabled + runs + shows history.
+      await onDesign(goal.trim(), designModel, dryRun);
     } catch (e) {
       setDesignErr(String(e));
     } finally {
@@ -502,19 +516,26 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
               placeholder="e.g. Every weekday at 7am, brief me on UK energy policy from gov.uk and Hansard, skip anything you already covered, and save it as a PDF in ~/Briefings."
               style={{ width: "100%", resize: "vertical", fontSize: 12 }}
             />
-            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+            <div style={{ marginTop: 6 }}>
               <select className="admin-input" value={designModel} onChange={e => setDesignModel(e.target.value)}
-                style={{ flex: 1, fontSize: 11 }}>
+                style={{ width: "100%", fontSize: 11 }}>
                 {models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
-              <button className="btn primary" style={{ fontSize: 11 }} disabled={designBusy || !goal.trim() || !designModel}
-                onClick={runDesign}>
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+              <button className="btn" style={{ flex: 1, fontSize: 11 }} disabled={designBusy || !goal.trim() || !designModel}
+                onClick={() => runDesign(false)}>
                 {designBusy ? "Drafting…" : "✨ Draft it"}
+              </button>
+              <button className="btn primary" style={{ flex: 1, fontSize: 11 }} disabled={designBusy || !goal.trim() || !designModel}
+                onClick={() => runDesign(true)}>
+                {designBusy ? "Working…" : "Draft & dry-run"}
               </button>
             </div>
             {designErr && <div style={{ color: "#f87171", fontSize: 11, marginTop: 6 }}>{designErr}</div>}
             <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 6 }}>
-              You'll review and save it yourself — nothing is scheduled until you enable it.
+              Both leave the job <strong>disabled</strong> — it won't run on a schedule until you enable it.
+              "Draft &amp; dry-run" saves it and runs it once now so you can see the result.
             </div>
           </div>
         )}
