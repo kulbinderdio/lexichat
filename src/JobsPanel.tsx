@@ -223,6 +223,7 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const [filterJobId, setFilterJobId] = useState<string | null>(null);
   const [error, setError]           = useState("");
+  const [designWarnings, setDesignWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     invoke<ScheduledJob[]>("get_jobs").then(setJobs).catch(() => {});
@@ -256,6 +257,24 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
   const deleteJob = async (id: string) => {
     await invoke("delete_job", { id });
     setJobs(prev => prev.filter(j => j.id !== id));
+  };
+
+  // Draft a job from a plain-English goal, then open it in the normal form for review.
+  // The backend returns it disabled and never saves anything itself.
+  const designJob = async (goal: string, model: string) => {
+    const tool_catalog = BUILTIN_TOOLS.map(t => ({ name: t.name, description: t.label }));
+    const ap = profiles.find(p => p.id === activeProfileId) ?? null;
+    const res = await invoke<{ job: ScheduledJob; warnings: string[] }>("draft_job_from_goal", {
+      args: {
+        goal, model,
+        allowed_dirs: globalAllowedDirs,
+        tool_catalog,
+        profile_id: ap?.id ?? null,
+        profile_name: ap?.name ?? null,
+      },
+    });
+    setDesignWarnings(res.warnings);
+    setEditingJob(res.job);
   };
 
   // Fire-and-forget — the job runs in Rust until completion.
@@ -307,6 +326,17 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
       </div>
       <div className="admin-divider" />
 
+      {/* AI-designer review notes — shown over the pre-filled form so the user sees them before saving */}
+      {editingJob && designWarnings.length > 0 && (
+        <div style={{ margin: "8px 16px", padding: "8px 12px", borderRadius: 8,
+          background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)", fontSize: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>⚠ Review before saving</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {designWarnings.map((w, i) => <li key={i} style={{ marginBottom: 2 }}>{w}</li>)}
+          </ul>
+        </div>
+      )}
+
       {/* Content — fills remaining height */}
       <div className="jobs-page-content">
         {tab === "jobs" && (
@@ -318,15 +348,18 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
             globalMcpServers={globalMcpServers}
             globalEnabledTools={globalEnabledTools}
             globalAllowedDirs={globalAllowedDirs}
+            activeProfileId={activeProfileId}
             editingJob={editingJob}
             runningIds={runningIds}
             error={error}
-            onEdit={setEditingJob}
+            onEdit={j => { setDesignWarnings([]); setEditingJob(j); }}
             onSave={saveJob}
-            onCancel={() => setEditingJob(null)}
+            onCancel={() => { setDesignWarnings([]); setEditingJob(null); }}
             onDelete={deleteJob}
             onRunNow={runNow}
+            onDesign={designJob}
             onNew={() => {
+              setDesignWarnings([]);
               const ap = profiles.find(p => p.id === activeProfileId) ?? null;
               setEditingJob(blankJob(ap ?? null));
             }}
@@ -350,7 +383,7 @@ export function JobsPanel({ models, profiles, activeProfileId, globalOpenapiSpec
 
 // ── Jobs tab ──────────────────────────────────────────────────────────────────
 
-function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers, globalEnabledTools, globalAllowedDirs, editingJob, runningIds, error, onEdit, onSave, onCancel, onDelete, onRunNow, onNew, onToggle }: {
+function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers, globalEnabledTools, globalAllowedDirs, activeProfileId, editingJob, runningIds, error, onEdit, onSave, onCancel, onDelete, onRunNow, onDesign, onNew, onToggle }: {
   jobs: ScheduledJob[];
   models: string[];
   profiles: Profile[];
@@ -358,6 +391,7 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
   globalMcpServers: import("./AdminPanel").StoredMCPServer[];
   globalEnabledTools: Record<string, boolean>;
   globalAllowedDirs: string[];
+  activeProfileId: string | null;
   editingJob: ScheduledJob | null;
   runningIds: Set<string>;
   error: string;
@@ -366,9 +400,30 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
   onCancel: () => void;
   onDelete: (id: string) => void;
   onRunNow: (id: string) => void;
+  onDesign: (goal: string, model: string) => Promise<void>;
   onNew: () => void;
   onToggle: (j: ScheduledJob) => void;
 }) {
+  const [designOpen, setDesignOpen] = useState(false);
+  const [goal, setGoal] = useState("");
+  const activeModel = profiles.find(p => p.id === activeProfileId)?.model || models[0] || "";
+  const [designModel, setDesignModel] = useState(activeModel);
+  const [designBusy, setDesignBusy] = useState(false);
+  const [designErr, setDesignErr] = useState("");
+
+  const runDesign = async () => {
+    if (!goal.trim() || !designModel) return;
+    setDesignBusy(true);
+    setDesignErr("");
+    try {
+      await onDesign(goal.trim(), designModel);  // opens the pre-filled form on success
+    } catch (e) {
+      setDesignErr(String(e));
+    } finally {
+      setDesignBusy(false);
+    }
+  };
+
   if (editingJob) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
@@ -436,9 +491,42 @@ function JobsTab({ jobs, models, profiles, globalOpenapiSpecs, globalMcpServers,
       </div>
       {/* Footer */}
       <div style={{ padding: 12, borderTop: "1px solid var(--border)" }}>
-        <button className="btn primary" style={{ width: "100%", fontSize: 12 }} onClick={onNew}>
-          + New Job
-        </button>
+        {designOpen && (
+          <div style={{ marginBottom: 8, padding: 10, borderRadius: 10, background: "var(--surface2)", border: "1px solid var(--border)" }}>
+            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Describe what you want, and LexiChat will draft the job for you.</div>
+            <textarea
+              className="admin-input"
+              rows={3}
+              value={goal}
+              onChange={e => setGoal(e.target.value)}
+              placeholder="e.g. Every weekday at 7am, brief me on UK energy policy from gov.uk and Hansard, skip anything you already covered, and save it as a PDF in ~/Briefings."
+              style={{ width: "100%", resize: "vertical", fontSize: 12 }}
+            />
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+              <select className="admin-input" value={designModel} onChange={e => setDesignModel(e.target.value)}
+                style={{ flex: 1, fontSize: 11 }}>
+                {models.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <button className="btn primary" style={{ fontSize: 11 }} disabled={designBusy || !goal.trim() || !designModel}
+                onClick={runDesign}>
+                {designBusy ? "Drafting…" : "✨ Draft it"}
+              </button>
+            </div>
+            {designErr && <div style={{ color: "#f87171", fontSize: 11, marginTop: 6 }}>{designErr}</div>}
+            <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 6 }}>
+              You'll review and save it yourself — nothing is scheduled until you enable it.
+            </div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" style={{ flex: 1, fontSize: 12 }}
+            onClick={() => { setDesignErr(""); setDesignOpen(o => !o); }}>
+            {designOpen ? "Close" : "✨ Design with AI"}
+          </button>
+          <button className="btn primary" style={{ flex: 1, fontSize: 12 }} onClick={onNew}>
+            + New Job
+          </button>
+        </div>
         <p style={{ fontSize: 10, color: "var(--text-tertiary)", textAlign: "center", margin: "6px 0 0" }}>
           Jobs run while this app is open.
         </p>

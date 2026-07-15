@@ -4,6 +4,7 @@ mod openapi;
 mod sparql;
 mod mcp;
 mod jobs;
+mod job_designer;
 mod history;
 mod wiki;
 mod sandbox;
@@ -1187,6 +1188,17 @@ fn get_jobs(state: State<'_, AppState>) -> Vec<jobs::ScheduledJob> {
     state.jobs.lock().unwrap().clone()
 }
 
+/// Draft a scheduled job from a plain-English goal. Returns a job (disabled) for the user to
+/// review and save through the normal form — it persists and enables nothing itself.
+#[tauri::command]
+async fn draft_job_from_goal(
+    args: job_designer::DraftJobArgs,
+    state: State<'_, AppState>,
+) -> Result<job_designer::DraftedJob, String> {
+    let host = state.ollama_host.lock().unwrap().clone();
+    job_designer::draft_job(&host, args).await
+}
+
 #[tauri::command]
 fn save_job(job: jobs::ScheduledJob, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     let mut stored = state.jobs.lock().unwrap();
@@ -1419,6 +1431,7 @@ pub fn run() {
             read_image_data_url,
             save_document,
             get_jobs,
+            draft_job_from_goal,
             save_job,
             delete_job,
             run_job_now,

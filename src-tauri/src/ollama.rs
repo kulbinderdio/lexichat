@@ -415,6 +415,51 @@ pub async fn discover_tools(
     if filtered.is_empty() { all_tools.to_vec() } else { filtered }
 }
 
+/// One-shot, non-streaming completion with no tools. Used for meta tasks like drafting a
+/// job spec, where we just want text (usually JSON) back. `think: false` keeps thinking
+/// models from spending tokens reasoning, with a fallback for models that reject the flag.
+pub async fn complete(host: &str, model: &str, system: &str, user: &str) -> anyhow::Result<String> {
+    #[derive(Serialize)]
+    struct Req<'a> {
+        model: &'a str,
+        messages: &'a [WireMessage],
+        stream: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        think: Option<bool>,
+    }
+
+    let messages = vec![
+        WireMessage { role: "system".into(), content: Some(system.into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None },
+        WireMessage { role: "user".into(), content: Some(user.into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None },
+    ];
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(180))
+        .build()?;
+    let url = format!("{}/api/chat", host);
+
+    let mut last_err = None;
+    for think in [Some(false), None] {
+        let body = Req { model, messages: &messages, stream: false, think };
+        match client.post(&url).json(&body).send().await.and_then(|r| r.error_for_status()) {
+            Ok(r) => {
+                let text = r.text().await?;
+                let content = serde_json::from_str::<serde_json::Value>(&text)
+                    .ok()
+                    .and_then(|v| v["message"]["content"].as_str().map(String::from))
+                    .unwrap_or_default();
+                return Ok(content);
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(anyhow::anyhow!(last_err
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| "completion failed".into())))
+}
+
 fn extract_json_array(s: &str) -> String {
     let s = s.trim();
     // Strip markdown code fences if present
