@@ -66,9 +66,9 @@ All tool names must be `[a-z0-9_]`, no leading/trailing underscores, max 64 char
 `openapi::tool_prefix()` and `openapi::sanitize_tool_name()` are shared by both `openapi.rs` and `mcp.rs`.
 
 ### OpenAPI spec registration
-1. User pastes spec JSON + base URL + auth in AdminPanel → `invoke("register_openapi_spec")`
-2. `openapi::parse_spec()` iterates `paths`, generates one tool per HTTP operation with prefixed/sanitized name and JSON schema from parameters + request body
-3. Stored in `AppState.openapi_specs` as `RegisteredSpec { id, title, base_url, auth, tools }`
+1. User pastes spec JSON + base URL + auth in AdminPanel → `invoke("register_openapi_spec")`. Frontend also adds it to the global `toolRegistry.openapiSpecs` (see Profile scoping); the spec is not owned by a profile.
+2. `openapi::parse_spec()` iterates `paths`, generates one tool per HTTP operation with prefixed/sanitized name and JSON schema from parameters + request body. **`base_url` is applied to every operation** (`execute` does `format!("{base}{path}")`); per-operation `servers` in the spec are ignored — so one spec = one host.
+3. `AppState.openapi_specs` holds `RegisteredSpec { id, title, base_url, auth, tools }` — but only the **active profile's enabled subset**, (re)pushed by `syncServers()` → `set_openapi_specs()` on each profile switch.
 4. At execution, `openapi::execute()` substitutes path params, appends query params, applies auth, returns JSON
 
 ### MCP server connection
@@ -77,11 +77,21 @@ All tool names must be `[a-z0-9_]`, no leading/trailing underscores, max 64 char
 3. Tools are stored with both `raw_name` (sent to server) and `name` (prefixed, used by model)
 4. `call_tool()` looks up `raw_name` from the prefixed `name` before sending JSON-RPC `tools/call`
 
-### Profile scoping
-Each profile has its own `mcpServers` and `openapiSpecs` lists. On profile switch:
-1. `syncServers()` calls `set_mcp_servers()` (Rust drops old connections, connects new) and `set_openapi_specs()`
-2. Model is set to profile's model only if that model exists in the fetched Ollama models list
-3. Conversation history is reset
+### Profile scoping (registry model)
+Tools are **not** copied per profile. They live once in a global registry —
+`settings.toolRegistry` in `App.tsx` with `{ openapiSpecs, mcpServers, sparqlEndpoints }` —
+and each profile only holds **enabled-ID references**: `enabledOpenapiSpecIds`,
+`enabledMcpServerIds`, `enabledSparqlEndpointIds`, plus `enabledTools` (a built-in-tool
+on/off map). Registering a spec/server (the OpenAPI/MCP/SPARQL tabs edit the global registry)
+auto-enables it for the *active* profile; the per-profile enable checkboxes live in the
+**profile editor** (Profiles tab), not the tool tabs. Legacy per-profile `openapiSpecs`/
+`mcpServers` arrays are migrated to `enabled*Ids` on load (`App.tsx` ~line 378).
+
+On profile switch, `syncServers()`:
+1. Filters the registry down to the active profile's enabled (and not-`enabled:false`) IDs, then pushes that subset to the Rust backend via `set_mcp_servers()` (drops old connections, connects new), `set_openapi_specs()`, and `set_sparql_endpoints()`. So `AppState` holds only the active profile's enabled tools.
+2. MCP is *additionally* filtered at call time: `send_message` receives `enabled_mcp_server_ids` and narrows again inside `dispatch`.
+3. Model is set to the profile's model only if that model exists in the fetched Ollama models list.
+4. Conversation history is reset.
 
 ## Auth system (`mcp.rs`)
 
@@ -96,7 +106,7 @@ Tauri IPC convention: all commands take a single `args` struct argument: `invoke
 
 ## State persistence
 
-- All settings (profiles, tools, model list, OpenAPI specs, MCP servers) stored in `localStorage` via `saveSettings()` / `loadSettings()` in `App.tsx`
+- All settings stored in `localStorage` via `saveSettings()` / `loadSettings()` in `App.tsx`. Tool definitions (OpenAPI specs, MCP servers, SPARQL endpoints) live once in the global `toolRegistry`; profiles reference them by ID (see Profile scoping), not by copy
 - Allowed sandbox directories persisted to `~/.local/share/lexichat/allowed_dirs.json` via Rust (`dirs` crate)
 - OAuth2 tokens stored in the `AuthConfig` within the profile in localStorage
 
