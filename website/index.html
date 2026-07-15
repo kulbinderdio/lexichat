@@ -363,6 +363,26 @@ tailwind.config = {
     <!-- Bento grid -->
     <div class="grid grid-cols-1 md:grid-cols-12 gap-5">
 
+      <!-- Persistent Memory / Wiki — lead feature -->
+      <div id="memory" class="md:col-span-12 scroll-mt-24 bg-gradient-to-br from-rose-50 to-pink-50 border border-rose-100 rounded-3xl p-10 card-hover flex flex-col md:flex-row items-start md:items-center gap-8">
+        <div class="flex-1">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-14 h-14 bg-rose-500/15 rounded-2xl flex items-center justify-center">
+              <span class="material-symbols-outlined text-rose-600" style="font-size:28px;font-variation-settings:'FILL' 1">menu_book</span>
+            </div>
+          </div>
+          <h3 class="text-2xl font-bold text-slate-900 mb-3">Persistent Long-Term Memory</h3>
+          <p class="text-slate-600 leading-relaxed max-w-2xl">Most assistants forget everything the moment you close the chat. LexiChat keeps a <strong>personal wiki</strong> — its long-term memory. Tell it something worth keeping and it files the fact away on its own; ask about it in a brand-new conversation and it searches the wiki, reads the page back, and picks up right where you left off. Perfect for todo lists, project notes, people, dates, and preferences that should outlive a single chat.</p>
+          <p class="text-slate-600 leading-relaxed max-w-2xl mt-3">The wiki is just <strong>plain Markdown files on your own disk</strong> — no database, no cloud. Open them in any editor, edit them by hand, back them up, or delete them. They're yours.</p>
+        </div>
+        <div class="grid grid-cols-2 gap-3 text-sm flex-shrink-0 md:w-80">
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-rose-500" style="font-size:16px">history</span>Remembers across chats</div>
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-rose-500" style="font-size:16px">description</span>Plain Markdown on disk</div>
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-rose-500" style="font-size:16px">search</span>Searches before it answers</div>
+          <div class="bg-white/70 rounded-xl p-3 flex items-center gap-2"><span class="material-symbols-outlined text-rose-500" style="font-size:16px">edit_note</span>Yours to edit or delete</div>
+        </div>
+      </div>
+
       <!-- Code Sandbox — NEW, lead feature -->
       <div id="code-sandbox" class="md:col-span-12 scroll-mt-24 bg-gradient-to-br from-sky-50 to-blue-50 border border-sky-100 rounded-3xl p-10 card-hover flex flex-col md:flex-row items-start md:items-center gap-8">
         <div class="flex-1">
