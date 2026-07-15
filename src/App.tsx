@@ -1323,8 +1323,11 @@ export default function App() {
         ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
         : `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}`;
 
-      // Profile-enabled MCP server IDs (empty = no profile = all servers visible)
-      const enabledMcpServerIds = activeProfile ? activeProfile.enabledMcpServerIds : [];
+      // MCP servers this profile may use. With no active profile, all registered servers are
+      // visible; the backend filters strictly by this list, so an empty list means none.
+      const enabledMcpServerIds = activeProfile
+        ? activeProfile.enabledMcpServerIds
+        : registry.mcpServers.map(s => s.id);
       const disabledMcpTools = ctxMCP.flatMap(srv =>
         Object.entries(srv.enabledTools ?? {})
           .filter(([, en]) => !en)

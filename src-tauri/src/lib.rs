@@ -343,11 +343,14 @@ async fn send_message(
         all_tools.extend(extra);
     }
 
-    // Append MCP tools — filtered by enabled_mcp_server_ids (empty = all servers, i.e. no profile)
+    // Append MCP tools. Every registered server sits in the connection pool regardless of
+    // profile, so `enabled_mcp_server_ids` is the sole authority on which are visible. It is
+    // filtered strictly — an empty list means "none", so a profile with no MCP servers enabled
+    // gets none. (The frontend passes the full set of IDs when there is no active profile.)
     {
         let connections = state.mcp_connections.lock().await;
         let extra: Vec<ollama::ToolSchema> = connections.iter()
-            .filter(|(id, _)| args.enabled_mcp_server_ids.is_empty() || args.enabled_mcp_server_ids.contains(*id))
+            .filter(|(id, _)| args.enabled_mcp_server_ids.contains(*id))
             .flat_map(|(_, conn)| conn.tools.iter()
                 .filter(|t| !args.disabled_mcp_tools.contains(&t.name))
                 .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
