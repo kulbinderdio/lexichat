@@ -7,7 +7,7 @@ import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft } from "luc
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
-import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec, StoredSparqlEndpoint, BUILTIN_SPARQL_ENDPOINT_IDS } from "./AdminPanel";
+import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec, StoredSparqlEndpoint } from "./AdminPanel";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -1291,7 +1291,7 @@ export default function App() {
         ? registry.mcpServers.filter(s => activeProfile.enabledMcpServerIds.includes(s.id))
         : registry.mcpServers;
       const ctxSparql = activeProfile
-        ? registry.sparqlEndpoints.filter(s => (BUILTIN_SPARQL_ENDPOINT_IDS.has(s.id) || (activeProfile.enabledSparqlEndpointIds ?? []).includes(s.id)) && s.enabled !== false)
+        ? registry.sparqlEndpoints.filter(s => (activeProfile.enabledSparqlEndpointIds ?? []).includes(s.id) && s.enabled !== false)
         : registry.sparqlEndpoints.filter(s => s.enabled !== false);
       const externalParts: string[] = [];
       if (ctxOpenAPI.length > 0)
@@ -1418,12 +1418,12 @@ export default function App() {
       openapi = registry.openapiSpecs;
     }
 
-    // SPARQL endpoints: built-in endpoints are globally available (governed by their
-    // own enabled toggle); custom endpoints are profile-filtered like OpenAPI specs.
+    // SPARQL endpoints — including built-in ones — are profile-scoped: a profile only
+    // gets the endpoints it explicitly enables, so any of them can be turned off.
     let sparql: StoredSparqlEndpoint[];
     if (profile) {
       sparql = registry.sparqlEndpoints.filter(ep =>
-        BUILTIN_SPARQL_ENDPOINT_IDS.has(ep.id) || (profile.enabledSparqlEndpointIds ?? []).includes(ep.id));
+        (profile.enabledSparqlEndpointIds ?? []).includes(ep.id));
       if (profile.toolAuthOverrides) {
         const ov = profile.toolAuthOverrides;
         sparql = sparql.map(ep => ov[ep.id] ? { ...ep, auth: ov[ep.id] } : ep);
