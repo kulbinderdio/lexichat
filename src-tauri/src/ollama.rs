@@ -415,19 +415,48 @@ pub async fn discover_tools(
     if filtered.is_empty() { all_tools.to_vec() } else { filtered }
 }
 
+#[derive(Serialize)]
+struct CompleteReq<'a> {
+    model: &'a str,
+    messages: &'a [WireMessage],
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    think: Option<bool>,
+}
+
+/// One POST to /api/chat, returning the raw body text (or a reqwest error).
+async fn post_chat(
+    client: &reqwest::Client, url: &str, model: &str, messages: &[WireMessage], think: Option<bool>,
+) -> reqwest::Result<String> {
+    let body = CompleteReq { model, messages, stream: false, think };
+    client.post(url).json(&body).send().await?
+        .error_for_status()?
+        .text().await
+}
+
+/// reqwest's Display drops the underlying cause ("error sending request for url (...)" alone),
+/// so walk the source chain to reveal *why* — e.g. "connection closed before message completed".
+fn describe_reqwest(e: &reqwest::Error) -> String {
+    use std::error::Error;
+    let mut msg = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        let s_str = s.to_string();
+        if !msg.contains(&s_str) { msg.push_str(": "); msg.push_str(&s_str); }
+        src = s.source();
+    }
+    msg
+}
+
 /// One-shot, non-streaming completion with no tools. Used for meta tasks like drafting a
 /// job spec, where we just want text (usually JSON) back. `think: false` keeps thinking
 /// models from spending tokens reasoning, with a fallback for models that reject the flag.
+///
+/// Retries transport failures: swapping/loading a large model briefly drops connections, and
+/// a one-shot call has no user in the loop to hit "retry", so a single dropped connection must
+/// not fail the whole operation. A genuine server *response* error (bad request, model missing)
+/// is returned immediately — retrying it is pointless.
 pub async fn complete(host: &str, model: &str, system: &str, user: &str) -> anyhow::Result<String> {
-    #[derive(Serialize)]
-    struct Req<'a> {
-        model: &'a str,
-        messages: &'a [WireMessage],
-        stream: bool,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        think: Option<bool>,
-    }
-
     let messages = vec![
         WireMessage { role: "system".into(), content: Some(system.into()),
             tool_calls: None, tool_call_id: None, name: None, images: None },
@@ -436,28 +465,49 @@ pub async fn complete(host: &str, model: &str, system: &str, user: &str) -> anyh
     ];
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(180))
+        // Only bound the TCP connect — a cold model load can legitimately take a while, and a
+        // hard total timeout would cut it off.
+        .connect_timeout(std::time::Duration::from_secs(30))
         .build()?;
     let url = format!("{}/api/chat", host);
 
-    let mut last_err = None;
-    for think in [Some(false), None] {
-        let body = Req { model, messages: &messages, stream: false, think };
-        match client.post(&url).json(&body).send().await.and_then(|r| r.error_for_status()) {
-            Ok(r) => {
-                let text = r.text().await?;
+    const ATTEMPTS: usize = 3;
+    let mut last = String::new();
+    for attempt in 0..ATTEMPTS {
+        // think:false first; if the server *responds* with an error (some models reject the
+        // flag), retry once without it. A transport error falls through to the backoff below.
+        let result = match post_chat(&client, &url, model, &messages, Some(false)).await {
+            Ok(t) => Ok(t),
+            Err(e) if e.is_status() => post_chat(&client, &url, model, &messages, None).await,
+            Err(e) => Err(e),
+        };
+
+        match result {
+            Ok(text) => {
                 let content = serde_json::from_str::<serde_json::Value>(&text)
                     .ok()
                     .and_then(|v| v["message"]["content"].as_str().map(String::from))
                     .unwrap_or_default();
                 return Ok(content);
             }
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                last = describe_reqwest(&e);
+                // Transport failures and 5xx are transient (model swap/load); a 4xx (bad
+                // request, model not found) won't change on retry, so stop.
+                let retryable = match e.status() {
+                    Some(code) => code.is_server_error(),
+                    None => true,
+                };
+                if !retryable { break; }
+                if attempt + 1 < ATTEMPTS {
+                    tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt as u64 + 1))).await;
+                }
+            }
         }
     }
-    Err(anyhow::anyhow!(last_err
-        .map(|e| e.to_string())
-        .unwrap_or_else(|| "completion failed".into())))
+    Err(anyhow::anyhow!(
+        "{last} — the model server may be loading or busy; wait a moment and try again."
+    ))
 }
 
 fn extract_json_array(s: &str) -> String {
@@ -949,6 +999,46 @@ mod tests {
         assert!(!is_malformed_tool_call_error("model \"qwen3.6\" not found, try pulling it first"));
         assert!(!is_malformed_tool_call_error("connection refused"));
         assert!(!is_malformed_tool_call_error("HTTP 500: internal server error"));
+    }
+
+    /// A transient 5xx (the shape of a model still loading) is retried, not surfaced.
+    #[tokio::test]
+    async fn complete_retries_transient_server_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // First call: 503 (transient). Later calls: a valid completion.
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1).expect(1)
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "role": "assistant", "content": "{\"ok\":true}" }
+            })))
+            .expect(1..)
+            .mount(&server).await;
+
+        let out = complete(&server.uri(), "m", "sys", "user").await.expect("should recover");
+        assert_eq!(out, "{\"ok\":true}");
+    }
+
+    /// A 4xx (bad request / model missing) is returned immediately — no wasted retries.
+    #[tokio::test]
+    async fn complete_does_not_retry_client_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // think:false then the think:None fallback = 2 requests, then it must give up.
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(2)
+            .mount(&server).await;
+
+        let err = complete(&server.uri(), "missing", "s", "u").await.unwrap_err();
+        assert!(err.to_string().contains("404"), "got: {err}");
     }
 
     /// Drive the real agent loop against an Ollama that rejects the first sample's tool call
