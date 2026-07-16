@@ -273,6 +273,9 @@ pub struct SendMessageArgs {
     /// Server IDs the active profile has enabled. Empty = no profile active (use all servers).
     #[serde(default)]
     pub enabled_mcp_server_ids: Vec<String>,
+    /// Cap on tools shown to the model per step (from the profile's maxTools). None/0 → default.
+    #[serde(default)]
+    pub max_tools: Option<usize>,
 }
 
 fn default_web_search_results() -> usize { 10 }
@@ -314,49 +317,64 @@ async fn send_message(
     let builtin_tools = args.tools.clone();
 
     // The wiki tools are one workflow, not independent tools: the system prompt requires a
-    // wiki_search before every write and a wiki_append to log.md after it. Discovery picks
-    // tools per-message and would hand back only wiki_write, leaving the model unable to obey
-    // its own rules — so hold them out of the pre-flight and always offer the whole group.
-    let (wiki_tools, discoverable): (Vec<_>, Vec<_>) = builtin_tools
+    // wiki_search before every write and a wiki_append to log.md after it. Per-step selection
+    // would hand back only wiki_write, so hold them out and always offer the whole group.
+    let (always_tools, discoverable): (Vec<_>, Vec<_>) = builtin_tools
         .into_iter()
         .partition(|t| t.function.name.starts_with("wiki_"));
 
-    // Tool discovery pre-flight: filter built-ins only — MCP/OpenAPI tools are
-    // user-curated and must always be available regardless of the message content.
-    let mut all_tools = ollama::discover_tools(&host, &args.model, &args.message, &discoverable).await;
-    all_tools.extend(wiki_tools);
-
-    // Always append OpenAPI tools (profile-scoped by set_openapi_specs)
-    {
-        let extra: Vec<ollama::ToolSchema> = state.openapi_specs.lock().unwrap().iter()
-            .flat_map(|spec| spec.tools.iter()
-                .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
-            .collect();
-        all_tools.extend(extra);
+    // Build discoverable tool groups: one for built-ins, then one per OpenAPI spec / SPARQL
+    // endpoint / MCP server. The agent loop narrows these per step when they're numerous.
+    let mut tool_groups: Vec<ollama::ToolGroup> = Vec::new();
+    if !discoverable.is_empty() {
+        tool_groups.push(ollama::ToolGroup {
+            label: "Built-in tools".into(),
+            description: "Files, web search, fetch web pages, date/time, email, and code.".into(),
+            tools: discoverable,
+        });
     }
-
-    // Always append SPARQL endpoint tools (profile-scoped by set_sparql_endpoints)
-    {
-        let extra: Vec<ollama::ToolSchema> = state.sparql_endpoints.lock().unwrap().iter()
-            .flat_map(|ep| ep.tools.iter()
-                .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
+    for spec in state.openapi_specs.lock().unwrap().iter() {
+        let tools: Vec<ollama::ToolSchema> = spec.tools.iter()
+            .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok())
             .collect();
-        all_tools.extend(extra);
+        if !tools.is_empty() {
+            tool_groups.push(ollama::ToolGroup {
+                label: spec.title.clone(),
+                description: format!("{} — REST API operations.", spec.title),
+                tools,
+            });
+        }
     }
-
-    // Append MCP tools. Every registered server sits in the connection pool regardless of
-    // profile, so `enabled_mcp_server_ids` is the sole authority on which are visible. It is
-    // filtered strictly — an empty list means "none", so a profile with no MCP servers enabled
-    // gets none. (The frontend passes the full set of IDs when there is no active profile.)
+    for ep in state.sparql_endpoints.lock().unwrap().iter() {
+        let tools: Vec<ollama::ToolSchema> = ep.tools.iter()
+            .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok())
+            .collect();
+        if !tools.is_empty() {
+            let desc = if ep.usage_hint.trim().is_empty() { ep.title.clone() } else { ep.usage_hint.clone() };
+            tool_groups.push(ollama::ToolGroup {
+                label: ep.title.clone(),
+                description: format!("SPARQL / linked data — {desc}"),
+                tools,
+            });
+        }
+    }
+    // MCP: every registered server sits in the pool regardless of profile, so
+    // `enabled_mcp_server_ids` is the authority (strict — empty means none).
     {
         let connections = state.mcp_connections.lock().await;
-        let extra: Vec<ollama::ToolSchema> = connections.iter()
-            .filter(|(id, _)| args.enabled_mcp_server_ids.contains(*id))
-            .flat_map(|(_, conn)| conn.tools.iter()
+        for (_, conn) in connections.iter().filter(|(id, _)| args.enabled_mcp_server_ids.contains(*id)) {
+            let tools: Vec<ollama::ToolSchema> = conn.tools.iter()
                 .filter(|t| !args.disabled_mcp_tools.contains(&t.name))
-                .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok()))
-            .collect();
-        all_tools.extend(extra);
+                .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok())
+                .collect();
+            if !tools.is_empty() {
+                tool_groups.push(ollama::ToolGroup {
+                    label: format!("{} (MCP)", conn.config.name),
+                    description: format!("{} — connected MCP server tools.", conn.config.name),
+                    tools,
+                });
+            }
+        }
     }
 
     let specs_snapshot: Vec<openapi::RegisteredSpec> = state.openapi_specs.lock().unwrap().clone();
@@ -385,7 +403,9 @@ async fn send_message(
         &host,
         &args.model,
         &args.system_prompt,
-        &all_tools,
+        &always_tools,
+        &tool_groups,
+        args.max_tools.unwrap_or(0),
         options,
         args.keep_alive.clone(),
         &state.conversation,

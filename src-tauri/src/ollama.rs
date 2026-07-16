@@ -306,113 +306,119 @@ async fn stream_chat<R: tauri::Runtime>(
 /// How many times to re-sample a step whose tool call Ollama couldn't parse.
 const MALFORMED_TOOL_CALL_RETRIES: usize = 2;
 
-// ── Tool discovery pre-flight ─────────────────────────────────────────────────
+// ── Tool selection (per-step discovery) ───────────────────────────────────────
 
-/// Minimum number of tools that triggers a pre-flight discovery call.
-/// Below this threshold all tools are used directly.
-const DISCOVERY_THRESHOLD: usize = 12;
+/// At or below this many discoverable tools, send them all — the selection pre-flight
+/// isn't worth its latency. Above it, narrow to the ones relevant to the current step.
+pub const SELECTION_THRESHOLD: usize = 25;
+/// Default upper bound on how many tools reach the model when a caller gives no cap.
+pub const DEFAULT_TOOL_CAP: usize = 40;
 
-/// Run a silent pre-flight call to let the model pick which tools it actually
-/// needs for the given request. Returns the filtered [`ToolSchema`] slice.
-/// Falls back to returning all tools on any error or empty selection.
-pub async fn discover_tools(
+/// A named collection of tools — one built-in set, or one OpenAPI spec / SPARQL endpoint /
+/// MCP server. Selection is two-level: choose relevant groups first (a tiny prompt), then,
+/// only if the chosen groups still overflow the cap, choose specific operations within them.
+#[derive(Clone)]
+pub struct ToolGroup {
+    pub label: String,
+    pub description: String,
+    pub tools: Vec<ToolSchema>,
+}
+
+fn first_sentence(s: &str, max: usize) -> String {
+    let s = s.trim();
+    let cut = s.find(['.', '\n']).map(|i| i + 1).unwrap_or(s.len()).min(max).min(s.len());
+    s[..cut].trim().to_string()
+}
+
+/// Parse a JSON array of integers, tolerating fences/prose (e.g. "[0, 2]").
+fn parse_usize_array(s: &str) -> Vec<usize> {
+    serde_json::from_str::<Vec<usize>>(&extract_json_array(s)).unwrap_or_default()
+}
+
+/// Pick the tools relevant to `context` from `groups`, capped at `cap`. Two-level with pure
+/// fallbacks — a failed or empty selection never stalls the run, it just widens the set.
+pub async fn select_tools_for_step(
     host: &str,
     model: &str,
-    user_message: &str,
-    all_tools: &[ToolSchema],
+    context: &str,
+    groups: &[ToolGroup],
+    cap: usize,
 ) -> Vec<ToolSchema> {
-    if all_tools.len() <= DISCOVERY_THRESHOLD {
-        return all_tools.to_vec();
+    let all: Vec<&ToolSchema> = groups.iter().flat_map(|g| g.tools.iter()).collect();
+    // Small enough: skip the LLM entirely; the cap is a backstop.
+    if all.len() <= cap {
+        return all.into_iter().cloned().collect();
     }
 
-    // Build compact tool list: name + description only (no parameters schema)
-    let compact: Vec<serde_json::Value> = all_tools
-        .iter()
-        .map(|t| serde_json::json!({ "name": t.function.name, "description": t.function.description }))
-        .collect();
-    let compact_json = serde_json::to_string(&compact).unwrap_or_default();
-
-    let system = "You are a tool selection assistant. \
-        Given a user request and a list of available tools (name + description only), \
-        select the minimum set of tools needed to fulfil the request. \
-        Reply with ONLY a valid JSON array of tool name strings, e.g. [\"tool_a\",\"tool_b\"]. \
-        If no tools are needed, reply with []. \
-        Do not call any tools. Do not explain. Output only the JSON array.";
-
-    let user_msg = format!("User request: {user_message}\n\nAvailable tools: {compact_json}");
-
-    let messages = vec![
-        WireMessage { role: "system".into(), content: Some(system.into()),
-            tool_calls: None, tool_call_id: None, name: None, images: None },
-        WireMessage { role: "user".into(), content: Some(user_msg),
-            tool_calls: None, tool_call_id: None, name: None, images: None },
-    ];
-
-    #[derive(Serialize)]
-    struct DiscoverReq<'a> {
-        model: &'a str,
-        messages: &'a [WireMessage],
-        stream: bool,
-        /// Picking tool names needs no reasoning. Left on, a thinking model spends thousands
-        /// of tokens (tens of seconds) here — and this call blocks the whole run, before the
-        /// first debug event, so the UI just sits there.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        think: Option<bool>,
-    }
-
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return all_tools.to_vec(),
+    // ── Level 1: choose relevant groups ──
+    let group_list = groups.iter().enumerate()
+        .map(|(i, g)| format!("{}. {} — {}", i, g.label, first_sentence(&g.description, 160)))
+        .collect::<Vec<_>>().join("\n");
+    let sys1 = "You choose which groups of tools are needed for a task. Reply with ONLY a JSON \
+        array of the relevant group numbers, e.g. [0,3]. Include every group that might be \
+        needed and exclude clearly irrelevant ones. Output only the JSON array.";
+    let user1 = format!("Task/context:\n{context}\n\nTool groups:\n{group_list}");
+    let picked = complete(host, model, sys1, &user1).await.ok()
+        .map(|r| parse_usize_array(&r)).unwrap_or_default();
+    let chosen: Vec<&ToolGroup> = {
+        let c: Vec<&ToolGroup> = picked.iter().filter_map(|&i| groups.get(i)).collect();
+        if c.is_empty() { groups.iter().collect() } else { c } // nothing picked → consider all
     };
 
-    let url = format!("{}/api/chat", host);
+    let candidate: Vec<&ToolSchema> = chosen.iter().flat_map(|g| g.tools.iter()).collect();
+    if candidate.len() <= cap {
+        return candidate.into_iter().cloned().collect();
+    }
 
-    let mut resp_text: Option<String> = None;
-    // Models without a thinking capability may reject `think`; fall back to a plain request.
-    for think in [Some(false), None] {
-        let body = DiscoverReq { model, messages: &messages, stream: false, think };
-        if let Ok(r) = client.post(&url).json(&body).send().await.and_then(|r| r.error_for_status()) {
-            if let Ok(t) = r.text().await {
-                resp_text = Some(t);
-                break;
-            }
+    // ── Level 2: choose specific operations within the chosen groups ──
+    let tool_list = candidate.iter()
+        .map(|t| format!("{}: {}", t.function.name, first_sentence(&t.function.description, 120)))
+        .collect::<Vec<_>>().join("\n");
+    let sys2 = "You select the minimum set of tools needed for a task. Reply with ONLY a JSON \
+        array of tool name strings, e.g. [\"tool_a\",\"tool_b\"]. Output only the JSON array.";
+    let user2 = format!("Task/context:\n{context}\n\nAvailable tools:\n{tool_list}");
+    let names: Vec<String> = complete(host, model, sys2, &user2).await.ok()
+        .map(|r| serde_json::from_str(&extract_json_array(&r)).unwrap_or_default())
+        .unwrap_or_default();
+    let nameset: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    let selected: Vec<ToolSchema> = candidate.iter()
+        .filter(|t| nameset.contains(t.function.name.as_str()))
+        .take(cap).map(|t| (*t).clone()).collect();
+    // Model gave nothing usable → fall back to the chosen groups' first `cap` tools.
+    if selected.is_empty() {
+        candidate.into_iter().take(cap).cloned().collect()
+    } else {
+        selected
+    }
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max { s.to_string() }
+    else { s.chars().take(max).collect::<String>() + "…" }
+}
+
+/// Compact description of the current step for tool selection: the task (first user message)
+/// plus a short tail of recent activity, so selection adapts as a multi-tool chain progresses.
+fn build_discovery_context(conv: &[WireMessage]) -> String {
+    let task = conv.iter().find(|m| m.role == "user")
+        .and_then(|m| m.content.as_deref()).unwrap_or_default();
+    let mut tail: Vec<String> = Vec::new();
+    for m in conv.iter().rev().take(4) {
+        match m.role.as_str() {
+            "assistant" => if let Some(c) = m.content.as_deref() {
+                if !c.trim().is_empty() { tail.push(format!("Assistant: {}", truncate_str(c, 300))); }
+            },
+            "tool" => if let Some(c) = m.content.as_deref() {
+                tail.push(format!("Tool result: {}", truncate_str(c, 200)));
+            },
+            _ => {}
         }
     }
-    let resp_text = match resp_text {
-        Some(t) => t,
-        None => return all_tools.to_vec(),
-    };
-
-    // Ollama non-streaming: {"message":{"content":"..."}, ...}
-    let content = serde_json::from_str::<serde_json::Value>(&resp_text)
-        .ok()
-        .and_then(|v| v["message"]["content"].as_str().map(String::from))
-        .unwrap_or_default();
-
-    let json_str = extract_json_array(&content);
-    let selected: Vec<String> = match serde_json::from_str(&json_str) {
-        Ok(v) => v,
-        Err(_) => return all_tools.to_vec(),
-    };
-
-    if selected.is_empty() {
-        return all_tools.to_vec();
-    }
-
-    let selected_set: std::collections::HashSet<&str> =
-        selected.iter().map(String::as_str).collect();
-
-    let filtered: Vec<ToolSchema> = all_tools
-        .iter()
-        .filter(|t| selected_set.contains(t.function.name.as_str()))
-        .cloned()
-        .collect();
-
-    // Safety: if the model picked nothing recognisable, fall back to all tools
-    if filtered.is_empty() { all_tools.to_vec() } else { filtered }
+    tail.reverse();
+    let mut out = format!("Task: {}", truncate_str(task, 500));
+    if !tail.is_empty() { out.push_str("\n\nRecent activity:\n"); out.push_str(&tail.join("\n")); }
+    out
 }
 
 #[derive(Serialize)]
@@ -531,7 +537,12 @@ pub async fn agent_loop<R: tauri::Runtime>(
     host: &str,
     model: &str,
     system_prompt: &str,
-    tools: &[ToolSchema],
+    // Tools sent every step, never filtered (e.g. the wiki workflow).
+    always_tools: &[ToolSchema],
+    // Discoverable tool groups; when numerous, narrowed per step to those relevant now.
+    tool_groups: &[ToolGroup],
+    // Upper bound on tools shown to the model per step (0 → DEFAULT_TOOL_CAP).
+    tool_cap: usize,
     options: Option<ChatOptions>,
     keep_alive: Option<String>,
     conversation: &Mutex<Vec<WireMessage>>,
@@ -551,8 +562,37 @@ pub async fn agent_loop<R: tauri::Runtime>(
     let mut nudged = false;
     let mut continuations = 0usize;
     let mut consecutive_text_without_tools = 0usize; // detect "I'm done" loops
+    let cap = if tool_cap == 0 { DEFAULT_TOOL_CAP } else { tool_cap };
+    // Tools the model called last step — kept available next step so a multi-step chain
+    // isn't broken by them dropping out of the fresh selection.
+    let mut last_used: Vec<String> = Vec::new();
+    let discoverable_total: usize = tool_groups.iter().map(|g| g.tools.len()).sum();
     for step in 0..max_steps {
         let step_start = std::time::Instant::now();
+
+        // Per-step tool selection: with many candidate tools, narrow to those relevant to the
+        // current step; small sets are sent whole. `always_tools` are always included.
+        let tools: Vec<ToolSchema> = {
+            let mut v = always_tools.to_vec();
+            if discoverable_total <= SELECTION_THRESHOLD {
+                v.extend(tool_groups.iter().flat_map(|g| g.tools.iter().cloned()));
+            } else {
+                let context = { let conv = conversation.lock().unwrap(); build_discovery_context(&conv) };
+                let mut selected = select_tools_for_step(host, model, &context, tool_groups, cap).await;
+                for name in &last_used {
+                    if !selected.iter().any(|t| &t.function.name == name)
+                        && !v.iter().any(|t| &t.function.name == name) {
+                        if let Some(t) = tool_groups.iter().flat_map(|g| &g.tools)
+                            .find(|t| &t.function.name == name) {
+                            selected.push(t.clone());
+                        }
+                    }
+                }
+                v.extend(selected);
+            }
+            v
+        };
+
         let schema_names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
         if !silent { let _ = app.emit("debug-step-start", DebugStepEvent { step, schema_names }); }
 
@@ -575,7 +615,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
         // persistent failure (or any other error) ends the run.
         let mut attempt = 0usize;
         let (full_text, tool_calls) = loop {
-            match stream_chat(host, model, &wire, tools, options.as_ref(), keep_alive.as_deref(), app, silent).await {
+            match stream_chat(host, model, &wire, &tools, options.as_ref(), keep_alive.as_deref(), app, silent).await {
                 Ok(v) => break v,
                 Err(e) if attempt < MALFORMED_TOOL_CALL_RETRIES
                     && is_malformed_tool_call_error(&e.to_string()) =>
@@ -610,6 +650,9 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 duration_ms: step_ms,
             });
         }
+
+        // Remember which tools were called so they stay available next step (chain continuity).
+        last_used = tool_calls.iter().map(|tc| tc.function.name.clone()).collect();
 
         // Append assistant message to history
         {
@@ -1092,6 +1135,8 @@ mod tests {
             "qwen3.6:latest",
             "You are a helpful assistant.",
             &[],
+            &[],
+            0,
             None,
             None,
             &conversation,
@@ -1127,35 +1172,109 @@ mod tests {
         }
     }
 
-    /// The pre-flight blocks the run before the first debug event fires, so it must not let a
-    /// thinking model reason its way through tool selection (qwen3.6 spent 22s doing exactly that).
+    fn group(label: &str, names: &[&str]) -> ToolGroup {
+        ToolGroup {
+            label: label.into(),
+            description: format!("{label} tools"),
+            tools: names.iter().map(|n| tool(n)).collect(),
+        }
+    }
+
+    /// When the candidate set fits under the cap, selection returns everything and makes no
+    /// LLM call (the host here is unreachable, so a call would error the test).
     #[tokio::test]
-    async fn discovery_disables_thinking() {
+    async fn select_under_cap_skips_the_model() {
+        let groups = vec![group("A", &["a1", "a2"]), group("B", &["b1"])];
+        let picked = select_tools_for_step("http://127.0.0.1:1", "m", "task", &groups, 10).await;
+        let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
+        assert_eq!(names, ["a1", "a2", "b1"]);
+    }
+
+    /// Level 1 narrows to the relevant group; if that group fits the cap, no level-2 call runs.
+    #[tokio::test]
+    async fn select_narrows_to_the_chosen_group() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Level-1 group pick: choose group 0 only.
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "role": "assistant", "content": "[0]" }
+            })))
+            .expect(1) // exactly one call: group 0 fits the cap, so no level-2
+            .mount(&server).await;
+
+        let groups = vec![
+            group("Members", &["m1", "m2"]),                       // group 0 (3 ≤ cap)
+            group("Bills", &["b1", "b2", "b3", "b4", "b5", "b6"]), // group 1
+        ];
+        let picked = select_tools_for_step(&server.uri(), "m", "find an MP", &groups, 5).await;
+        let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
+        assert_eq!(names, ["m1", "m2"], "should return only the chosen group's tools");
+    }
+
+    /// End-to-end: with many candidate tools, the agent loop runs the selection pre-flight
+    /// (non-streaming) before the streaming turn, and completes.
+    #[tokio::test]
+    async fn agent_loop_runs_per_step_selection_when_many_tools() {
         use wiremock::matchers::{body_partial_json, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/api/chat"))
-            .and(body_partial_json(serde_json::json!({ "think": false })))
+        // Selection pre-flight is non-streaming — pick group 0.
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({ "stream": false })))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "message": { "role": "assistant", "content": "[\"read_file\"]" }
+                "message": { "role": "assistant", "content": "[0]" }
             })))
-            .expect(1)
-            .mount(&server)
-            .await;
+            .expect(1..) // proves per-step selection ran
+            .mount(&server).await;
+        // The actual turn is streaming — a plain final answer, no tool call.
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .and(body_partial_json(serde_json::json!({ "stream": true })))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "{\"message\":{\"role\":\"assistant\",\"content\":\"Done.\"},\"done\":false}\n\
+                 {\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true}\n",
+                "application/x-ndjson"))
+            .mount(&server).await;
 
-        // More than DISCOVERY_THRESHOLD tools, or the pre-flight is skipped entirely.
-        let all: Vec<ToolSchema> = (0..DISCOVERY_THRESHOLD + 3)
-            .map(|i| tool(&format!("tool_{i}")))
-            .chain(std::iter::once(tool("read_file")))
-            .collect();
+        // 2 + 7*4 = 30 tools: over SELECTION_THRESHOLD and over the cap, so selection engages.
+        let groups = vec![
+            group("A", &["a1", "a2"]),
+            group("B", &["b1","b2","b3","b4","b5","b6","b7"]),
+            group("C", &["c1","c2","c3","c4","c5","c6","c7"]),
+            group("D", &["d1","d2","d3","d4","d5","d6","d7"]),
+            group("E", &["e1","e2","e3","e4","e5","e6","e7"]),
+        ];
 
-        let picked = discover_tools(&server.uri(), "qwen3.6:latest", "read my notes", &all).await;
+        let app = tauri::test::mock_app();
+        let conversation = Mutex::new(vec![WireMessage {
+            role: "user".into(), content: Some("do the thing".into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None }]);
+        let mcp: tokio::sync::Mutex<HashMap<String, MCPConnection>> =
+            tokio::sync::Mutex::new(HashMap::new());
 
-        let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
-        assert_eq!(names, ["read_file"], "should narrow to the model's selection");
-        // The mock only matches requests carrying `think: false`; `.expect(1)` proves it was sent.
+        let result = agent_loop(
+            &server.uri(), "m", "sys", &[], &groups, 5, None, None,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, app.handle(), true, 5,
+        ).await;
+        assert!(result.is_ok(), "run should complete: {result:?}");
+    }
+
+    #[test]
+    fn discovery_context_includes_task_and_recent_activity() {
+        let conv = vec![
+            WireMessage { role: "user".into(), content: Some("Profile the MP for Rotherham".into()),
+                tool_calls: None, tool_call_id: None, name: None, images: None },
+            WireMessage { role: "assistant".into(), content: Some("Found member 123.".into()),
+                tool_calls: None, tool_call_id: None, name: None, images: None },
+            WireMessage { role: "tool".into(), content: Some("{\"id\":123}".into()),
+                tool_calls: None, tool_call_id: None, name: None, images: None },
+        ];
+        let ctx = build_discovery_context(&conv);
+        assert!(ctx.contains("Rotherham"));
+        assert!(ctx.contains("Found member 123"));
     }
 
     /// A model that never emits a parseable tool call must give up and surface the error,
@@ -1190,7 +1309,7 @@ mod tests {
             tokio::sync::Mutex::new(HashMap::new());
 
         let result = agent_loop(
-            &server.uri(), "qwen3.6:latest", "You are a helpful assistant.", &[], None, None,
+            &server.uri(), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, app.handle(), false, 20,
         )
         .await;

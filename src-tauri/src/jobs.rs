@@ -276,6 +276,20 @@ pub fn is_due(
 
 // ── Job executor ───────────────────────────────────────────────────────────────
 
+/// Wrap a job's flat tool list as a single discoverable group so the agent loop's per-step
+/// selection can narrow it when large; small sets (e.g. explicit step tools) are sent whole.
+fn job_tool_groups(tools: Vec<crate::ollama::ToolSchema>) -> Vec<crate::ollama::ToolGroup> {
+    if tools.is_empty() {
+        Vec::new()
+    } else {
+        vec![crate::ollama::ToolGroup {
+            label: "Job tools".into(),
+            description: "Tools available to this scheduled job.".into(),
+            tools,
+        }]
+    }
+}
+
 pub async fn execute_job(
     job: &ScheduledJob,
     state: &crate::AppState,
@@ -375,13 +389,8 @@ pub async fn execute_job(
         // Parse OpenAPI specs from snapshot, build isolated MCP connections.
         // Nothing here touches the global AppState — no interference with main chat.
 
-        // Discovery pre-flight on built-ins only — MCP/OpenAPI tools are user-curated
-        // and must always be available regardless of the message content.
-        let mut all_tools = if use_step_tools {
-            all_tools
-        } else {
-            crate::ollama::discover_tools(&host, &job.model, &job.prompt, &all_tools).await
-        };
+        // Per-step tool selection now happens inside the agent loop (see agent_loop).
+        let mut all_tools = all_tools;
 
         let mut registered_specs: Vec<crate::openapi::RegisteredSpec> = Vec::new();
         for sp in &ctx.openapi_specs {
@@ -427,8 +436,9 @@ pub async fn execute_job(
 
         let temp_mcp = tokio::sync::Mutex::new(temp_conns);
 
+        let job_groups = job_tool_groups(all_tools);
         let r = agent_loop(
-            &host, &job.model, &system_prompt, &all_tools,
+            &host, &job.model, &system_prompt, &[], &job_groups, 0,
             None, None, &conversation,
             registered_specs, Vec::new(), &temp_mcp, ctx.allowed_dirs.clone(),
             Vec::new(), // no attached-file sandbox paths in jobs
@@ -442,12 +452,8 @@ pub async fn execute_job(
         let specs        = state.openapi_specs.lock().unwrap().clone();
         let allowed_dirs = state.allowed_dirs.lock().unwrap().clone();
 
-        // Discovery pre-flight on built-ins only — then extend with user-curated tools.
-        let mut all_tools = if use_step_tools {
-            all_tools
-        } else {
-            crate::ollama::discover_tools(&host, &job.model, &job.prompt, &all_tools).await
-        };
+        // Per-step tool selection now happens inside the agent loop (see agent_loop).
+        let mut all_tools = all_tools;
 
         let extra: Vec<ToolSchema> = specs.iter()
             .flat_map(|s| s.tools.iter().filter_map(|t| serde_json::from_value::<ToolSchema>(t.schema.clone()).ok()))
@@ -459,8 +465,9 @@ pub async fn execute_job(
             .collect();
         all_tools.extend(mcp_extra);
 
+        let job_groups = job_tool_groups(all_tools);
         agent_loop(
-            &host, &job.model, &system_prompt, &all_tools,
+            &host, &job.model, &system_prompt, &[], &job_groups, 0,
             None, None, &conversation,
             specs, Vec::new(), &state.mcp_connections, allowed_dirs,
             Vec::new(), // no attached-file sandbox paths in jobs
