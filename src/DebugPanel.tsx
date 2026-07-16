@@ -6,6 +6,7 @@ import { listen, UnlistenFn } from "@tauri-apps/api/event";
 interface DebugStep {
   index: number;
   schemaNames: string[];
+  candidateTotal?: number;
   llmText?: string;
   durationMs?: number;
   toolCalls: { name: string; args: string }[];
@@ -63,7 +64,9 @@ function StepRow({ step, isLast }: { step: DebugStep; isLast: boolean }) {
                   fontSize: 11, color: "var(--dbg-schemas-color)", display: "flex", alignItems: "center", gap: 4 }}
               >
                 <span style={{ fontSize: 9 }}>{schemasOpen ? "▼" : "▶"}</span>
-                Schemas ({step.schemaNames.length} tools sent)
+                {step.candidateTotal != null && step.candidateTotal > step.schemaNames.length
+                  ? `Schemas (selected ${step.schemaNames.length} of ${step.candidateTotal} tools)`
+                  : `Schemas (${step.schemaNames.length} tools sent)`}
               </button>
               {schemasOpen && (
                 <div style={{ paddingLeft: 14, paddingBottom: 4 }}>
@@ -228,7 +231,7 @@ export function DebugPanel({ visible, clearKey }: Props) {
 
     const setup = async () => {
       // New step starting
-      unsubs.push(await listen<{ step: number; schema_names: string[] }>("debug-step-start", ({ payload }) => {
+      unsubs.push(await listen<{ step: number; schema_names: string[]; candidate_total?: number }>("debug-step-start", ({ payload }) => {
         if (payload.step === 0) {
           // New run
           runCounter.current += 1;
@@ -237,6 +240,7 @@ export function DebugPanel({ visible, clearKey }: Props) {
             id: runId, steps: [{
               index: 0,
               schemaNames: payload.schema_names,
+              candidateTotal: payload.candidate_total,
               toolCalls: [], toolResults: [], tokens: "", thinking: "",
             }], done: false,
           }]);
@@ -248,6 +252,7 @@ export function DebugPanel({ visible, clearKey }: Props) {
             run.steps = [...run.steps, {
               index: payload.step,
               schemaNames: payload.schema_names,
+              candidateTotal: payload.candidate_total,
               toolCalls: [], toolResults: [], tokens: "", thinking: "",
             }];
             runs[runs.length - 1] = run;

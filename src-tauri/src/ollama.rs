@@ -117,6 +117,9 @@ pub struct RetryEvent {
 pub struct DebugStepEvent {
     pub step: usize,
     pub schema_names: Vec<String>,
+    /// Total candidate tools (always-on + all groups) before per-step narrowing. When larger
+    /// than `schema_names.len()`, selection filtered the list for this step.
+    pub candidate_total: usize,
 }
 
 #[derive(Clone, Serialize)]
@@ -594,7 +597,11 @@ pub async fn agent_loop<R: tauri::Runtime>(
         };
 
         let schema_names: Vec<String> = tools.iter().map(|t| t.function.name.clone()).collect();
-        if !silent { let _ = app.emit("debug-step-start", DebugStepEvent { step, schema_names }); }
+        if !silent {
+            let _ = app.emit("debug-step-start", DebugStepEvent {
+                step, schema_names, candidate_total: always_tools.len() + discoverable_total,
+            });
+        }
 
         // Build wire messages: system + history
         let wire = {
