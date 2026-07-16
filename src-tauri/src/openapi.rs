@@ -46,13 +46,24 @@ fn arg_to_string(v: &Value) -> Option<String> {
     }
 }
 
-/// Build the `(key, value)` query-string pairs for a tool call, skipping any
-/// parameter the caller didn't supply (or supplied as null/array/object).
+/// Build the `(key, value)` query-string pairs for a tool call, skipping any parameter the
+/// caller didn't supply. Arrays are expanded to repeated pairs (`?k=a&k=b`) — the convention
+/// these APIs accept — rather than being dropped.
 fn build_query_params(params: &[APIParam], args: &Value) -> Vec<(String, String)> {
-    params.iter()
-        .filter(|p| p.location == "query")
-        .filter_map(|p| arg_to_string(&args[&p.name]).map(|v| (p.name.clone(), v)))
-        .collect()
+    let mut out = Vec::new();
+    for p in params.iter().filter(|p| p.location == "query") {
+        match &args[&p.name] {
+            Value::Array(items) => {
+                for it in items {
+                    if let Some(v) = arg_to_string(it) { out.push((p.name.clone(), v)); }
+                }
+            }
+            other => {
+                if let Some(v) = arg_to_string(other) { out.push((p.name.clone(), v)); }
+            }
+        }
+    }
+    out
 }
 
 /// Sanitize a string into a valid Ollama tool-name segment: [a-z0-9_], no leading/trailing _.
@@ -87,6 +98,47 @@ pub fn tool_prefix(name: &str) -> String {
     let sanitized = sanitize_ident(&s);
     if sanitized.is_empty() { return "svc_".into(); }
     format!("{sanitized}_")
+}
+
+/// Resolve a schema node, following a `$ref` into `components/schemas` and unwrapping the
+/// `allOf: [{ $ref }]` pattern Swashbuckle emits for enums-with-descriptions. Bounded depth
+/// so a circular `$ref` can't loop forever. Returns the concrete schema (with its `enum`,
+/// `type`, `items`, etc.) or the input unchanged.
+fn resolve_ref<'a>(schema: &'a Value, root: &'a Value, depth: u8) -> std::borrow::Cow<'a, Value> {
+    use std::borrow::Cow;
+    if depth == 0 { return Cow::Borrowed(schema); }
+    if let Some(r) = schema.get("$ref").and_then(|v| v.as_str()) {
+        if let Some(name) = r.strip_prefix("#/components/schemas/") {
+            if let Some(def) = root.get("components").and_then(|c| c.get("schemas")).and_then(|s| s.get(name)) {
+                return Cow::Owned(resolve_ref(def, root, depth - 1).into_owned());
+            }
+        }
+    }
+    if let Some(first) = schema.get("allOf").and_then(|v| v.as_array()).and_then(|a| a.first()) {
+        return Cow::Owned(resolve_ref(first, root, depth - 1).into_owned());
+    }
+    Cow::Borrowed(schema)
+}
+
+/// Build a JSON-Schema property for one parameter, carrying through the details a model needs
+/// to call the API correctly — notably `enum` values and array `items` — which are lost if
+/// only `type` is copied. `$ref`/`allOf` are resolved against the spec's components.
+fn param_json_schema(pschema: &Value, root: &Value, desc: &str) -> Value {
+    let resolved = resolve_ref(pschema, root, 8);
+    let mut out = serde_json::Map::new();
+    let ty = resolved.get("type").and_then(|v| v.as_str()).unwrap_or("string");
+    out.insert("type".into(), Value::String(ty.into()));
+    if !desc.is_empty() { out.insert("description".into(), Value::String(desc.into())); }
+    if let Some(en) = resolved.get("enum") { out.insert("enum".into(), en.clone()); }
+    if let Some(fmt) = resolved.get("format").and_then(|v| v.as_str()) {
+        out.insert("format".into(), Value::String(fmt.into()));
+    }
+    if ty == "array" {
+        if let Some(items) = resolved.get("items") {
+            out.insert("items".into(), resolve_ref(items, root, 8).into_owned());
+        }
+    }
+    Value::Object(out)
 }
 
 /// Parse an OpenAPI 3.0 JSON spec into a list of API tools.
@@ -133,11 +185,13 @@ pub fn parse_spec(title: &str, _base_url: &str, spec_json: &str) -> Result<Vec<A
                     let location = param["in"].as_str().unwrap_or("query").to_string();
                     let required = param["required"].as_bool().unwrap_or(location == "path");
                     let desc = param["description"].as_str().unwrap_or("").to_string();
-                    let ptype = param["schema"]["type"].as_str().unwrap_or("string").to_string();
 
                     if name.is_empty() { continue; }
                     if required { required_params.push(name.clone()); }
-                    json_props.insert(name.clone(), serde_json::json!({ "type": ptype, "description": desc }));
+                    // Resolve the param schema (following $ref/allOf) so enum values, array
+                    // items, etc. reach the model — otherwise it guesses enum values and the
+                    // API rejects them with a 400 validation error.
+                    json_props.insert(name.clone(), param_json_schema(&param["schema"], &spec, &desc));
                     params.push(APIParam { name, location, required, description: desc });
                 }
             }
@@ -330,6 +384,54 @@ async fn persist_refreshed_token<R: tauri::Runtime>(app: &tauri::AppHandle<R>, s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A $ref'd enum query param must surface its allowed values in the tool schema, or the
+    /// model guesses and the API 400s (the Committees API CommitteeStatus bug).
+    #[test]
+    fn ref_enum_param_carries_its_values() {
+        let spec = r##"{
+          "openapi": "3.0.0",
+          "paths": {
+            "/api/Committees": {
+              "get": {
+                "operationId": "getCommittees",
+                "parameters": [
+                  { "name": "CommitteeStatus", "in": "query",
+                    "schema": { "$ref": "#/components/schemas/CommitteeStatus" } },
+                  { "name": "CommitteeIds", "in": "query",
+                    "schema": { "type": "array", "items": { "type": "integer" } } }
+                ]
+              }
+            }
+          },
+          "components": { "schemas": {
+            "CommitteeStatus": { "type": "string", "enum": ["Current", "Former", "All"] }
+          } }
+        }"##;
+        let tools = parse_spec("Committees", "https://x", spec).unwrap();
+        let props = &tools[0].schema["function"]["parameters"]["properties"];
+        assert_eq!(props["CommitteeStatus"]["enum"],
+            serde_json::json!(["Current", "Former", "All"]));
+        assert_eq!(props["CommitteeStatus"]["type"], "string");
+        assert_eq!(props["CommitteeIds"]["type"], "array");
+        assert_eq!(props["CommitteeIds"]["items"]["type"], "integer");
+    }
+
+    #[test]
+    fn array_query_param_expands_to_repeated_pairs() {
+        let params = vec![
+            APIParam { name: "CommitteeIds".into(), location: "query".into(), required: false, description: String::new() },
+            APIParam { name: "Take".into(), location: "query".into(), required: false, description: String::new() },
+        ];
+        let args = serde_json::json!({ "CommitteeIds": [1, 2, 3], "Take": 5 });
+        let pairs = build_query_params(&params, &args);
+        assert_eq!(pairs, vec![
+            ("CommitteeIds".into(), "1".into()),
+            ("CommitteeIds".into(), "2".into()),
+            ("CommitteeIds".into(), "3".into()),
+            ("Take".into(), "5".into()),
+        ]);
+    }
 
     // ── sanitize_tool_name ────────────────────────────────────────────────────
 
