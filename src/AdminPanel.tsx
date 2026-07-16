@@ -2168,18 +2168,14 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
   const saveAndClose = () => { onSave(draft); onClose(); };
 
   return (
-    // The panel batches edits into `draft`, so it only closes via an explicit control —
-    // Done or the ✕, both of which save. A backdrop click is deliberately ignored so an
-    // accidental click outside can't dismiss it and lose the changes.
+    // The panel batches edits into `draft`, so it only closes via the Done button (which
+    // saves). A backdrop click is deliberately ignored so an accidental click outside can't
+    // dismiss it and lose the changes.
     <div className="modal-overlay">
       <div className="admin-modal" onClick={e => e.stopPropagation()}>
         <div className="admin-header">
           <span className="admin-title">Admin</span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto" }}>
-            <button className="btn primary" onClick={saveAndClose}>Done</button>
-            <button className="btn" onClick={saveAndClose} title="Save & close"
-              aria-label="Save and close" style={{ padding: "4px 10px", lineHeight: 1 }}>✕</button>
-          </div>
+          <button className="btn primary" onClick={saveAndClose}>Done</button>
         </div>
         <div className="admin-tabbar">
           {tabs.map(t => (
