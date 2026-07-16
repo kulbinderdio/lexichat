@@ -2150,12 +2150,16 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
     { id: "defaults", icon: "🎛",  label: "Defaults" },
   ];
 
+  const saveAndClose = () => { onSave(draft); onClose(); };
+
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    // Clicking the backdrop commits the draft (same as Done) rather than discarding it —
+    // the panel batches edits into `draft`, so a bare close would silently lose them all.
+    <div className="modal-overlay" onClick={saveAndClose}>
       <div className="admin-modal" onClick={e => e.stopPropagation()}>
         <div className="admin-header">
           <span className="admin-title">Admin</span>
-          <button className="btn primary" onClick={() => { onSave(draft); onClose(); }}>Done</button>
+          <button className="btn primary" onClick={saveAndClose}>Done</button>
         </div>
         <div className="admin-tabbar">
           {tabs.map(t => (
