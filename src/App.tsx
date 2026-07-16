@@ -1251,8 +1251,10 @@ export default function App() {
         ? runPythonMaster && effectiveEnabledTools.run_python !== false
         : effectiveEnabledTools[t.function.name] !== false
     );
-    // Wiki tools injected when wiki memory is enabled globally
-    if (settings.wikiEnabled) enabledTools.push(...WIKI_TOOLS);
+    // Wiki memory: the active profile can override the global default; an unset profile
+    // (undefined) inherits it.
+    const wikiEnabled = (activeProfile?.wikiEnabled ?? settings.wikiEnabled) === true;
+    if (wikiEnabled) enabledTools.push(...WIKI_TOOLS);
 
     // Split attachments into images (sent via Ollama images field) and other files (appended as paths)
     const imagePaths = attachedFiles.filter(isImage);
@@ -1317,7 +1319,7 @@ export default function App() {
         ? `\n\nUser context (treat these as facts about the user — use them automatically when relevant, do not repeat them unless asked):\n${contextVars.map(v => `- ${v.name}: ${v.value}`).join("\n")}`
         : "";
 
-      const wikiSuffix = settings.wikiEnabled ? WIKI_SYSTEM_PROMPT_BLOCK : "";
+      const wikiSuffix = wikiEnabled ? WIKI_SYSTEM_PROMPT_BLOCK : "";
 
       const systemPrompt = allowedDirs.length > 0
         ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`

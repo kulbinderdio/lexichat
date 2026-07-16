@@ -104,6 +104,8 @@ export interface Profile {
   contextVars?: ContextVar[];
   host?: string;
   allowedDirs?: string[];
+  // Per-profile override for wiki memory. undefined = follow the global default.
+  wikiEnabled?: boolean;
 }
 
 export interface AppSettings {
@@ -697,6 +699,19 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
             </div>
 
             <div className="field" style={{ marginBottom: 12 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" className="admin-checkbox"
+                  checked={(d.wikiEnabled ?? settings.wikiEnabled) === true}
+                  onChange={e => setDraft({ ...d, wikiEnabled: e.target.checked })} />
+                <span>🧠 Persistent Wiki Memory</span>
+              </label>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                Give this profile the wiki tools to store and recall knowledge across chats.
+                {d.wikiEnabled == null && " Currently following the global default."}
+              </div>
+            </div>
+
+            <div className="field" style={{ marginBottom: 12 }}>
               <label>Chat Defaults</label>
               <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8 }}>
                 New chats in this profile start with these settings (can still be changed per chat).
@@ -889,8 +904,8 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
           />
           <span className="tool-icon">📖</span>
           <div className="admin-row-text">
-            <span className="admin-row-title">Persistent Wiki Memory</span>
-            <span className="admin-row-sub">Gives the model wiki_read, wiki_write, wiki_search, wiki_patch, wiki_list and wiki_delete tools to store and recall knowledge across conversations. Stored as markdown files in ~/.local/share/lexichat/wiki/</span>
+            <span className="admin-row-title">Persistent Wiki Memory (global default)</span>
+            <span className="admin-row-sub">Gives the model wiki_read, wiki_write, wiki_search, wiki_patch, wiki_list and wiki_delete tools to store and recall knowledge across conversations. Stored as markdown files in ~/.local/share/lexichat/wiki/. Individual profiles can override this in their settings.</span>
           </div>
         </label>
       </section>
