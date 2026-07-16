@@ -1355,6 +1355,7 @@ export default function App() {
           max_steps: settings.maxSteps ?? 20,
           disabled_mcp_tools: disabledMcpTools,
           enabled_mcp_server_ids: enabledMcpServerIds,
+          max_tools: (activeProfile?.maxTools ?? settings.maxTools) || null,
         }
       });
     } catch (err) {
