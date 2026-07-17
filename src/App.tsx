@@ -1358,6 +1358,7 @@ export default function App() {
           disabled_mcp_tools: disabledMcpTools,
           enabled_mcp_server_ids: enabledMcpServerIds,
           max_tools: (activeProfile?.maxTools ?? settings.maxTools) || null,
+          tool_result_limit: activeProfile?.toolResultLimit ?? null,
         }
       });
     } catch (err) {

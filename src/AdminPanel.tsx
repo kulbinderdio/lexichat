@@ -106,6 +106,8 @@ export interface Profile {
   allowedDirs?: string[];
   // Per-profile override for wiki memory. undefined = follow the global default.
   wikiEnabled?: boolean;
+  // Max chars of a tool result fed back to the model. undefined = default (6000).
+  toolResultLimit?: number;
 }
 
 export interface AppSettings {
@@ -708,6 +710,22 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
               <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
                 Give this profile the wiki tools to store and recall knowledge across chats.
                 {d.wikiEnabled == null && " Currently following the global default."}
+              </div>
+            </div>
+
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label>Tool Result Limit (characters)</label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <button className="stepper-btn"
+                  onClick={() => setDraft({ ...d, toolResultLimit: Math.max(2000, (d.toolResultLimit ?? 6000) - 2000) })}>−</button>
+                <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, minWidth: 52, textAlign: "center" }}>{d.toolResultLimit ?? 6000}</span>
+                <button className="stepper-btn"
+                  onClick={() => setDraft({ ...d, toolResultLimit: Math.min(50000, (d.toolResultLimit ?? 6000) + 2000) })}>+</button>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                How much of each tool/API response the model sees before it's truncated. Raise it for
+                data-heavy APIs that return large JSON (e.g. Parliament membership lists); lower it to
+                save context. Default 6000.
               </div>
             </div>
 

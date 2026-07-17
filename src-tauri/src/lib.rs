@@ -276,6 +276,9 @@ pub struct SendMessageArgs {
     /// Cap on tools shown to the model per step (from the profile's maxTools). None/0 → default.
     #[serde(default)]
     pub max_tools: Option<usize>,
+    /// Max chars of a tool result fed back to the model (profile's toolResultLimit). None/0 → default.
+    #[serde(default)]
+    pub tool_result_limit: Option<usize>,
 }
 
 fn default_web_search_results() -> usize { 10 }
@@ -424,6 +427,7 @@ async fn send_message(
         allowed_dirs_snapshot,
         args.file_paths.clone(), // sandbox may read/write attached files
         args.web_search_results,
+        args.tool_result_limit.unwrap_or(0), // 0 → default
         &app,
         false, // silent = false for interactive chat
         args.max_steps.clamp(1, 50), // configurable; default 20

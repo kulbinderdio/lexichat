@@ -309,6 +309,25 @@ async fn stream_chat<R: tauri::Runtime>(
 /// How many times to re-sample a step whose tool call Ollama couldn't parse.
 const MALFORMED_TOOL_CALL_RETRIES: usize = 2;
 
+/// Default cap on a tool result's size before it's fed back to the model (protects the
+/// context). Overridable per profile — raise it for data-heavy APIs that return large JSON.
+pub const DEFAULT_TOOL_RESULT_LIMIT: usize = 6000;
+
+/// Truncate a tool result to `limit` characters (0 → default). Passthrough tools whose full
+/// output must reach the next call are left intact. Char-based so it never splits a multibyte
+/// sequence (a byte slice at a fixed offset can panic).
+fn cap_tool_result(result: String, tool_name: &str, limit: usize) -> String {
+    let limit = if limit == 0 { DEFAULT_TOOL_RESULT_LIMIT } else { limit };
+    const PASSTHROUGH: [&str; 1] = ["compose_email"];
+    let total = result.chars().count();
+    if !PASSTHROUGH.contains(&tool_name) && total > limit {
+        let head: String = result.chars().take(limit).collect();
+        format!("{head}\n…[truncated: {total} chars total]")
+    } else {
+        result
+    }
+}
+
 // ── Tool selection (per-step discovery) ───────────────────────────────────────
 
 /// At or below this many discoverable tools, send them all — the selection pre-flight
@@ -571,6 +590,8 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // in addition to `allowed_dirs`. Empty for background jobs.
     sandbox_paths: Vec<String>,
     web_search_results: usize,
+    // Max chars of a tool result fed back to the model (0 → DEFAULT_TOOL_RESULT_LIMIT).
+    tool_result_limit: usize,
     app: &AppHandle<R>,
     silent: bool,
     max_steps: usize,
@@ -755,14 +776,8 @@ pub async fn agent_loop<R: tauri::Runtime>(
             // Route: builtin → openapi → sparql → mcp
             let result = dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &sandbox_paths, web_search_results, silent, app).await;
 
-            // Cap large responses — but never truncate passthrough values like compose_email
-            // whose full content must be forwarded intact to the next tool call.
-            let passthrough = ["compose_email"];
-            let result = if !passthrough.contains(&name.as_str()) && result.len() > 6000 {
-                format!("{}\n…[truncated: {} chars total]", &result[..6000], result.len())
-            } else {
-                result
-            };
+            // Cap large responses so they don't blow the context (configurable per profile).
+            let result = cap_tool_result(result, &name, tool_result_limit);
 
             // An MCP-App UI payload may have been stashed by dispatch_tool; take it.
             let ui = if !silent {
@@ -1167,6 +1182,7 @@ mod tests {
             vec![],
             vec![],
             10,
+            0,
             app.handle(),
             false, // interactive chat, as in the failing session
             20,
@@ -1278,7 +1294,7 @@ mod tests {
 
         let result = agent_loop(
             &server.uri(), "m", "sys", &[], &groups, 5, None, None,
-            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, app.handle(), true, 5,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), true, 5,
         ).await;
         assert!(result.is_ok(), "run should complete: {result:?}");
     }
@@ -1310,6 +1326,21 @@ mod tests {
         assert!(names.contains(&"b1") && names.contains(&"b2"), "Bills must be pulled in: {names:?}");
         assert!(names.contains(&"m1"), "Members (level-1 pick) kept: {names:?}");
         assert!(!names.contains(&"h1"), "Hansard neither picked nor named: {names:?}");
+    }
+
+    #[test]
+    fn cap_tool_result_truncates_and_respects_limit_and_passthrough() {
+        // Under the limit: untouched.
+        assert_eq!(cap_tool_result("small".into(), "read_file", 6000), "small");
+        // Over a custom limit: truncated with a marker, at a char boundary.
+        let long = "x".repeat(50);
+        let out = cap_tool_result(long.clone(), "read_file", 10);
+        assert!(out.starts_with(&"x".repeat(10)));
+        assert!(out.contains("[truncated: 50 chars total]"));
+        // 0 → default limit (so 5000 chars pass untouched under the 6000 default).
+        assert_eq!(cap_tool_result("y".repeat(5000), "read_file", 0).len(), 5000);
+        // Passthrough tools are never truncated.
+        assert_eq!(cap_tool_result("z".repeat(9000), "compose_email", 10).len(), 9000);
     }
 
     #[test]
@@ -1360,7 +1391,7 @@ mod tests {
 
         let result = agent_loop(
             &server.uri(), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
-            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, app.handle(), false, 20,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), false, 20,
         )
         .await;
 
