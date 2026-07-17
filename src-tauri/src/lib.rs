@@ -338,9 +338,18 @@ async fn send_message(
             .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok())
             .collect();
         if !tools.is_empty() {
+            // Sample a few operation descriptions/names so group selection can match on what
+            // the API actually does, not just its title.
+            let ops = tools.iter().take(12)
+                .map(|t| {
+                    let d = t.function.description.trim();
+                    if d.is_empty() { t.function.name.clone() }
+                    else { d.chars().take(80).collect::<String>() }
+                })
+                .collect::<Vec<_>>().join("; ");
             tool_groups.push(ollama::ToolGroup {
                 label: spec.title.clone(),
-                description: format!("{} — REST API operations.", spec.title),
+                description: format!("{}. Operations include: {ops}", spec.title),
                 tools,
             });
         }

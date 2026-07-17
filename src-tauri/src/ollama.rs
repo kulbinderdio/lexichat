@@ -355,18 +355,32 @@ pub async fn select_tools_for_step(
 
     // ── Level 1: choose relevant groups ──
     let group_list = groups.iter().enumerate()
-        .map(|(i, g)| format!("{}. {} — {}", i, g.label, first_sentence(&g.description, 160)))
+        .map(|(i, g)| format!("{}. {} — {}", i, g.label, truncate_str(&g.description, 240)))
         .collect::<Vec<_>>().join("\n");
-    let sys1 = "You choose which groups of tools are needed for a task. Reply with ONLY a JSON \
-        array of the relevant group numbers, e.g. [0,3]. Include every group that might be \
-        needed and exclude clearly irrelevant ones. Output only the JSON array.";
+    let sys1 = "You choose which groups of tools could help with a task. This is a research \
+        assistant that often combines several data sources, so favour recall: include EVERY \
+        group that might plausibly be relevant, and exclude only groups that are clearly \
+        unrelated. When in doubt, include it. Reply with ONLY a JSON array of the group \
+        numbers, e.g. [0,2,3]. Output only the JSON array.";
     let user1 = format!("Task/context:\n{context}\n\nTool groups:\n{group_list}");
     let picked = complete(host, model, sys1, &user1).await.ok()
         .map(|r| parse_usize_array(&r)).unwrap_or_default();
-    let chosen: Vec<&ToolGroup> = {
+    let mut chosen: Vec<&ToolGroup> = {
         let c: Vec<&ToolGroup> = picked.iter().filter_map(|&i| groups.get(i)).collect();
         if c.is_empty() { groups.iter().collect() } else { c } // nothing picked → consider all
     };
+    // Deterministic recall net: also include any group whose name appears in the context, so
+    // a task that literally names an API (e.g. "the Bills API", "how MPs voted") always gets
+    // that group even if the pre-flight missed it. Over-inclusion is fine — level 2 + the cap
+    // bound the final count.
+    let ctx_lower = context.to_lowercase();
+    for g in groups {
+        if chosen.iter().any(|c| std::ptr::eq(*c, g)) { continue; }
+        let named = g.label.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w.len() >= 4 && w != "tools" && w != "server" && ctx_lower.contains(w));
+        if named { chosen.push(g); }
+    }
 
     let candidate: Vec<&ToolSchema> = chosen.iter().flat_map(|g| g.tools.iter()).collect();
     if candidate.len() <= cap {
@@ -1267,6 +1281,35 @@ mod tests {
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, app.handle(), true, 5,
         ).await;
         assert!(result.is_ok(), "run should complete: {result:?}");
+    }
+
+    /// A group whose name appears in the task is included even if the level-1 pre-flight
+    /// misses it — the fix for "I don't have a Bills API" when Bills is enabled.
+    #[tokio::test]
+    async fn select_includes_group_named_in_context() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Level-1 picks only group 0 (Members); the keyword net must still add Bills.
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "role": "assistant", "content": "[0]" }
+            })))
+            .expect(1) // Members(4)+Bills(2)=6 ≤ cap 8, so no level-2 call
+            .mount(&server).await;
+
+        let groups = vec![
+            group("Members", &["m1", "m2", "m3", "m4"]),
+            group("Bills", &["b1", "b2"]),
+            group("Hansard", &["h1","h2","h3","h4","h5","h6","h7","h8","h9","h10"]),
+        ]; // 16 total > cap 8
+        let picked = select_tools_for_step(&server.uri(), "m",
+            "Summarise the Employment Rights Bill using the Bills API", &groups, 8).await;
+        let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
+        assert!(names.contains(&"b1") && names.contains(&"b2"), "Bills must be pulled in: {names:?}");
+        assert!(names.contains(&"m1"), "Members (level-1 pick) kept: {names:?}");
+        assert!(!names.contains(&"h1"), "Hansard neither picked nor named: {names:?}");
     }
 
     #[test]
