@@ -329,6 +329,20 @@ fn cap_tool_result(result: String, tool_name: &str, limit: usize) -> String {
     }
 }
 
+/// OpenAPI results are prefixed with a "HTTP <status>\n" line by `openapi::execute`. Return the
+/// body after it (so an offloaded file is parseable JSON); leave other results untouched.
+fn strip_http_status_line(s: &str) -> &str {
+    if s.starts_with("HTTP ") {
+        if let Some(nl) = s.find('\n') {
+            let first = &s["HTTP ".len()..nl];
+            if first.len() < 40 && first.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                return &s[nl + 1..];
+            }
+        }
+    }
+    s
+}
+
 /// Session directory where oversized tool results are dropped so `run_python` can read them.
 fn tool_results_dir() -> std::path::PathBuf {
     let dir = std::env::temp_dir().join("lexichat-tool-results");
@@ -361,10 +375,13 @@ fn offload_tool_result(result: String, tool_name: &str, limit: usize, dir: &std:
         return result;
     }
     let head: String = result.chars().take(limit).collect();
-    let ext = match result.trim_start().chars().next() { Some('{') | Some('[') => "json", _ => "txt" };
+    // OpenAPI tool results are wrapped as "HTTP <status>\n<body>". Strip that status line so the
+    // file is the raw body (valid JSON), which is what the model's json.loads expects.
+    let body = strip_http_status_line(&result);
+    let ext = match body.trim_start().chars().next() { Some('{') | Some('[') => "json", _ => "txt" };
     let safe: String = tool_name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let path = dir.join(format!("{safe}-{}.{ext}", crate::uuid_v4()));
-    match std::fs::write(&path, &result) {
+    match std::fs::write(&path, body) {
         Ok(_) => format!(
             "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result \
              is saved to this file:\n{}\nTo use ALL of it (count/aggregate/filter/sort), call the \
@@ -1421,17 +1438,29 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Under the limit: untouched, no file written.
         assert_eq!(offload_tool_result("small".into(), "police_streetcrime", 100, &dir), "small");
-        // Over the limit: preview + file path + a run_python hint; the file holds the FULL result.
-        let big = format!("[{}]", "x".repeat(5000));
-        let out = offload_tool_result(big.clone(), "police_streetcrime", 100, &dir);
+        // Over the limit: preview + file path + a run_python hint; the file holds the raw JSON
+        // BODY (the "HTTP 200" wrapper openapi::execute adds is stripped so json.loads works).
+        let body = format!("[{}]", "\"a\",".repeat(2000).trim_end_matches(','));
+        let wrapped = format!("HTTP 200\n{body}");
+        let out = offload_tool_result(wrapped, "police_streetcrime", 100, &dir);
         assert!(out.contains("run_python"), "must nudge toward run_python");
         assert!(out.contains("saved to this file"));
         let saved = std::fs::read_dir(&dir).unwrap().flatten()
             .map(|e| e.path()).find(|p| p.extension().map(|x| x == "json").unwrap_or(false)).unwrap();
-        assert_eq!(std::fs::read_to_string(&saved).unwrap(), big, "file must contain the full result");
+        let content = std::fs::read_to_string(&saved).unwrap();
+        assert!(!content.contains("HTTP 200"), "the HTTP wrapper must be stripped from the file");
+        assert_eq!(content, body, "file must be the raw JSON body");
         // Passthrough tools are never truncated or offloaded.
         assert_eq!(offload_tool_result("z".repeat(9000), "compose_email", 100, &dir).len(), 9000);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn strip_http_status_line_removes_only_the_wrapper() {
+        assert_eq!(strip_http_status_line("HTTP 200\n[1,2,3]"), "[1,2,3]");
+        assert_eq!(strip_http_status_line("HTTP 404\n{\"e\":1}"), "{\"e\":1}");
+        assert_eq!(strip_http_status_line("[1,2,3]"), "[1,2,3]");            // no wrapper
+        assert_eq!(strip_http_status_line("HTTPS notes\nx"), "HTTPS notes\nx"); // not a status line
     }
 
     #[test]
