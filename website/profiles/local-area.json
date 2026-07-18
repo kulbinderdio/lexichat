@@ -13,9 +13,7 @@
     "enabledOpenapiSpecIds": [
       "b8545aea-43b1-4777-9327-ee92299f60c9",
       "7fbafa03-7e4d-4822-a145-c608e8c20d80",
-      "a34f0d1a-19ef-462a-9ba5-86efc5a7e13a",
-      "6b2d4411-debe-4005-b14b-9303dde20b88",
-      "de2271bd-3f22-4c12-b861-a56255130add"
+      "a34f0d1a-19ef-462a-9ba5-86efc5a7e13a"
     ],
     "enabledSparqlEndpointIds": [
       "builtin-landregistry",
