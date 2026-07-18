@@ -313,18 +313,66 @@ const MALFORMED_TOOL_CALL_RETRIES: usize = 2;
 /// context). Overridable per profile — raise it for data-heavy APIs that return large JSON.
 pub const DEFAULT_TOOL_RESULT_LIMIT: usize = 6000;
 
+const PASSTHROUGH_TOOLS: [&str; 1] = ["compose_email"];
+
 /// Truncate a tool result to `limit` characters (0 → default). Passthrough tools whose full
 /// output must reach the next call are left intact. Char-based so it never splits a multibyte
 /// sequence (a byte slice at a fixed offset can panic).
 fn cap_tool_result(result: String, tool_name: &str, limit: usize) -> String {
     let limit = if limit == 0 { DEFAULT_TOOL_RESULT_LIMIT } else { limit };
-    const PASSTHROUGH: [&str; 1] = ["compose_email"];
     let total = result.chars().count();
-    if !PASSTHROUGH.contains(&tool_name) && total > limit {
+    if !PASSTHROUGH_TOOLS.contains(&tool_name) && total > limit {
         let head: String = result.chars().take(limit).collect();
         format!("{head}\n…[truncated: {total} chars total]")
     } else {
         result
+    }
+}
+
+/// Session directory where oversized tool results are dropped so `run_python` can read them.
+fn tool_results_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join("lexichat-tool-results");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+/// Best-effort removal of offloaded result files older than a few hours, so the dir doesn't grow.
+fn clean_tool_results(dir: &std::path::Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(6 * 3600);
+        for e in entries.flatten() {
+            if let Ok(meta) = e.metadata() {
+                if meta.modified().map(|m| m < cutoff).unwrap_or(false) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+}
+
+/// Like `cap_tool_result`, but when a result is too big to fit, the FULL result is written to a
+/// file in `dir` and the model is told the path so it can process all of it with `run_python`
+/// (accurate counting/aggregation without blowing the context). Interactive chat only —
+/// background jobs can't run code, so they fall back to plain truncation.
+fn offload_tool_result(result: String, tool_name: &str, limit: usize, dir: &std::path::Path) -> String {
+    let limit = if limit == 0 { DEFAULT_TOOL_RESULT_LIMIT } else { limit };
+    let total = result.chars().count();
+    if PASSTHROUGH_TOOLS.contains(&tool_name) || total <= limit {
+        return result;
+    }
+    let head: String = result.chars().take(limit).collect();
+    let ext = match result.trim_start().chars().next() { Some('{') | Some('[') => "json", _ => "txt" };
+    let safe: String = tool_name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let path = dir.join(format!("{safe}-{}.{ext}", crate::uuid_v4()));
+    match std::fs::write(&path, &result) {
+        Ok(_) => format!(
+            "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result \
+             is saved to this file:\n{}\nTo use ALL of it — count, aggregate, filter, or sort — call \
+             the run_python tool to read and process that file (e.g. json.load(open(path))).]",
+            path.display()
+        ),
+        // File write failed → behave exactly like plain truncation.
+        Err(_) => format!("{head}\n…[truncated: {total} chars total]"),
     }
 }
 
@@ -601,6 +649,17 @@ pub async fn agent_loop<R: tauri::Runtime>(
     let mut continuations = 0usize;
     let mut consecutive_text_without_tools = 0usize; // detect "I'm done" loops
     let cap = if tool_cap == 0 { DEFAULT_TOOL_CAP } else { tool_cap };
+    // Oversized tool results are offloaded here for run_python to read (interactive chat only —
+    // jobs can't run code). run_python is given read access to this dir via dispatch_paths.
+    let results_dir = tool_results_dir();
+    let dispatch_paths: Vec<String> = if silent {
+        sandbox_paths.clone()
+    } else {
+        clean_tool_results(&results_dir);
+        let mut v = sandbox_paths.clone();
+        v.push(results_dir.to_string_lossy().into_owned());
+        v
+    };
     // Tools the model called last step — kept available next step so a multi-step chain
     // isn't broken by them dropping out of the fresh selection.
     let mut last_used: Vec<String> = Vec::new();
@@ -774,10 +833,16 @@ pub async fn agent_loop<R: tauri::Runtime>(
             }
 
             // Route: builtin → openapi → sparql → mcp
-            let result = dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &sandbox_paths, web_search_results, silent, app).await;
+            let result = dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &dispatch_paths, web_search_results, silent, app).await;
 
             // Cap large responses so they don't blow the context (configurable per profile).
-            let result = cap_tool_result(result, &name, tool_result_limit);
+            // In interactive chat, oversized results are also saved to a file run_python can
+            // read, so the model can process the whole thing accurately.
+            let result = if silent {
+                cap_tool_result(result, &name, tool_result_limit)
+            } else {
+                offload_tool_result(result, &name, tool_result_limit, &results_dir)
+            };
 
             // An MCP-App UI payload may have been stashed by dispatch_tool; take it.
             let ui = if !silent {
@@ -1341,6 +1406,25 @@ mod tests {
         assert_eq!(cap_tool_result("y".repeat(5000), "read_file", 0).len(), 5000);
         // Passthrough tools are never truncated.
         assert_eq!(cap_tool_result("z".repeat(9000), "compose_email", 10).len(), 9000);
+    }
+
+    #[test]
+    fn offload_writes_full_result_and_points_at_the_file() {
+        let dir = std::env::temp_dir().join(format!("lexi-test-{}", crate::uuid_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Under the limit: untouched, no file written.
+        assert_eq!(offload_tool_result("small".into(), "police_streetcrime", 100, &dir), "small");
+        // Over the limit: preview + file path + a run_python hint; the file holds the FULL result.
+        let big = format!("[{}]", "x".repeat(5000));
+        let out = offload_tool_result(big.clone(), "police_streetcrime", 100, &dir);
+        assert!(out.contains("run_python"), "must nudge toward run_python");
+        assert!(out.contains("saved to this file"));
+        let saved = std::fs::read_dir(&dir).unwrap().flatten()
+            .map(|e| e.path()).find(|p| p.extension().map(|x| x == "json").unwrap_or(false)).unwrap();
+        assert_eq!(std::fs::read_to_string(&saved).unwrap(), big, "file must contain the full result");
+        // Passthrough tools are never truncated or offloaded.
+        assert_eq!(offload_tool_result("z".repeat(9000), "compose_email", 100, &dir).len(), 9000);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
