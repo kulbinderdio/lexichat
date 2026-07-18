@@ -275,6 +275,22 @@ mod tests {
         assert_eq!(run_blocking("sum(range(10))", &[]), "45");
     }
 
+    /// The exact recipe the oversized-result offload hint gives the model must actually run in
+    /// Monty: read_file → json.loads → plain-dict counting (no open(), no collections).
+    #[test]
+    fn offload_recipe_reads_and_aggregates_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("crime.json");
+        std::fs::write(&path, r#"[{"category":"violent-crime"},{"category":"violent-crime"},{"category":"drugs"}]"#).unwrap();
+        let allowed = vec![dir.path().to_string_lossy().to_string()];
+        let code = format!(
+            "import json\ndata = json.loads(read_file({p:?}))\ncounts = {{}}\nfor r in data: counts[r[\"category\"]] = counts.get(r[\"category\"], 0) + 1\nprint(len(data), counts)",
+            p = path.to_string_lossy(),
+        );
+        let out = run_blocking(&code, &allowed);
+        assert!(out.contains('3') && out.contains("violent-crime"), "recipe failed in Monty: {out}");
+    }
+
     #[test]
     fn read_file_host_fn_reads_allowed_file() {
         let dir = tempfile::tempdir().unwrap();

@@ -367,9 +367,16 @@ fn offload_tool_result(result: String, tool_name: &str, limit: usize, dir: &std:
     match std::fs::write(&path, &result) {
         Ok(_) => format!(
             "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result \
-             is saved to this file:\n{}\nTo use ALL of it — count, aggregate, filter, or sort — call \
-             the run_python tool to read and process that file (e.g. json.load(open(path))).]",
-            path.display()
+             is saved to this file:\n{}\nTo use ALL of it (count/aggregate/filter/sort), call the \
+             run_python tool. In this sandbox: read the file with read_file(path) — open() is \
+             DISABLED; parse with json.loads() — json.load(fp) is NOT available; and the stdlib is \
+             limited — there is NO `collections`, so count with a plain dict. Example:\n\
+             import json\n\
+             data = json.loads(read_file(r\"{}\"))\n\
+             counts = {{}}\n\
+             for r in data: counts[r[\"category\"]] = counts.get(r[\"category\"], 0) + 1\n\
+             print(len(data), counts)]",
+            path.display(), path.display()
         ),
         // File write failed → behave exactly like plain truncation.
         Err(_) => format!("{head}\n…[truncated: {total} chars total]"),
