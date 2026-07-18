@@ -336,3 +336,44 @@ mod tests {
 }
 
 
+
+#[cfg(test)]
+mod recipe_tests {
+    use super::run_blocking;
+    // The shape-robust recipe the offload hint gives must run in Monty and extract the list
+    // whether the API returns a bare array (police), a wrapped object (PlanIt {"records":[...]}),
+    // or a nested one (Crossref {"message":{"items":[...]}}).
+    #[test]
+    fn offload_recipe_handles_all_json_shapes() {
+        let recipe = r#"
+import json
+raw = json.loads(read_file(PATH))
+def first_list(x):
+    if isinstance(x, list): return x
+    if isinstance(x, dict):
+        for v in x.values():
+            r = first_list(v)
+            if r is not None: return r
+    return None
+data = first_list(raw) or []
+counts = {}
+for r in data:
+    k = r.get("k")
+    counts[k] = counts.get(k, 0) + 1
+print(len(data), counts.get("a", 0))
+"#;
+        let dir = tempfile::tempdir().unwrap();
+        let allowed = vec![dir.path().to_string_lossy().to_string()];
+        for (name, payload, a_count) in [
+            ("bare",    r#"[{"k":"a"},{"k":"a"},{"k":"b"}]"#, 2),
+            ("wrapped", r#"{"from":0,"records":[{"k":"a"},{"k":"b"},{"k":"b"}]}"#, 1),
+            ("nested",  r#"{"message":{"items":[{"k":"a"},{"k":"a"},{"k":"a"}]}}"#, 3),
+        ] {
+            let p = dir.path().join(format!("{name}.json"));
+            std::fs::write(&p, payload).unwrap();
+            let code = recipe.replace("PATH", &format!("r{:?}", p.to_string_lossy()));
+            let out = run_blocking(&code, &allowed);
+            assert!(out.contains(&format!("3 {a_count}")), "{name} shape failed: {out}");
+        }
+    }
+}

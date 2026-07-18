@@ -383,16 +383,7 @@ fn offload_tool_result(result: String, tool_name: &str, limit: usize, dir: &std:
     let path = dir.join(format!("{safe}-{}.{ext}", crate::uuid_v4()));
     match std::fs::write(&path, body) {
         Ok(_) => format!(
-            "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result \
-             is saved to this file:\n{}\nTo use ALL of it (count/aggregate/filter/sort), call the \
-             run_python tool. In this sandbox: read the file with read_file(path) — open() is \
-             DISABLED; parse with json.loads() — json.load(fp) is NOT available; and the stdlib is \
-             limited — there is NO `collections`, so count with a plain dict. Example:\n\
-             import json\n\
-             data = json.loads(read_file(r\"{}\"))\n\
-             counts = {{}}\n\
-             for r in data: counts[r[\"category\"]] = counts.get(r[\"category\"], 0) + 1\n\
-             print(len(data), counts)]",
+            "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result is saved to this file:\n{}\nTo use ALL of it (count/aggregate/filter/sort), call the run_python tool. Sandbox rules: read with read_file(path) (open() is DISABLED); parse with json.loads() (json.load(fp) is NOT available); there is no `collections`, so use a plain dict. The JSON may be a bare list OR wrap the list in an object (e.g. {{\"records\":[...]}} or {{\"message\":{{\"items\":[...]}}}}), so find the list first. Example:\nimport json\nraw = json.loads(read_file(r\"{}\"))\ndef first_list(x):\n    if isinstance(x, list): return x\n    if isinstance(x, dict):\n        for v in x.values():\n            r = first_list(v)\n            if r is not None: return r\n    return None\ndata = first_list(raw) or []\ncounts = {{}}\nfor r in data: counts[r.get(\"category\")] = counts.get(r.get(\"category\"), 0) + 1\nprint(len(data), counts)]",
             path.display(), path.display()
         ),
         // File write failed → behave exactly like plain truncation.
