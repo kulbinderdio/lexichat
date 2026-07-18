@@ -14,7 +14,12 @@
     ],
     "enabledSparqlEndpointIds": [],
     "maxTools": 30,
-    "allowedDirs": []
+    "allowedDirs": [],
+    "chatParams": {
+      "style": "precise",
+      "responseLength": "auto",
+      "contextSize": "short"
+    }
   },
   "toolRegistry": {
     "openapiSpecs": [

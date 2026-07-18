@@ -22,7 +22,12 @@
     ],
     "maxTools": 40,
     "toolResultLimit": 12000,
-    "allowedDirs": []
+    "allowedDirs": [],
+    "chatParams": {
+      "style": "precise",
+      "responseLength": "auto",
+      "contextSize": "short"
+    }
   },
   "toolRegistry": {
     "openapiSpecs": [
