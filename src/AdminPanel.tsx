@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { buildExportEnvelope, validateImport, resolveImportName } from "./profileIO";
+import { buildExportEnvelope, parseImport, mergeImport } from "./profileIO";
 import { ChatParams, DEFAULT_CHAT_PARAMS, ChatParamsDefaults, AdvancedParamsContent } from "./ChatParamsPanel";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -376,9 +376,10 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
   };
 
   const [importError, setImportError] = useState("");
+  const [importSummary, setImportSummary] = useState<string[]>([]);
 
   const exportProfile = async (profile: Profile) => {
-    const envelope = buildExportEnvelope(profile);
+    const envelope = buildExportEnvelope(profile, settings.toolRegistry);
     const json = JSON.stringify(envelope, null, 2);
     const defaultName = profile.name.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
     const path = await save({
@@ -391,27 +392,20 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
   };
 
   const importProfile = async () => {
-    setImportError("");
+    setImportError(""); setImportSummary([]);
     const path = await open({ multiple: false, title: "Import Profile", filters: [{ name: "JSON", extensions: ["json"] }] });
     if (typeof path !== "string") return;
     let raw: string;
     try { raw = await invoke<string>("read_file_text", { path }); } catch { setImportError("Could not read file."); return; }
     let parsed: unknown;
     try { parsed = JSON.parse(raw); } catch { setImportError("File is not valid JSON."); return; }
-    const imported = validateImport(parsed);
-    if (!imported) { setImportError("Not a valid LexiChat profile file."); return; }
-    const newProfile: Profile = {
-      ...imported,
-      id: uid(),
-      name: resolveImportName(imported.name, settings.profiles),
-      enabledMcpServerIds:   imported.enabledMcpServerIds   ?? [],
-      enabledOpenapiSpecIds: imported.enabledOpenapiSpecIds ?? [],
-      enabledSparqlEndpointIds: imported.enabledSparqlEndpointIds ?? [],
-      enabledTools: imported.enabledTools ?? {},
-      maxTools:     imported.maxTools     ?? settings.maxTools,
-    };
-    onChange({ ...settings, profiles: [...settings.profiles, newProfile] });
-    setSelectedId(newProfile.id);
+    const bundle = parseImport(parsed);
+    if (!bundle) { setImportError("Not a valid LexiChat profile file."); return; }
+    // Bundles the profile's APIs into the registry, re-links, and reports what still needs setup.
+    const result = mergeImport(bundle, settings, uid());
+    onChange(result.settings);
+    setSelectedId(result.profileId);
+    setImportSummary(result.warnings);
   };
 
   const d = draft;
@@ -460,6 +454,15 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
             Import Profile
           </button>
           {importError && <div style={{ color: "#f87171", fontSize: 11 }}>{importError}</div>}
+          {importSummary.length > 0 && (
+            <div style={{ marginTop: 6, padding: "6px 8px", borderRadius: 6, fontSize: 10,
+              background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.35)" }}>
+              <div style={{ fontWeight: 600, marginBottom: 2 }}>Imported — a few things to finish:</div>
+              <ul style={{ margin: 0, paddingLeft: 14 }}>
+                {importSummary.map((w, i) => <li key={i}>{w}</li>)}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
 
