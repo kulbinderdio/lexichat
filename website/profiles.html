@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>LexiChat Profiles — Ready-made AI Analysts wired to Open Data</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="One-click LexiChat profiles that turn a private, local AI into a domain research analyst — wired to real open-data APIs (UK Parliament, OpenAlex, Crossref). Free, no API key, runs entirely on your machine."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {
+    fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+    colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+  } }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .hero-bg { background: radial-gradient(ellipse 80% 60% at 50% -20%, rgba(99,102,241,0.15) 0%, transparent 70%); }
+  .glass { background: rgba(255,255,255,0.7); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .card-hover { transition: transform 0.2s, box-shadow 0.2s; }
+  .card-hover:hover { transform: translateY(-2px); box-shadow: 0 20px 40px rgba(99,102,241,0.12); }
+</style>
+</head>
+<body class="bg-white text-slate-900 antialiased">
+
+<!-- ── Navigation ─────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="index.html" class="flex items-center gap-2.5">
+      <img src="resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html#features" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="profiles.html" class="text-sm font-medium text-accent transition-colors">Profiles</a>
+      <a href="index.html#screenshots" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Screenshots</a>
+      <a href="index.html#support" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Support</a>
+      <a href="docs/index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Docs</a>
+    </div>
+    <a href="index.html#download" class="bg-accent hover:bg-accent-dark text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors flex items-center gap-2">
+      <span class="material-symbols-outlined text-base" style="font-size:16px">download</span>
+      Download Free
+    </a>
+  </div>
+</nav>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<section class="hero-bg pt-36 pb-16 px-6">
+  <div class="max-w-4xl mx-auto text-center">
+    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-6 border border-accent/20">Ready-made Profiles</div>
+    <h1 class="text-4xl md:text-6xl font-black tracking-tighter text-slate-900 mb-5">Install an expert,<br/>not an empty chat.</h1>
+    <p class="text-xl text-slate-500 max-w-2xl mx-auto">Each profile turns your private local model into a domain research analyst — pre-wired to real open-data APIs, with a system prompt tuned for the job. Download, import, and start asking. Everything runs on your machine.</p>
+  </div>
+</section>
+
+<!-- ── How to use ─────────────────────────────────────────────────────────── -->
+<section class="px-6 pb-16">
+  <div class="max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="bg-slate-50 rounded-2xl p-6 text-center">
+      <div class="w-9 h-9 mx-auto mb-3 rounded-full bg-accent text-white font-bold flex items-center justify-center">1</div>
+      <div class="font-semibold text-slate-900 mb-1">Download the profile</div>
+      <p class="text-sm text-slate-500">Grab the <span class="font-mono text-xs">.json</span> below. It contains the APIs and the system prompt — never any credentials.</p>
+    </div>
+    <div class="bg-slate-50 rounded-2xl p-6 text-center">
+      <div class="w-9 h-9 mx-auto mb-3 rounded-full bg-accent text-white font-bold flex items-center justify-center">2</div>
+      <div class="font-semibold text-slate-900 mb-1">Import it</div>
+      <p class="text-sm text-slate-500">In LexiChat: <span class="font-medium">Admin → Profiles → Import Profile</span>. The APIs wire themselves up.</p>
+    </div>
+    <div class="bg-slate-50 rounded-2xl p-6 text-center">
+      <div class="w-9 h-9 mx-auto mb-3 rounded-full bg-accent text-white font-bold flex items-center justify-center">3</div>
+      <div class="font-semibold text-slate-900 mb-1">Start researching</div>
+      <p class="text-sm text-slate-500">Select the profile, pick a tool-capable model, and ask. It cites every source.</p>
+    </div>
+  </div>
+  <p class="text-center text-sm text-slate-400 mt-6">Don't have LexiChat yet? <a href="index.html#download" class="text-accent font-semibold hover:underline">Download it free</a> — macOS, Windows &amp; Linux.</p>
+</section>
+
+<!-- ── Profile cards ──────────────────────────────────────────────────────── -->
+<section class="px-6 pb-32">
+  <div class="max-w-4xl mx-auto flex flex-col gap-6">
+
+    <!-- Parliament Analyst -->
+    <div id="parliament" class="scroll-mt-24 bg-white border border-slate-200 rounded-3xl p-8 md:p-10 card-hover">
+      <div class="flex items-start gap-5">
+        <div class="text-5xl flex-shrink-0">🏛️</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex flex-wrap items-center gap-2 mb-2">
+            <h2 class="text-2xl font-bold text-slate-900">Parliament Analyst</h2>
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded-full">Politics</span>
+            <span class="px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-full">No API key</span>
+            <span class="px-2.5 py-1 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded-full">100% local</span>
+          </div>
+          <p class="text-slate-600 leading-relaxed mb-4">A UK Parliament research analyst that cross-references the official APIs — resolve an MP, then pull their questions, committee seats, and register of interests, citing every source. The kind of cross-checking that normally takes an afternoon.</p>
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Connects</div>
+          <div class="flex flex-wrap gap-2 mb-4">
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-lg">Members</span>
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-lg">Oral &amp; Written Questions</span>
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-lg">Committees</span>
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-lg">Register of Interests</span>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-4 mb-5 text-sm text-slate-600 italic">"Give me a full profile of an MP: their party and constituency, which committees they sit on, their recent written questions, and any entries in their register of financial interests."</div>
+          <div class="flex flex-wrap gap-3">
+            <a href="profiles/parliament.json" download class="inline-flex items-center gap-2 bg-accent hover:bg-accent-dark text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span> Download profile
+            </a>
+            <a href="https://www.youtube.com/@LexiChat" target="_blank" rel="noopener" class="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">play_circle</span> Watch demo
+            </a>
+            <a href="docs/getting-started.html" class="inline-flex items-center gap-2 text-slate-500 hover:text-accent px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors">Setup guide →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Research Scout -->
+    <div id="research-scout" class="scroll-mt-24 bg-white border border-slate-200 rounded-3xl p-8 md:p-10 card-hover">
+      <div class="flex items-start gap-5">
+        <div class="text-5xl flex-shrink-0">🔬</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex flex-wrap items-center gap-2 mb-2">
+            <h2 class="text-2xl font-bold text-slate-900">Research Scout</h2>
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-600 text-xs font-semibold rounded-full">Academia</span>
+            <span class="px-2.5 py-1 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-full">No API key</span>
+            <span class="px-2.5 py-1 bg-indigo-50 text-indigo-700 text-xs font-semibold rounded-full">100% local</span>
+          </div>
+          <p class="text-slate-600 leading-relaxed mb-4">A scholarly-literature scout that maps the citation graph across OpenAlex and Crossref — find a seminal paper, trace what it built on and what cites it, profile authors and institutions, and cross-check citation counts between sources.</p>
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Connects</div>
+          <div class="flex flex-wrap gap-2 mb-4">
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-lg">OpenAlex</span>
+            <span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-lg">Crossref</span>
+          </div>
+          <div class="bg-slate-50 rounded-xl p-4 mb-5 text-sm text-slate-600 italic">"Find the most-cited paper on retrieval-augmented generation, then the papers that cite it most, what those authors work on, and how the citation counts compare between OpenAlex and Crossref."</div>
+          <div class="flex flex-wrap gap-3">
+            <a href="profiles/research-scout.json" download class="inline-flex items-center gap-2 bg-accent hover:bg-accent-dark text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">download</span> Download profile
+            </a>
+            <a href="https://www.youtube.com/@LexiChat" target="_blank" rel="noopener" class="inline-flex items-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 px-5 py-2.5 rounded-xl text-sm font-semibold transition-colors">
+              <span class="material-symbols-outlined" style="font-size:16px">play_circle</span> Watch demo
+            </a>
+            <a href="docs/getting-started.html" class="inline-flex items-center gap-2 text-slate-500 hover:text-accent px-3 py-2.5 rounded-xl text-sm font-semibold transition-colors">Setup guide →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- More coming -->
+    <div class="border-2 border-dashed border-slate-200 rounded-3xl p-10 text-center">
+      <div class="text-3xl mb-2">✨</div>
+      <div class="font-bold text-slate-700 mb-1">More profiles on the way</div>
+      <p class="text-sm text-slate-500 max-w-md mx-auto">Corporate intelligence, local-area analysis, public health, economic data and more. Built one yourself? Export it (secrets are stripped automatically) and <a href="mailto:info@lexi-chat.com" class="text-accent font-semibold hover:underline">send it in</a>.</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ── Get LexiChat CTA ───────────────────────────────────────────────────── -->
+<section class="px-6 pb-24">
+  <div class="max-w-3xl mx-auto bg-slate-900 rounded-3xl p-10 text-center">
+    <h2 class="text-2xl md:text-3xl font-black text-white mb-3">Private by default. Free forever.</h2>
+    <p class="text-slate-300 mb-6 max-w-xl mx-auto">These profiles run entirely on your own machine through Ollama — no cloud, no API keys, no data leaving your device. Get LexiChat, import a profile, and go.</p>
+    <a href="index.html#download" class="inline-flex items-center gap-2 bg-white text-slate-900 px-6 py-3 rounded-xl text-sm font-semibold hover:bg-slate-100 transition-colors">
+      <span class="material-symbols-outlined" style="font-size:16px">download</span> Download LexiChat Free
+    </a>
+  </div>
+</section>
+
+<!-- ── Footer ─────────────────────────────────────────────────────────────── -->
+<footer class="border-t border-slate-100 py-12 px-6">
+  <div class="max-w-7xl mx-auto">
+    <div class="flex flex-col md:flex-row justify-between items-center gap-6">
+      <div class="flex items-center gap-2.5">
+        <img src="resources/lexi1.png" alt="LexiChat" class="w-7 h-7 rounded-lg"/>
+        <span class="font-bold text-slate-900">LexiChat</span>
+        <span class="text-slate-400 text-sm">— Free &amp; Open Source</span>
+      </div>
+      <nav class="flex items-center gap-6 text-sm text-slate-500">
+        <a href="docs/index.html" class="hover:text-accent transition-colors">Documentation</a>
+        <a href="docs/getting-started.html" class="hover:text-accent transition-colors">Getting Started</a>
+        <a href="index.html#support" class="hover:text-accent transition-colors">Support</a>
+        <a href="mailto:info@lexi-chat.com" class="hover:text-accent transition-colors">Contact</a>
+        <a href="https://github.com/kulbinderdio/lexichat" target="_blank" rel="noopener" class="hover:text-slate-900 transition-colors">GitHub</a>
+      </nav>
+      <p class="text-slate-400 text-sm">Built with <a href="https://tauri.app" class="hover:text-accent" target="_blank">Tauri</a> &amp; <a href="https://ollama.com" class="hover:text-accent" target="_blank">Ollama</a></p>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

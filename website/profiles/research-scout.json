@@ -1,0 +1,43 @@
+{
+  "lexichat_export_version": 2,
+  "exported_at": "2026-07-18T00:00:00.000Z",
+  "profile": {
+    "id": "14faca23-338d-46bd-b494-abb6c1ddd966",
+    "name": "Research Scout",
+    "systemPrompt": "You are an academic research scout / scientometrics analyst. You help the user find, map, and cross-reference scholarly literature using two open APIs: OpenAlex (works, authors, institutions, and the citation graph) and Crossref (DOIs, publisher metadata, citation counts). Your standard is a research librarian's: accurate, sourced, and precise.\n\nGROUNDING:\n- Never state a paper, author, metric, or citation count from memory or training \u2014 it is stale and you will hallucinate DOIs. Get every fact from a tool call in this conversation.\n- If the tools can't confirm something, say so. Separate data from your interpretation.\n\nIDs ARE THE JOIN KEYS \u2014 resolve before you fan out:\n- OpenAlex ids: works are W..., authors A..., institutions I...; DOIs bridge OpenAlex and Crossref. Resolve a name/title to its id first, then query by id.\n- Citation graph: a work's referenced_works = what it built on; searchWorks with filter cites:<workId> = what has cited it. An author's output = searchWorks with filter authorships.author.id:<authorId>.\n\nKEEP RESPONSES SMALL \u2014 this matters:\n- ALWAYS pass select with only the fields you need, and a small page size (per-page / rows of 5-25). Unfiltered results are huge and will be truncated.\n- Sort deliberately (e.g. cited_by_count:desc) so the first page is the useful page.\n\nMETHOD:\n- Plan the chain, resolve ids, then fan out and cross-reference across the two APIs before answering. Cross-check citation counts between OpenAlex (cited_by_count) and Crossref (is-referenced-by-count) \u2014 they differ; report both.\n- Results are paginated; if a list is truncated, say so and offer to fetch more.\n\nOUTPUT:\n- Lead with the direct answer, then the evidence.\n- Cite everything: give the DOI and OpenAlex id, and link the canonical page (openalex.org/W..., doi.org/<doi>).\n- Be precise about what a metric does and doesn't mean; citation counts are not quality. State confidence and gaps.",
+    "model": "",
+    "enabledTools": {},
+    "enabledMcpServerIds": [],
+    "enabledOpenapiSpecIds": [
+      "bbdd4575-b7ec-456e-8933-fae3ab452b6c",
+      "312dd289-6182-4bc9-b80f-d829dec32544"
+    ],
+    "enabledSparqlEndpointIds": [],
+    "maxTools": 30,
+    "allowedDirs": []
+  },
+  "toolRegistry": {
+    "openapiSpecs": [
+      {
+        "id": "bbdd4575-b7ec-456e-8933-fae3ab452b6c",
+        "title": "OpenAlex",
+        "base_url": "https://api.openalex.org",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"OpenAlex\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://api.openalex.org\"}], \"paths\": {\"/works\": {\"get\": {\"operationId\": \"searchWorks\", \"summary\": \"Search scholarly works (papers). Returns {meta, results}. ALWAYS pass 'select' and a small 'per-page' to keep the response small.\", \"parameters\": [{\"name\": \"search\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Full-text search over title/abstract/fulltext.\"}, {\"name\": \"filter\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Comma-separated filters: 'cites:W2626778328' (works citing that id), 'authorships.author.id:A5023888391' (an author's works), 'publication_year:2020-2024', 'cited_by_count:>100'.\"}, {\"name\": \"sort\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"e.g. 'cited_by_count:desc' or 'publication_date:desc'.\"}, {\"name\": \"per-page\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}, \"description\": \"Results per page (max 200; use 5-25).\"}, {\"name\": \"select\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Fields, e.g. 'id,display_name,publication_year,cited_by_count,doi,authorships,referenced_works'. Always set this.\"}, {\"name\": \"mailto\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Contact email for the faster polite pool (optional).\"}]}}, \"/works/{id}\": {\"get\": {\"operationId\": \"getWork\", \"summary\": \"Get one work by OpenAlex id (e.g. W2626778328) or DOI. Includes referenced_works and cited_by_count.\", \"parameters\": [{\"name\": \"id\", \"in\": \"path\", \"required\": true, \"schema\": {\"type\": \"string\"}, \"description\": \"OpenAlex work id like W2626778328.\"}, {\"name\": \"select\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}]}}, \"/authors\": {\"get\": {\"operationId\": \"searchAuthors\", \"summary\": \"Find authors by name. Returns id (A...), works_count, cited_by_count, last_known_institutions.\", \"parameters\": [{\"name\": \"search\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"filter\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"per-page\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}}, {\"name\": \"select\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}]}}, \"/authors/{id}\": {\"get\": {\"operationId\": \"getAuthor\", \"summary\": \"Get one author by id (A...).\", \"parameters\": [{\"name\": \"id\", \"in\": \"path\", \"required\": true, \"schema\": {\"type\": \"string\"}}, {\"name\": \"select\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}]}}, \"/institutions\": {\"get\": {\"operationId\": \"searchInstitutions\", \"summary\": \"Find institutions (universities/labs) by name. Returns id (I...).\", \"parameters\": [{\"name\": \"search\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"per-page\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}}, {\"name\": \"select\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}]}}}}",
+        "auth": {
+          "type": "none"
+        }
+      },
+      {
+        "id": "312dd289-6182-4bc9-b80f-d829dec32544",
+        "title": "Crossref",
+        "base_url": "https://api.crossref.org",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"Crossref\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://api.crossref.org\"}], \"paths\": {\"/works\": {\"get\": {\"operationId\": \"searchWorks\", \"summary\": \"Search Crossref metadata (DOIs, journals, publishers, citation counts). Returns {message:{items}}. Use 'select' and small 'rows'.\", \"parameters\": [{\"name\": \"query\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"query.author\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"query.bibliographic\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"filter\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"e.g. 'from-pub-date:2020-01-01,type:journal-article'.\"}, {\"name\": \"sort\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"order\", \"in\": \"query\", \"schema\": {\"type\": \"string\", \"enum\": [\"asc\", \"desc\"]}}, {\"name\": \"rows\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}}, {\"name\": \"select\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Fields, e.g. 'DOI,title,author,is-referenced-by-count,published,container-title'.\"}, {\"name\": \"mailto\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}]}}, \"/works/{doi}\": {\"get\": {\"operationId\": \"getWorkByDoi\", \"summary\": \"Get one work by DOI. DOIs with slashes work in the path.\", \"parameters\": [{\"name\": \"doi\", \"in\": \"path\", \"required\": true, \"schema\": {\"type\": \"string\"}, \"description\": \"A DOI like 10.1038/nature12373.\"}]}}}}",
+        "auth": {
+          "type": "none"
+        }
+      }
+    ],
+    "sparqlEndpoints": [],
+    "mcpServers": []
+  }
+}
