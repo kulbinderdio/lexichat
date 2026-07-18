@@ -1,0 +1,81 @@
+{
+  "lexichat_export_version": 2,
+  "exported_at": "2026-07-18T00:00:00.000Z",
+  "profile": {
+    "id": "956d07fd-be26-4332-9026-d04581d4303b",
+    "name": "Local Area Checker",
+    "systemPrompt": "You are a UK local-area analyst. Given a postcode, you build a factual, sourced picture of a neighbourhood from official open data. Be neutral and precise \u2014 report figures, don't editorialise.\n\nALWAYS START WITH THE POSTCODE:\n- First call lookupPostcode (pass the postcode WITHOUT spaces, e.g. SW1A1AA). From the result keep: latitude & longitude, admin_ward, admin_district (the council/borough), parliamentary_constituency, region, and the LSOA/MSOA codes. Everything else is queried using these.\n- Use lat/lng for geographic sources (crime, planning, nearby services); the area codes for statistics; admin_district when naming the area.\n\nSOURCES & HOW TO USE THEM:\n- Crime: streetCrime, by lat/lng and a recent YYYY-MM month (data lags ~2 months \u2014 if empty, try an earlier month). The API returns EVERY incident as a raw record (often several hundred), so the result will be truncated and saved to a file. Use run_python to load that file and count incidents by category, then present the exact table (category -> count) and total. Never guess the 'predominant' category from the preview.\n- House prices: the HM Land Registry SPARQL endpoint (its \u2026_query tool) \u2014 price-paid sold transactions by postcode. Call its \u2026_schema tool first if unsure of the vocabulary.\n- Planning applications: planningApplications, by lat/lng, krad 1-2 km, with start_date/end_date covering the last 12 months. Give a count and the notable applications.\n- Demographics/deprivation: the OpenDataCommunities / ONS SPARQL endpoints, by LSOA or local-authority code.\n- Doctors, dentists, care homes + ratings: cqcLocations then cqcLocation (needs a free CQC key). \n- EPC energy ratings: epcSearch (needs a free EPC account).\n- Schools and their Ofsted ratings: there is no structured API \u2014 use web_search and fetch_webpage on the school's Ofsted report page.\n\nHANDLING LARGE RESULTS:\n- When a tool returns more data than fits, LexiChat saves the FULL result to a file and tells you the path. Do NOT summarise from the small preview \u2014 call run_python to read that file and compute exact figures (counts, breakdowns, sorting).\n\nGROUNDING & OUTPUT:\n- Never state a local figure from memory; get it from a tool call. If a source has no data for the area, say so.\n- Always note data currency (e.g. \"crime to March 2026\", \"Census 2021\", \"prices to 2025\").\n- Lead with a one-paragraph snapshot of the area, then sections: Area & governance \u00b7 Crime \u00b7 Housing & prices \u00b7 Planning activity \u00b7 Demographics \u00b7 Local services. Give each figure with its source and date.",
+    "model": "",
+    "enabledTools": {
+      "run_python": true
+    },
+    "enabledMcpServerIds": [],
+    "enabledOpenapiSpecIds": [
+      "b8545aea-43b1-4777-9327-ee92299f60c9",
+      "7fbafa03-7e4d-4822-a145-c608e8c20d80",
+      "a34f0d1a-19ef-462a-9ba5-86efc5a7e13a",
+      "6b2d4411-debe-4005-b14b-9303dde20b88",
+      "de2271bd-3f22-4c12-b861-a56255130add"
+    ],
+    "enabledSparqlEndpointIds": [
+      "builtin-landregistry",
+      "builtin-opendatacommunities",
+      "builtin-ons-stats"
+    ],
+    "maxTools": 40,
+    "toolResultLimit": 12000,
+    "allowedDirs": []
+  },
+  "toolRegistry": {
+    "openapiSpecs": [
+      {
+        "id": "b8545aea-43b1-4777-9327-ee92299f60c9",
+        "title": "Postcode Lookup",
+        "base_url": "https://api.postcodes.io",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"Postcode Lookup\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://api.postcodes.io\"}], \"paths\": {\"/postcodes/{postcode}\": {\"get\": {\"operationId\": \"lookupPostcode\", \"summary\": \"Resolve a UK postcode to coordinates and geography. RETURNS latitude, longitude, admin_ward, admin_district (council/borough), parliamentary_constituency, region, and codes (LSOA/MSOA). Pass the postcode WITHOUT spaces, e.g. SW1A1AA. Everything else in this profile is queried using these values.\", \"parameters\": [{\"name\": \"postcode\", \"in\": \"path\", \"required\": true, \"schema\": {\"type\": \"string\"}, \"description\": \"UK postcode, no spaces (e.g. SW1A1AA).\"}]}}, \"/postcodes\": {\"get\": {\"operationId\": \"searchPostcodes\", \"summary\": \"Search/validate a partial or uncertain postcode. Use lookupPostcode when you have a full one.\", \"parameters\": [{\"name\": \"q\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Partial postcode text.\"}]}}}}",
+        "auth": {
+          "type": "none"
+        }
+      },
+      {
+        "id": "7fbafa03-7e4d-4822-a145-c608e8c20d80",
+        "title": "Police Crime",
+        "base_url": "https://data.police.uk",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"Police Crime\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://data.police.uk\"}], \"paths\": {\"/api/crimes-street/all-crime\": {\"get\": {\"operationId\": \"streetCrime\", \"summary\": \"Street-level crimes within ~1 mile of a point for a given month. Use lat/lng from the postcode lookup. Data lags ~2 months; if a month has no data, try an earlier month.\", \"parameters\": [{\"name\": \"lat\", \"in\": \"query\", \"schema\": {\"type\": \"number\"}, \"description\": \"Latitude.\"}, {\"name\": \"lng\", \"in\": \"query\", \"schema\": {\"type\": \"number\"}, \"description\": \"Longitude.\"}, {\"name\": \"date\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Month as YYYY-MM (e.g. 2026-03).\"}]}}, \"/api/crime-categories\": {\"get\": {\"operationId\": \"crimeCategories\", \"summary\": \"List crime categories valid for a month.\", \"parameters\": [{\"name\": \"date\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Month YYYY-MM.\"}]}}}}",
+        "auth": {
+          "type": "none"
+        }
+      },
+      {
+        "id": "a34f0d1a-19ef-462a-9ba5-86efc5a7e13a",
+        "title": "Planning Applications",
+        "base_url": "https://www.planit.org.uk",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"Planning Applications\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://www.planit.org.uk\"}], \"paths\": {\"/api/applics/json\": {\"get\": {\"operationId\": \"planningApplications\", \"summary\": \"Planning applications near a point. Use lat & lng from the postcode lookup (NOT a raw postcode). Set krad (radius in km, 1-2) and start_date/end_date to cover the last 12 months. Returns {records:[...]} with address, app_type, app_state, description, start_date.\", \"parameters\": [{\"name\": \"lat\", \"in\": \"query\", \"schema\": {\"type\": \"number\"}}, {\"name\": \"lng\", \"in\": \"query\", \"schema\": {\"type\": \"number\"}}, {\"name\": \"krad\", \"in\": \"query\", \"schema\": {\"type\": \"number\"}, \"description\": \"Search radius in km (1-2).\"}, {\"name\": \"start_date\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Earliest application date, YYYY-MM-DD (~12 months ago).\"}, {\"name\": \"end_date\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Latest date, YYYY-MM-DD (today).\"}, {\"name\": \"sort\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"e.g. -start_date for newest first.\"}, {\"name\": \"pg_sz\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}, \"description\": \"Page size (10-50).\"}]}}}}",
+        "auth": {
+          "type": "none"
+        }
+      },
+      {
+        "id": "6b2d4411-debe-4005-b14b-9303dde20b88",
+        "title": "EPC (Energy Certificates)",
+        "base_url": "https://epc.opendatacommunities.org",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"EPC (Energy Certificates)\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://epc.opendatacommunities.org\"}], \"paths\": {\"/api/v1/domestic/search\": {\"get\": {\"operationId\": \"epcSearch\", \"summary\": \"Energy Performance Certificates by postcode (ratings A-G, floor area, potential). Requires a FREE account: enter your email as the Basic-auth username and your API token as the password.\", \"parameters\": [{\"name\": \"postcode\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}, \"description\": \"Postcode (with or without space).\"}, {\"name\": \"size\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}, \"description\": \"Number of certificates (5-20).\"}]}}}}",
+        "auth": {
+          "type": "basic"
+        }
+      },
+      {
+        "id": "de2271bd-3f22-4c12-b861-a56255130add",
+        "title": "CQC (Care & GP Ratings)",
+        "base_url": "https://api.cqc.org.uk",
+        "spec_json": "{\"openapi\": \"3.0.0\", \"info\": {\"title\": \"CQC (Care & GP Ratings)\", \"version\": \"1.0\"}, \"servers\": [{\"url\": \"https://api.cqc.org.uk\"}], \"paths\": {\"/public/v1/locations\": {\"get\": {\"operationId\": \"cqcLocations\", \"summary\": \"Find registered care locations (GP surgeries, dentists, care homes) by postcode. Requires a FREE CQC subscription key. Returns location ids; use cqcLocation for full details incl. ratings.\", \"parameters\": [{\"name\": \"postalCode\", \"in\": \"query\", \"schema\": {\"type\": \"string\"}}, {\"name\": \"perPage\", \"in\": \"query\", \"schema\": {\"type\": \"integer\"}}]}}, \"/public/v1/locations/{locationId}\": {\"get\": {\"operationId\": \"cqcLocation\", \"summary\": \"Full details for one care location, including its current CQC inspection rating and type (e.g. GP, dental).\", \"parameters\": [{\"name\": \"locationId\", \"in\": \"path\", \"required\": true, \"schema\": {\"type\": \"string\"}}]}}}}",
+        "auth": {
+          "type": "apikey",
+          "api_key_header": "Ocp-Apim-Subscription-Key"
+        }
+      }
+    ],
+    "sparqlEndpoints": [],
+    "mcpServers": []
+  }
+}
