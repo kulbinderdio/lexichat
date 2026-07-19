@@ -247,6 +247,13 @@ pub async fn execute<R: tauri::Runtime>(
     args: &Value,
     app: Option<&tauri::AppHandle<R>>,
 ) -> String {
+    // Repair arguments a model wrongly stringified (an object/array passed as a JSON string,
+    // or a number/bool as a string) — same fix as for MCP tools — before building the request.
+    let coerced = tool.schema.get("function").and_then(|f| f.get("parameters"))
+        .filter(|s| s.is_object())
+        .map(|schema| crate::mcp::coerce_args_to_schema(args, schema));
+    let args = coerced.as_ref().unwrap_or(args);
+
     let client = reqwest::Client::builder()
         .use_rustls_tls()
         .build()
@@ -727,6 +734,34 @@ mod tests {
         let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "q": "hello" }), None).await;
         assert!(out.contains("HTTP 200"), "got: {out}");
         assert!(out.contains("\"ok\""), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn execute_coerces_stringified_array_arg() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::{method, path, query_param};
+        let server = MockServer::start().await;
+        // Coercion turns "[1,2,3]" into a real array, which build_query_params expands to
+        // repeated `ids=` params. Without it, the whole "[1,2,3]" string is sent as one value.
+        Mock::given(method("GET")).and(path("/items"))
+            .and(query_param("ids", "1")).and(query_param("ids", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .mount(&server).await;
+
+        let spec_json = serde_json::json!({
+            "paths": { "/items": { "get": {
+                "operationId": "items",
+                "parameters": [{ "name": "ids", "in": "query", "required": false,
+                                 "schema": { "type": "array", "items": { "type": "integer" } } }]
+            }}}
+        }).to_string();
+        let tools = parse_spec("T", &server.uri(), &spec_json).unwrap();
+        let spec = RegisteredSpec { id: "id".into(), title: "T".into(), base_url: server.uri(),
+                                    auth: crate::mcp::AuthConfig::None, tools };
+        // Model wrongly stringified the array.
+        let out = execute::<tauri::Wry>(&spec, &spec.tools[0],
+            &serde_json::json!({ "ids": "[1,2,3]" }), None).await;
+        assert!(out.contains("HTTP 200"), "stringified array should have been coerced: {out}");
     }
 
     #[tokio::test]

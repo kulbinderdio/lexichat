@@ -1,6 +1,6 @@
 [package]
 name = "lexichat"
-version = "2.0.9"
+version = "2.0.10"
 description = "LexiChat — Local AI Agent"
 authors = ["you"]
 edition = "2021"
@@ -30,7 +30,7 @@ urlencoding = "2"
 anyhow = "1"
 tauri-plugin-dialog = "2.7.0"
 dirs = "6.0.0"
-pdf-extract = "0.7"
+pdf-extract = "0.12"
 base64 = "0.22"
 url = { version = "2", features = ["serde"] }
 zip = "2"
