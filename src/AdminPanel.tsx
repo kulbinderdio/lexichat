@@ -1706,6 +1706,7 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
   const [envStr, setEnvStr] = useState("");
   const [enableApps, setEnableApps] = useState(false);
   const [auth, setAuth] = useState<AuthConfig>(DEFAULT_AUTH);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1716,6 +1717,25 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
   useEffect(() => {
     invoke<MCPServerInfo[]>("list_mcp_servers").then(setServers).catch(() => {});
   }, []);
+
+  const closeForm = () => {
+    setShowAdd(false); setEditingId(null); setError("");
+    setName(""); setCommand(""); setArgsStr(""); setEnvStr(""); setEnableApps(false); setAuth(DEFAULT_AUTH);
+  };
+
+  // Open the form pre-filled with a server's config, to edit it (e.g. re-enter credentials
+  // that were stripped on import, or fix a command).
+  const startEdit = (srv: StoredMCPServer) => {
+    setEditingId(srv.id);
+    setName(srv.name);
+    setCommand(srv.command);
+    setArgsStr((srv.args ?? []).join(" "));
+    setEnvStr(Object.entries(srv.env ?? {}).map(([k, v]) => `${k}=${v}`).join("\n"));
+    setEnableApps(srv.enable_apps ?? false);
+    setAuth(srv.auth ?? DEFAULT_AUTH);
+    setError("");
+    setShowAdd(true);
+  };
 
   const add = async () => {
     if (!name.trim() || !command.trim()) return;
@@ -1730,13 +1750,19 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
       }
       const effectiveAuth = isHttp ? auth : DEFAULT_AUTH;
       const info = await invoke<MCPServerInfo>("add_mcp_server", {
-        args: { name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth, enable_apps: enableApps }
+        args: { ...(editingId ? { id: editingId } : {}), name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth, enable_apps: enableApps }
       });
-      const entry: StoredMCPServer = { id: info.id, name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth, enable_apps: enableApps };
-      setServers(prev => [...prev, info]);
-      onChange([...stored, entry]);
-      setShowAdd(false);
-      setName(""); setCommand(""); setArgsStr(""); setEnvStr(""); setEnableApps(false); setAuth(DEFAULT_AUTH);
+      // Editing preserves the per-tool enable map; adding starts fresh.
+      const prevTools = editingId ? stored.find(s => s.id === editingId)?.enabledTools : undefined;
+      const entry: StoredMCPServer = { id: info.id, name: name.trim(), command: command.trim(), args: cmdArgs, env, auth: effectiveAuth, enable_apps: enableApps, enabledTools: prevTools };
+      if (editingId) {
+        setServers(prev => prev.map(s => s.id === info.id ? info : s));
+        onChange(stored.map(s => s.id === editingId ? entry : s));
+      } else {
+        setServers(prev => [...prev, info]);
+        onChange([...stored, entry]);
+      }
+      closeForm();
     } catch (e) {
       setError(String(e));
     }
@@ -1832,6 +1858,8 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
                   {reconnecting.has(storedSrv.id) ? "…" : "↻"}
                 </button>
               )}
+              <button className="btn" style={{ fontSize: 11, padding: "3px 8px" }}
+                onClick={() => startEdit(storedSrv)}>Edit</button>
               <button className="icon-btn danger" onClick={() => remove(storedSrv.id)}>✕</button>
             </div>
             {expanded.has(storedSrv.id) && (
@@ -1909,9 +1937,9 @@ function MCPTab({ stored, onChange }: { stored: StoredMCPServer[]; onChange: (s:
               </label>
               {error && <div style={{ color: "#f87171", fontSize: 12 }}>{error}</div>}
               <div style={{ display: "flex", gap: 8 }}>
-                <button className="btn" onClick={() => { setShowAdd(false); setError(""); }}>Cancel</button>
+                <button className="btn" onClick={closeForm}>Cancel</button>
                 <button className="btn primary" onClick={add} disabled={loading || !name.trim() || !command.trim()}>
-                  {loading ? "Connecting…" : "Add Server"}
+                  {loading ? "Connecting…" : editingId ? "Save changes" : "Add Server"}
                 </button>
               </div>
             </div>

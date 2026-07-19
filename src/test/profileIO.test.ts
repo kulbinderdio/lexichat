@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildExportEnvelope, parseImport, mergeImport } from "../profileIO";
+import { buildExportEnvelope, parseImport, mergeImport, dedupeRegistry } from "../profileIO";
 import type { Profile, AppSettings, StoredOpenAPISpec, StoredMCPServer } from "../AdminPanel";
 
 const spec = (id: string): StoredOpenAPISpec => ({
@@ -75,5 +75,50 @@ describe("mergeImport", () => {
     const target = settings();
     const res = mergeImport(bundle, target, "new-id");
     expect(res.settings.toolRegistry.openapiSpecs.filter(s => s.id === "s1")).toHaveLength(1);
+  });
+});
+
+describe("import dedup (content-based, not just id)", () => {
+  const dupSpec = (id: string): StoredOpenAPISpec => ({
+    id, title: "Members API", base_url: "https://members-api.parliament.uk", spec_json: "{}",
+    auth: { type: "none" },
+  });
+
+  it("mergeImport reuses an existing API instead of adding a content-duplicate, and remaps the profile", () => {
+    const base = settings({
+      toolRegistry: { openapiSpecs: [dupSpec("existing")], sparqlEndpoints: [], mcpServers: [] },
+    });
+    // Same API (title + base_url) but a different generated id — the bug that produced dupes.
+    const bundle = {
+      profile: profile({ enabledOpenapiSpecIds: ["imported"] }),
+      openapiSpecs: [dupSpec("imported")], sparqlEndpoints: [], mcpServers: [],
+    };
+    const result = mergeImport(bundle as any, base, "new-p");
+    expect(result.settings.toolRegistry.openapiSpecs.map(s => s.id)).toEqual(["existing"]); // no dup
+    const imported = result.settings.profiles.at(-1)!;
+    expect(imported.enabledOpenapiSpecIds).toContain("existing");     // remapped onto survivor
+    expect(imported.enabledOpenapiSpecIds).not.toContain("imported");
+  });
+});
+
+describe("dedupeRegistry", () => {
+  const dupSpec = (id: string): StoredOpenAPISpec => ({
+    id, title: "Members API", base_url: "https://members-api.parliament.uk", spec_json: "{}",
+    auth: { type: "none" },
+  });
+
+  it("collapses existing content-duplicate specs and remaps every profile", () => {
+    const s = settings({
+      toolRegistry: { openapiSpecs: [dupSpec("a"), dupSpec("b")], sparqlEndpoints: [], mcpServers: [] },
+      profiles: [profile({ enabledOpenapiSpecIds: ["b"] })],
+    });
+    const out = dedupeRegistry(s);
+    expect(out.toolRegistry.openapiSpecs.map(x => x.id)).toEqual(["a"]);   // b collapsed into a
+    expect(out.profiles[0].enabledOpenapiSpecIds).toEqual(["a"]);          // b -> a remap
+  });
+
+  it("returns the same object when there are no duplicates", () => {
+    const s = settings();
+    expect(dedupeRegistry(s)).toBe(s);
   });
 });

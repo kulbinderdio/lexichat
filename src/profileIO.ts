@@ -116,24 +116,97 @@ export interface ImportResult {
  * profile, and return warnings about what the user must still set up (credentials, model,
  * MCP command paths, sandbox).
  */
+// Merge `incoming` into `existing`, treating two items as the same when their content key
+// matches (not just their id) — so importing a profile that bundles an API already registered
+// reuses the existing one instead of adding a duplicate with a fresh id. Returns the merged
+// list plus a map from each incoming id to the id actually used, so enabled-id references can
+// be remapped onto the surviving entry.
+function dedupeMerge<T extends { id: string }>(
+  existing: T[], incoming: T[], key: (t: T) => string,
+): { merged: T[]; idMap: Map<string, string> } {
+  const byKey = new Map(existing.map(t => [key(t), t.id] as const));
+  const byId = new Set(existing.map(t => t.id));
+  const merged = [...existing];
+  const idMap = new Map<string, string>();
+  for (const item of incoming) {
+    const matchId = byKey.get(key(item));
+    if (matchId) {
+      idMap.set(item.id, matchId);          // same content already present → reuse it
+    } else if (byId.has(item.id)) {
+      idMap.set(item.id, item.id);          // same id already present → keep, don't duplicate
+    } else {
+      merged.push(item);                    // genuinely new
+      byId.add(item.id);
+      byKey.set(key(item), item.id);
+      idMap.set(item.id, item.id);
+    }
+  }
+  return { merged, idMap };
+}
+
+// Content identity keys (see dedupeMerge).
+const specKey = (s: { title?: string; base_url?: string }) =>
+  `${(s.title ?? "").trim().toLowerCase()}|${(s.base_url ?? "").replace(/\/+$/, "")}`;
+const epKey = (e: { endpoint_url?: string }) => (e.endpoint_url ?? "").trim().toLowerCase();
+const srvKey = (m: { name?: string; command?: string }) =>
+  `${(m.name ?? "").trim().toLowerCase()}|${(m.command ?? "").trim()}`;
+
+const remap = (ids: string[] | undefined, map: Map<string, string>): string[] =>
+  [...new Set((ids ?? []).map(id => map.get(id) ?? id))];
+
+// Collapse registry entries that share a content key (e.g. the same API imported twice with
+// different ids — the duplicate-OpenAPI-specs bug), keeping the first and remapping every
+// profile's enabled-id references onto the survivor. Idempotent — safe to run on every load;
+// returns the same object unchanged when there's nothing to collapse.
+export function dedupeRegistry(settings: AppSettings): AppSettings {
+  const reg = settings.toolRegistry;
+  const collapse = <T extends { id: string }>(items: T[], key: (t: T) => string) => {
+    const keptByKey = new Map<string, string>();
+    const kept: T[] = [];
+    const idMap = new Map<string, string>();
+    for (const it of items) {
+      const keptId = keptByKey.get(key(it));
+      if (keptId) { idMap.set(it.id, keptId); }
+      else { keptByKey.set(key(it), it.id); kept.push(it); idMap.set(it.id, it.id); }
+    }
+    return { kept, idMap };
+  };
+  const s = collapse(reg.openapiSpecs, specKey);
+  const e = collapse(reg.sparqlEndpoints, epKey);
+  const m = collapse(reg.mcpServers, srvKey);
+  if (s.kept.length === reg.openapiSpecs.length
+    && e.kept.length === reg.sparqlEndpoints.length
+    && m.kept.length === reg.mcpServers.length) {
+    return settings; // no duplicates
+  }
+  const profiles = settings.profiles.map(p => ({
+    ...p,
+    enabledOpenapiSpecIds:    remap(p.enabledOpenapiSpecIds,    s.idMap),
+    enabledSparqlEndpointIds: remap(p.enabledSparqlEndpointIds, e.idMap),
+    enabledMcpServerIds:      remap(p.enabledMcpServerIds,      m.idMap),
+  }));
+  return {
+    ...settings,
+    toolRegistry: { openapiSpecs: s.kept, sparqlEndpoints: e.kept, mcpServers: m.kept },
+    profiles,
+  };
+}
+
 export function mergeImport(bundle: ImportBundle, settings: AppSettings, newProfileId: string): ImportResult {
   const reg = settings.toolRegistry;
-  const haveSpec = new Set(reg.openapiSpecs.map(s => s.id));
-  const haveEp   = new Set(reg.sparqlEndpoints.map(e => e.id));
-  const haveSrv  = new Set(reg.mcpServers.map(m => m.id));
 
-  const openapiSpecs    = [...reg.openapiSpecs,    ...bundle.openapiSpecs.filter(s => !haveSpec.has(s.id))];
-  const sparqlEndpoints = [...reg.sparqlEndpoints, ...bundle.sparqlEndpoints.filter(e => !haveEp.has(e.id))];
-  const mcpServers      = [...reg.mcpServers,      ...bundle.mcpServers.filter(m => !haveSrv.has(m.id))];
+  const { merged: openapiSpecs,    idMap: specMap } = dedupeMerge(reg.openapiSpecs,    bundle.openapiSpecs,    specKey);
+  const { merged: sparqlEndpoints, idMap: epMap }   = dedupeMerge(reg.sparqlEndpoints, bundle.sparqlEndpoints, epKey);
+  const { merged: mcpServers,      idMap: srvMap }  = dedupeMerge(reg.mcpServers,      bundle.mcpServers,      srvKey);
 
   const profile: Profile = {
     ...bundle.profile,
     id: newProfileId,
     name: resolveImportName(bundle.profile.name, settings.profiles),
     allowedDirs: [],
-    enabledMcpServerIds:      bundle.profile.enabledMcpServerIds      ?? [],
-    enabledOpenapiSpecIds:    bundle.profile.enabledOpenapiSpecIds    ?? [],
-    enabledSparqlEndpointIds: bundle.profile.enabledSparqlEndpointIds ?? [],
+    enabledMcpServerIds:      remap(bundle.profile.enabledMcpServerIds,      srvMap),
+    enabledOpenapiSpecIds:    remap(bundle.profile.enabledOpenapiSpecIds,    specMap),
+    enabledSparqlEndpointIds: remap(bundle.profile.enabledSparqlEndpointIds, epMap),
     enabledTools:             bundle.profile.enabledTools             ?? {},
     maxTools:                 bundle.profile.maxTools                 ?? settings.maxTools,
   };

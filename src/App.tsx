@@ -8,6 +8,7 @@ import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
 import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec, StoredSparqlEndpoint } from "./AdminPanel";
+import { dedupeRegistry } from "./profileIO";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -398,7 +399,9 @@ export function loadSettings(): AppSettings {
       enabledOpenapiSpecIds: p.enabledOpenapiSpecIds  ?? [],
       enabledSparqlEndpointIds: p.enabledSparqlEndpointIds ?? [],
     }));
-    return loaded;
+    // Collapse any content-duplicate registry entries (e.g. the same API imported twice with
+    // different ids) and remap profile references onto the survivor.
+    return dedupeRegistry(loaded);
   } catch { return { ...DEFAULT_SETTINGS, toolRegistry: { mcpServers: [], openapiSpecs: [...BUILTIN_OPENAPI_SPECS], sparqlEndpoints: [...BUILTIN_SPARQL_ENDPOINTS] } }; }
 }
 
@@ -831,7 +834,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "2.0.10" },
+              hostInfo: { name: "LexiChat", version: "2.0.11" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -1736,7 +1739,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 2.0.10</div>
+            <div className="about-version">Version 2.0.11</div>
 
             <div className="about-support">
               <div className="about-support-label">Support the project</div>
