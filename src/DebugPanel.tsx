@@ -225,8 +225,10 @@ export function DebugPanel({ visible, clearKey }: Props) {
     return () => window.removeEventListener("mcp-app-bridge", h);
   }, []);
 
+  // Subscribe once on mount (the panel is always mounted, only its rendering is gated by
+  // `visible`) so the trace accumulates even while the panel is closed — opening it mid-run
+  // then shows the full history instead of nothing.
   useEffect(() => {
-    if (!visible) return;
     const unsubs: UnlistenFn[] = [];
 
     const setup = async () => {
@@ -361,7 +363,7 @@ export function DebugPanel({ visible, clearKey }: Props) {
 
     setup();
     return () => { unsubs.forEach(u => u()); };
-  }, [visible]);
+  }, []);
 
   // Scroll to bottom on new data
   useEffect(() => {

@@ -43,6 +43,9 @@ pub struct AppState {
     /// Scratch slot: an MCP-App UI payload stashed by dispatch_tool for the agent
     /// loop to attach to the next `agent-tool-result` event.
     pub pending_tool_ui: Mutex<Option<ollama::ToolUiPayload>>,
+    /// Base64 image `data:` URLs from the last tool result, rendered inline regardless of the
+    /// MCP-App/approval flow. Taken by the agent loop when it emits the tool-result event.
+    pub pending_tool_images: Mutex<Vec<String>>,
     /// MCP server ids the user has approved to render/interact with apps this
     /// session (set by `approve_mcp_app`; reset on restart).
     pub apps_allowed: Mutex<std::collections::HashSet<String>>,
@@ -75,6 +78,7 @@ impl Default for AppState {
             code_exec_unlocked: Mutex::new(false),
             pending_code_permission: Mutex::new(None),
             pending_tool_ui: Mutex::new(None),
+            pending_tool_images: Mutex::new(Vec::new()),
             apps_allowed: Mutex::new(std::collections::HashSet::new()),
             active_conversation_id: Mutex::new(None),
             cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -396,9 +400,14 @@ async fn send_message(
                 .filter_map(|t| serde_json::from_value::<ollama::ToolSchema>(t.schema.clone()).ok())
                 .collect();
             if !tools.is_empty() {
+                // List the tool names so per-step selection can match on capability (the names
+                // are keyword-rich, e.g. static_map_image_tool, search_and_geocode_tool) rather
+                // than a generic "connected server" blurb that matches nothing.
+                let names = tools.iter().map(|t| t.function.name.as_str())
+                    .collect::<Vec<_>>().join(", ");
                 tool_groups.push(ollama::ToolGroup {
                     label: format!("{} (MCP)", conn.config.name),
-                    description: format!("{} — connected MCP server tools.", conn.config.name),
+                    description: format!("{} MCP server. Tools: {names}", conn.config.name),
                     tools,
                 });
             }

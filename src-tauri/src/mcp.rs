@@ -274,6 +274,47 @@ fn resolve_in_path(exe: &str, path: &str) -> Option<String> {
     None
 }
 
+/// Pull image blocks from a tool result's `content` array and return them as `data:` URLs
+/// the webview can render inline (the CSP allows `data:`). Covers the standard MCP shape
+/// `{ "type":"image", "data":"<base64>", "mimeType":"image/png" }` — e.g. the base64 map
+/// every Mapbox client receives, so a map shows even without the MCP-App/approval flow.
+pub fn extract_image_data_urls(content: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(arr) = content.as_array() {
+        for c in arr {
+            if c["type"].as_str() == Some("image") {
+                if let Some(data) = c["data"].as_str() {
+                    let mime = c["mimeType"].as_str().unwrap_or("image/png");
+                    out.push(format!("data:{mime};base64,{data}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Repair command tokens whose leading `--` was mangled into a unicode dash by autocorrect
+/// (em-dash `—`, en-dash `–`, or a figure/minus dash). Only token-leading dashes are touched,
+/// so values containing a dash are left alone.
+fn normalize_flag_dashes(command: &str) -> String {
+    const UNICODE_DASHES: [char; 4] = ['\u{2014}', '\u{2013}', '\u{2012}', '\u{2212}']; // — – ‒ −
+    command
+        .split_whitespace()
+        .map(|tok| {
+            let mut chars = tok.chars();
+            if chars.next().map(|c| UNICODE_DASHES.contains(&c)).unwrap_or(false) {
+                let rest: String = tok
+                    .trim_start_matches(|c| UNICODE_DASHES.contains(&c) || c == '-')
+                    .to_string();
+                format!("--{rest}")
+            } else {
+                tok.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub struct MCPConnection {
     pub config: MCPServerConfig,
     pub tools:  Vec<MCPTool>,
@@ -293,7 +334,11 @@ impl MCPConnection {
         } else {
             // Split on whitespace so users can paste a full command string
             // (e.g. "docker mcp gateway run --profile test") into the command field.
-            let mut parts = config.command.split_whitespace();
+            // macOS "smart dashes" silently turns a typed "--flag" into "—flag" (em-dash),
+            // which the tool then rejects as an unknown command. Repair any token that starts
+            // with a unicode dash back to "--".
+            let normalized = normalize_flag_dashes(&config.command);
+            let mut parts = normalized.split_whitespace();
             let exe = parts.next().unwrap_or("");
             let inline_args: Vec<&str> = parts.collect();
 
@@ -470,14 +515,22 @@ impl MCPConnection {
         // tool_name is prefixed; look up the raw name + any declared UI resource.
         // Match the model-facing prefixed name OR the server's raw name (UI apps
         // call tools by their raw name over the bridge).
-        let (raw, tool_ui_uri) = self.tools.iter()
+        let (raw, tool_ui_uri, input_schema) = self.tools.iter()
             .find(|t| t.name == tool_name || t.raw_name == tool_name)
-            .map(|t| (t.raw_name.clone(), t.ui_resource_uri.clone()))
-            .unwrap_or_else(|| (tool_name.to_string(), None));
+            .map(|t| (t.raw_name.clone(), t.ui_resource_uri.clone(), t.input_schema.clone()))
+            .unwrap_or_else(|| (tool_name.to_string(), None, Value::Null));
+
+        // Repair arguments the model wrongly stringified (common with local models) so strict
+        // servers don't reject e.g. an object passed as a quoted JSON string.
+        let coerced = if input_schema.is_object() {
+            coerce_args_to_schema(args, &input_schema)
+        } else {
+            args.clone()
+        };
 
         let result = self.send_request("tools/call", serde_json::json!({
             "name": raw,
-            "arguments": args
+            "arguments": coerced
         })).await;
 
         let resp = match result {
@@ -685,6 +738,66 @@ fn parse_tools(config: &MCPServerConfig, result: &Value) -> Vec<MCPTool> {
     }).collect()
 }
 
+/// Repair tool arguments a model has wrongly stringified before sending them to a strict
+/// MCP server. Smaller local models often pass a structured argument as a quoted JSON string
+/// (an object/array as `"{...}"`/`"[...]"`, or a number/bool as `"16"`/`"true"`), which
+/// servers using strict schema validation (e.g. Zod) reject. Guided by the tool's input
+/// schema: when the schema expects object/array/number/integer/boolean but we received a
+/// string that parses to that shape, use the parsed value (recursing to fix nested fields).
+pub fn coerce_args_to_schema(args: &Value, schema: &Value) -> Value {
+    fn expected_types(prop: &Value) -> Vec<String> {
+        match &prop["type"] {
+            Value::String(s) => vec![s.clone()],
+            Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+            _ => Vec::new(),
+        }
+    }
+    fn matches(v: &Value, t: &str) -> bool {
+        match t {
+            "object" => v.is_object(),
+            "array" => v.is_array(),
+            "number" => v.is_number(),
+            "integer" => v.is_i64() || v.is_u64(),
+            "boolean" => v.is_boolean(),
+            "string" => v.is_string(),
+            "null" => v.is_null(),
+            _ => false,
+        }
+    }
+    fn coerce(v: &Value, prop: &Value) -> Value {
+        if let Value::String(s) = v {
+            let types = expected_types(prop);
+            // Only un-stringify when a non-string type is wanted and string isn't allowed.
+            let wants_nonstring = !types.is_empty()
+                && types.iter().all(|t| t != "string")
+                && types.iter().any(|t| matches!(t.as_str(), "object" | "array" | "number" | "integer" | "boolean"));
+            if wants_nonstring {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    if types.iter().any(|t| matches(&parsed, t)) {
+                        return coerce(&parsed, prop); // fix any nested stringified fields too
+                    }
+                }
+            }
+            return v.clone();
+        }
+        match v {
+            Value::Object(map) => {
+                let props = &prop["properties"];
+                let out: serde_json::Map<String, Value> = map.iter()
+                    .map(|(k, val)| (k.clone(), coerce(val, props.get(k).unwrap_or(&Value::Null))))
+                    .collect();
+                Value::Object(out)
+            }
+            Value::Array(arr) => {
+                let items = &prop["items"];
+                Value::Array(arr.iter().map(|el| coerce(el, items)).collect())
+            }
+            _ => v.clone(),
+        }
+    }
+    coerce(args, schema)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -696,6 +809,64 @@ mod tests {
     #[test]
     fn is_url_detects_https() {
         assert!(is_url("https://example.com/mcp"));
+    }
+
+    #[test]
+    fn extract_image_data_urls_from_mapbox_style_result() {
+        // The Mapbox static map result: text URL + base64 image + ui:// resource.
+        let content = serde_json::json!([
+            { "type": "text", "text": "https://api.mapbox.com/.../static/..." },
+            { "type": "image", "data": "AAAABBBB", "mimeType": "image/png" },
+            { "type": "resource", "resource": {
+                "uri": "ui://mapbox/static-map/1", "mimeType": "text/html;profile=mcp-app", "text": "<html/>" } }
+        ]);
+        let urls = extract_image_data_urls(&content);
+        assert_eq!(urls, vec!["data:image/png;base64,AAAABBBB".to_string()]);
+        // No images → empty.
+        assert!(extract_image_data_urls(&serde_json::json!([{ "type": "text", "text": "hi" }])).is_empty());
+    }
+
+    #[test]
+    fn normalize_flag_dashes_repairs_smart_dashes() {
+        // em-dash from macOS smart dashes → real "--"
+        assert_eq!(normalize_flag_dashes("docker mcp gateway run \u{2014}profile dockermcps"),
+                   "docker mcp gateway run --profile dockermcps");
+        // en-dash too
+        assert_eq!(normalize_flag_dashes("cmd \u{2013}flag"), "cmd --flag");
+        // normal ASCII flags and dash-containing values untouched
+        assert_eq!(normalize_flag_dashes("npx -y @mapbox/mcp-server --port 3000"),
+                   "npx -y @mapbox/mcp-server --port 3000");
+    }
+
+    #[test]
+    fn coerce_unstringifies_mapbox_style_args() {
+        // The static_map_image_tool schema: center/size objects, overlays array, zoom number.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "center": { "type": "object", "properties": {
+                    "latitude": { "type": "number" }, "longitude": { "type": "number" } } },
+                "size": { "type": "object" },
+                "overlays": { "type": "array", "items": { "type": "object" } },
+                "zoom": { "type": "number" },
+                "label": { "type": "string" }
+            }
+        });
+        // Model stringified every structured value (the failure we saw).
+        let args = serde_json::json!({
+            "center": "{\"latitude\":51.438066,\"longitude\":0.361697}",
+            "size": "{\"height\":600,\"width\":800}",
+            "overlays": "[{\"latitude\":51.44,\"longitude\":0.36,\"type\":\"marker\"}]",
+            "zoom": "16",
+            "label": "16"   // legitimately a string — must stay a string
+        });
+        let fixed = coerce_args_to_schema(&args, &schema);
+        assert!(fixed["center"].is_object(), "center should be an object");
+        assert_eq!(fixed["center"]["latitude"], serde_json::json!(51.438066));
+        assert!(fixed["size"].is_object());
+        assert!(fixed["overlays"].is_array());
+        assert_eq!(fixed["zoom"], serde_json::json!(16));
+        assert_eq!(fixed["label"], serde_json::json!("16"), "string field must not be coerced");
     }
 
     #[test]

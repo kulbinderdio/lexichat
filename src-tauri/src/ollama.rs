@@ -73,6 +73,10 @@ pub struct ToolResultEvent {
     pub result: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui: Option<ToolUiPayload>,
+    /// Base64 `data:` image URLs pulled from the tool result's image content blocks, rendered
+    /// inline. Independent of the MCP-App flow — any tool that returns an image shows it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 /// MCP Apps (SEP-1865) UI payload attached to a tool result so the frontend can
@@ -462,11 +466,17 @@ pub async fn select_tools_for_step(
     // that group even if the pre-flight missed it. Over-inclusion is fine — level 2 + the cap
     // bound the final count.
     let ctx_lower = context.to_lowercase();
+    let sig = |w: &str| w.len() >= 4 && !matches!(w, "tool" | "tools" | "server" | "search" | "list" | "data");
     for g in groups {
         if chosen.iter().any(|c| std::ptr::eq(*c, g)) { continue; }
+        // Match on the group label OR any of its tool names, so "show me a map" reaches a
+        // server whose tool is `static_map_image_tool` even though the label is just "Mapbox".
         let named = g.label.to_lowercase()
             .split(|c: char| !c.is_alphanumeric())
-            .any(|w| w.len() >= 4 && w != "tools" && w != "server" && ctx_lower.contains(w));
+            .any(|w| sig(w) && ctx_lower.contains(w))
+            || g.tools.iter().any(|t| t.function.name.to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|w| sig(w) && ctx_lower.contains(w)));
         if named { chosen.push(g); }
     }
 
@@ -934,24 +944,29 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 offload_tool_result(result, &name, tool_result_limit, &results_dir)
             };
 
-            // An MCP-App UI payload may have been stashed by dispatch_tool; take it.
-            let ui = if !silent {
+            // An MCP-App UI payload and/or inline images may have been stashed by dispatch_tool.
+            let (ui, images) = if !silent {
                 app.try_state::<crate::AppState>()
-                    .and_then(|s| s.pending_tool_ui.lock().unwrap().take())
-            } else { None };
-            let had_ui = ui.is_some();
+                    .map(|s| (
+                        s.pending_tool_ui.lock().unwrap().take(),
+                        std::mem::take(&mut *s.pending_tool_images.lock().unwrap()),
+                    ))
+                    .unwrap_or((None, Vec::new()))
+            } else { (None, Vec::new()) };
+            let had_media = ui.is_some() || !images.is_empty();
             if !silent {
                 let _ = app.emit("agent-tool-result", ToolResultEvent {
                     name: name.clone(),
                     result: result.clone(),
                     ui,
+                    images,
                 });
             }
 
-            // When an interactive UI was rendered, tell the model so it references
-            // the app naturally instead of apologising that it can't display images.
-            let conv_text = if had_ui {
-                format!("{result}\n\n[Note: an interactive UI for this result is now displayed to the user in the chat. Refer to it naturally (e.g. \"shown above\") and do NOT claim you are unable to display images or this content.]")
+            // When an interactive UI or image was rendered, tell the model so it references
+            // it naturally instead of apologising that it can't display images.
+            let conv_text = if had_media {
+                format!("{result}\n\n[Note: the image/UI for this result is ALREADY displayed to the user in the chat above. Refer to it naturally (e.g. \"shown above\"). Do NOT output an image URL, a markdown image, or a link to it, and do NOT claim you are unable to display images — it is already visible.]")
             } else {
                 result
             };
@@ -1132,6 +1147,18 @@ async fn dispatch_tool<R: tauri::Runtime>(
                 let enable_apps = conn.config.enable_apps;
                 let server_id = conn.config.id.clone();
                 let rich = conn.call_tool_rich(name, args).await;
+
+                // Render any base64 image blocks inline — this is not gated by enable_apps or
+                // approval, so a tool that returns an image (e.g. a Mapbox static map) always
+                // shows it, even when the richer MCP-App panel isn't used.
+                if !silent {
+                    let imgs = crate::mcp::extract_image_data_urls(&rich.content);
+                    if !imgs.is_empty() {
+                        if let Some(state) = app.try_state::<crate::AppState>() {
+                            *state.pending_tool_images.lock().unwrap() = imgs;
+                        }
+                    }
+                }
 
                 // If the token changed (refresh happened), persist it to the frontend
                 if let (Some(before), crate::mcp::AuthConfig::OAuth2 { ref access_token, .. }) =
@@ -1489,6 +1516,33 @@ mod tests {
         assert!(names.contains(&"b1") && names.contains(&"b2"), "Bills must be pulled in: {names:?}");
         assert!(names.contains(&"m1"), "Members (level-1 pick) kept: {names:?}");
         assert!(!names.contains(&"h1"), "Hansard neither picked nor named: {names:?}");
+    }
+
+    /// A group is pulled in when the task names one of its TOOLS, even if the group's label
+    /// doesn't match — the fix for "show me a map" not reaching a server labelled "Mapbox"
+    /// whose tool is `static_map_image_tool`. (Uses a >=4 keyword so the recall net fires.)
+    #[tokio::test]
+    async fn select_includes_group_by_tool_name() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/api/chat"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "message": { "role": "assistant", "content": "[0]" }  // level-1 picks only group 0
+            })))
+            .mount(&server).await;
+
+        let groups = vec![
+            group("Postcodes", &["p1", "p2", "p3", "p4"]),
+            group("Mapbox", &["search_and_geocode_tool", "static_map_image_tool"]),
+            group("Other", &["o1","o2","o3","o4","o5","o6","o7","o8","o9","o10"]),
+        ]; // 16 > cap 8
+        let picked = select_tools_for_step(&server.uri(), "m",
+            "please geocode this place for me", &groups, 8).await;
+        let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
+        assert!(names.contains(&"search_and_geocode_tool"),
+            "Mapbox pulled in via its tool name matching 'geocode': {names:?}");
     }
 
     #[test]

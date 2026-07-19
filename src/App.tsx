@@ -40,6 +40,7 @@ interface ChatMessage {
   toolArgs?: string;
   imageDataUrls?: string[];  // base64 data URIs for attached images
   ui?: ToolUi;               // MCP-App interactive UI to render in a sandboxed iframe
+  toolImages?: string[];     // base64 data: image URLs from a tool result (e.g. a Mapbox map)
 }
 
 // MCP servers approved to render/interact with apps this session (frontend mirror
@@ -830,7 +831,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "2.0.8" },
+              hostInfo: { name: "LexiChat", version: "2.0.9" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -946,14 +947,26 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
 }
 
 export function ToolResultRow({
-  name, result, args, ui, onSend, onAttach,
+  name, result, args, ui, images, onSend, onAttach,
 }: {
-  name: string; result: string; args?: string; ui?: ToolUi;
+  name: string; result: string; args?: string; ui?: ToolUi; images?: string[];
   onSend: (text: string) => void;
   onAttach: (path: string, prompt: string) => void;
 }) {
   if (ui?.html) {
     return <McpAppFrame ui={ui} toolName={name} onSend={onSend} />;
+  }
+  // A tool that returned image(s) (e.g. a Mapbox static map) — render them inline. Works
+  // without the MCP-App flow; data: URLs are allowed by the CSP.
+  if (images && images.length > 0) {
+    return (
+      <div className="msg-tool-result">
+        {images.map((src, i) => (
+          <img key={i} src={src} alt={`${name} image ${i + 1}`}
+            style={{ maxWidth: "100%", borderRadius: 10, display: "block", marginTop: i ? 8 : 0 }} />
+        ))}
+      </div>
+    );
   }
   if (FILE_LISTING_TOOLS.has(name)) {
     return <FileBrowserResult name={name} result={result} args={args} onSend={onSend} onAttach={onAttach} />;
@@ -985,7 +998,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
-  const [showHistory, setShowHistory] = useState(true);
+  const [showHistory, setShowHistory] = useState(false); // hidden on launch; toggle to open
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
@@ -1136,7 +1149,7 @@ export default function App() {
       });
     }).then(u => cleanup.push(u));
 
-    listen<{ name: string; result: string; ui?: ToolUi }>("agent-tool-result", e => {
+    listen<{ name: string; result: string; ui?: ToolUi; images?: string[] }>("agent-tool-result", e => {
       if (!streamActive()) return;
       setMessages(prev => {
         // Find args for this tool call from the most recent streaming assistant message
@@ -1149,6 +1162,7 @@ export default function App() {
           toolName: e.payload.name,
           toolArgs: matchingCall?.args,
           ui: e.payload.ui,
+          toolImages: e.payload.images,
         }];
       });
     }).then(u => cleanup.push(u));
@@ -1621,6 +1635,7 @@ export default function App() {
                   result={msg.text}
                   args={msg.toolArgs}
                   ui={msg.ui}
+                  images={msg.toolImages}
                   onSend={send}
                   onAttach={(path, prompt) => { setAttachedFiles([path]); setInput(prompt); }}
                 />
@@ -1721,7 +1736,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 2.0.8</div>
+            <div className="about-version">Version 2.0.9</div>
 
             <div className="about-support">
               <div className="about-support-label">Support the project</div>
