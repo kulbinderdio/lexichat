@@ -285,22 +285,15 @@ const BUILTIN_SPARQL_ENDPOINTS: StoredSparqlEndpoint[] = [
       },
     ],
   },
-  {
-    id: "builtin-ons-stats",
-    title: "ONS Statistics (decommissioned)",
-    endpoint_url: "https://statistics.data.gov.uk/sparql",
-    enabled: false,
-    read_only: true,
-    prefixes: "",
-    schema_summary:
-      "NOTE: the ONS PublishMyData SPARQL endpoint (statistics.data.gov.uk) was decommissioned on 31 March 2025 and is no longer live — 'Test & discover' will report it unreachable. " +
-      "Data moved to portals such as the ONS Geography Portal and Explore Local Statistics. For live UK linked-data statistics use the OpenDataCommunities endpoint instead. Kept here as a reference/template.",
-    example_queries: [],
-  },
 ];
 
+// Builtin endpoints that have been retired — pruned from any user's stored list on load.
+// (statistics.data.gov.uk / ONS PublishMyData was decommissioned on 31 March 2025.)
+const REMOVED_BUILTIN_SPARQL_IDS = ["builtin-ons-stats"];
+
 function injectBuiltinSparql(endpoints: StoredSparqlEndpoint[]): StoredSparqlEndpoint[] {
-  let result = endpoints;
+  // Drop any retired builtins the user may still have stored.
+  let result = endpoints.filter(e => !REMOVED_BUILTIN_SPARQL_IDS.includes(e.id));
   for (const builtin of BUILTIN_SPARQL_ENDPOINTS) {
     const existing = result.find(e => e.id === builtin.id);
     if (!existing) {
@@ -837,7 +830,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "2.0.7" },
+              hostInfo: { name: "LexiChat", version: "2.0.8" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -1728,7 +1721,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 2.0.7</div>
+            <div className="about-version">Version 2.0.8</div>
 
             <div className="about-support">
               <div className="about-support-label">Support the project</div>

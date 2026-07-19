@@ -71,7 +71,6 @@ export interface StoredSparqlEndpoint {
 export const BUILTIN_SPARQL_ENDPOINT_IDS = new Set([
   "builtin-landregistry",
   "builtin-opendatacommunities",
-  "builtin-ons-stats",
 ]);
 
 export interface ContextVar {

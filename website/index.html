@@ -13,7 +13,7 @@
 
   gtag('config', 'G-NHGZKJ6KE1');
 </script>
-<meta name="description" content="LexiChat is a free, local-first AI assistant powered by Ollama. It runs entirely on your machine — private, fast, and extensible. New in v2.0.7: the Local Area Checker now maps any place inline, plus a reliable Stop button and steadier long runs."/>
+<meta name="description" content="LexiChat is a free, local-first AI assistant powered by Ollama. It runs entirely on your machine — private, fast, and extensible. New in v2.0.8: the Local Area Checker maps any place inline and reports accurate Census 2021 demographics, plus a reliable Stop button."/>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
@@ -79,15 +79,15 @@ tailwind.config = {
         <span class="material-symbols-outlined text-base" style="font-size:14px">expand_more</span>
       </button>
       <div class="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-150 z-50 p-2">
-        <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_universal.dmg" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+        <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_universal.dmg" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
           <div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-accent" style="font-size:18px">desktop_mac</span><span class="text-sm font-semibold">macOS</span></div>
           <span class="text-xs text-slate-400">Universal</span>
         </a>
-        <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_x64-setup.exe" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+        <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_x64-setup.exe" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
           <div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-accent" style="font-size:18px">desktop_windows</span><span class="text-sm font-semibold">Windows</span></div>
           <span class="text-xs text-slate-400">.exe installer</span>
         </a>
-        <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_amd64.AppImage" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
+        <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_amd64.AppImage" class="flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 rounded-xl transition-colors">
           <div class="flex items-center gap-2.5"><span class="material-symbols-outlined text-accent" style="font-size:18px">terminal</span><span class="text-sm font-semibold">Linux</span></div>
           <span class="text-xs text-slate-400">AppImage x64</span>
         </a>
@@ -121,11 +121,11 @@ tailwind.config = {
     <div class="flex flex-col items-center gap-3 mb-8 -mt-2">
       <span class="inline-flex items-center gap-1.5 bg-slate-100 text-slate-500 text-xs font-semibold px-3 py-1.5 rounded-full">
         <span class="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"></span>
-        v2.0.7
+        v2.0.8
       </span>
       <a href="docs/scheduled-jobs.html" class="inline-flex items-center gap-2 bg-accent/10 hover:bg-accent/15 text-accent text-sm font-semibold px-4 py-1.5 rounded-full border border-accent/20 transition-colors">
         <span class="material-symbols-outlined" style="font-size:15px;font-variation-settings:'FILL' 1">bolt</span>
-        New in v2.0.7 — map any area inline, plus a reliable Stop button
+        New in v2.0.8 — accurate local demographics, maps for any area
         <span class="material-symbols-outlined" style="font-size:15px">arrow_forward</span>
       </a>
     </div>
@@ -189,7 +189,7 @@ tailwind.config = {
   <div class="max-w-4xl mx-auto">
     <div class="text-center mb-10">
       <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-accent/10 text-accent text-xs font-bold tracking-widest uppercase mb-4 border border-accent/20">Download</div>
-      <h2 class="text-3xl md:text-4xl font-black tracking-tighter text-slate-900">Get LexiChat <span class="text-slate-400 font-light">v2.0.7</span></h2>
+      <h2 class="text-3xl md:text-4xl font-black tracking-tighter text-slate-900">Get LexiChat <span class="text-slate-400 font-light">v2.0.8</span></h2>
     </div>
 
     <!-- Platform tabs -->
@@ -219,7 +219,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">Universal DMG <span class="text-xs font-normal text-slate-400 ml-1">(recommended)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">18.99 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_universal.dmg"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_universal.dmg"
               class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -244,7 +244,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">.exe Installer <span class="text-xs font-normal text-slate-400 ml-1">(recommended)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">5.37 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_x64-setup.exe"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_x64-setup.exe"
               class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -254,7 +254,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">.msi Installer</div>
               <div class="text-xs text-slate-400 mt-0.5">7.39 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_x64_en-US.msi"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_x64_en-US.msi"
               class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -281,7 +281,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">AppImage <span class="text-xs font-normal text-slate-400 ml-1">(recommended — runs on any distro)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">88.2 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_amd64.AppImage"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_amd64.AppImage"
               class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -291,7 +291,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">.deb <span class="text-xs font-normal text-slate-400 ml-1">(Debian / Ubuntu)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">9.27 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_amd64.deb"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_amd64.deb"
               class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -301,7 +301,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">.rpm <span class="text-xs font-normal text-slate-400 ml-1">(Fedora / RHEL)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">9.27 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat-2.0.7-1.x86_64.rpm"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat-2.0.8-1.x86_64.rpm"
               class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -315,7 +315,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">AppImage <span class="text-xs font-normal text-slate-400 ml-1">(recommended — runs on any distro)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">86.23 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_aarch64.AppImage"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_aarch64.AppImage"
               class="flex items-center gap-1.5 bg-accent hover:bg-accent-dark text-white text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -325,7 +325,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">.deb <span class="text-xs font-normal text-slate-400 ml-1">(Debian / Ubuntu)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">9.23 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat_2.0.7_arm64.deb"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat_2.0.8_arm64.deb"
               class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
@@ -335,7 +335,7 @@ tailwind.config = {
               <div class="font-semibold text-sm">.rpm <span class="text-xs font-normal text-slate-400 ml-1">(Fedora / RHEL)</span></div>
               <div class="text-xs text-slate-400 mt-0.5">9.23 MB</div>
             </div>
-            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.7/LexiChat-2.0.7-1.aarch64.rpm"
+            <a href="https://github.com/kulbinderdio/lexichat/releases/download/v2.0.8/LexiChat-2.0.8-1.aarch64.rpm"
               class="flex items-center gap-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-sm font-semibold px-4 py-2 rounded-xl transition-colors flex-shrink-0">
               <span class="material-symbols-outlined" style="font-size:16px">download</span>Download
             </a>
