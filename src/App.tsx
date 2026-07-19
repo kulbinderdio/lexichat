@@ -837,7 +837,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "2.0.6" },
+              hostInfo: { name: "LexiChat", version: "2.0.7" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -1046,6 +1046,22 @@ export default function App() {
 
   useEffect(() => { refreshConversations(); }, [refreshConversations]);
 
+  // Stream ownership: agent events from Rust are anonymous, so a run that's been
+  // superseded (new chat / profile switch) must not have its trailing tokens land in the
+  // now-visible chat. `streamEpoch` bumps on every send AND every context switch;
+  // `streamOwner` is pinned to the epoch when a run starts. Events are applied only while
+  // the two match — i.e. the run that owns the stream is still the one on screen.
+  const streamEpoch = useRef(0);
+  const streamOwner = useRef(0);
+  const streamActive = () => streamOwner.current === streamEpoch.current;
+
+  // Cancel a running agent loop and supersede its stream so late events are dropped.
+  const stopActiveRun = () => {
+    invoke("stop_generation").catch(() => {});
+    streamEpoch.current += 1;
+    setIsRunning(false);
+  };
+
   // Auto-save the conversation when an agent run finishes (transition running→idle).
   const prevRunning = useRef(false);
   useEffect(() => {
@@ -1101,6 +1117,7 @@ export default function App() {
     const cleanup: Array<() => void> = [];
 
     listen<{ delta: string }>("agent-token", e => {
+      if (!streamActive()) return;
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) {
@@ -1111,6 +1128,7 @@ export default function App() {
     }).then(u => cleanup.push(u));
 
     listen<{ name: string; args: string }>("agent-tool-call", e => {
+      if (!streamActive()) return;
       setMessages(prev => {
         const updated = prev.map(m =>
           m.role === "assistant" && m.streaming
@@ -1126,6 +1144,7 @@ export default function App() {
     }).then(u => cleanup.push(u));
 
     listen<{ name: string; result: string; ui?: ToolUi }>("agent-tool-result", e => {
+      if (!streamActive()) return;
       setMessages(prev => {
         // Find args for this tool call from the most recent streaming assistant message
         const streamingMsg = [...prev].reverse().find(m => m.role === "assistant" && m.streaming);
@@ -1144,6 +1163,7 @@ export default function App() {
     // The step is being re-sampled: discard the partial text the failed attempt streamed,
     // otherwise the retry's tokens append to it.
     listen<{ step: number; attempt: number; error: string }>("agent-retry", () => {
+      if (!streamActive()) return;
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) return prev.slice(0, -1);
@@ -1152,6 +1172,7 @@ export default function App() {
     }).then(u => cleanup.push(u));
 
     listen<{ error: string | null }>("agent-done", e => {
+      if (!streamActive()) return;
       setIsRunning(false);
       setMessages(prev => {
         const closed = prev.map(m => m.streaming ? { ...m, streaming: false } : m);
@@ -1278,6 +1299,9 @@ export default function App() {
     setAttachedFiles([]);
     setInput("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
+    // This run now owns the event stream (see streamEpoch/streamOwner).
+    streamEpoch.current += 1;
+    streamOwner.current = streamEpoch.current;
     setIsRunning(true);
 
     try {
@@ -1392,6 +1416,9 @@ export default function App() {
   const [chatParams, setChatParams] = useState<ChatParams>(defaultChatParams);
 
   const handleReset = async () => {
+    // Halt any in-flight run and supersede its stream so its output can't leak into the
+    // fresh chat (also covers profile switches, which call handleReset).
+    stopActiveRun();
     await invoke("reset_conversation");
     setMessages([]);
     setActiveConversationId(null);
@@ -1701,7 +1728,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 2.0.6</div>
+            <div className="about-version">Version 2.0.7</div>
 
             <div className="about-support">
               <div className="about-support-label">Support the project</div>
