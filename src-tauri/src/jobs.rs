@@ -443,6 +443,7 @@ pub async fn execute_job(
             registered_specs, Vec::new(), &temp_mcp, ctx.allowed_dirs.clone(),
             Vec::new(), // no attached-file sandbox paths in jobs
             10, 0, app, true, 25, // web_search=10, tool_result_limit=default; 25 steps — enough headroom for multi-step workflows
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), // jobs aren't user-cancellable
         ).await;
         // temp_mcp drops here → MCPConnections drop → kill_on_drop kills stdio processes
         r
@@ -472,6 +473,7 @@ pub async fn execute_job(
             specs, Vec::new(), &state.mcp_connections, allowed_dirs,
             Vec::new(), // no attached-file sandbox paths in jobs
             10, 0, app, true, 25, // web_search=10, tool_result_limit=default; 25 steps — enough headroom for multi-step workflows
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), // jobs aren't user-cancellable
         ).await
     };
 

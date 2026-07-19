@@ -837,7 +837,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "2.0.5" },
+              hostInfo: { name: "LexiChat", version: "2.0.6" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -1663,7 +1663,7 @@ export default function App() {
             </select>
             <div className="input-spacer" />
             {isRunning ? (
-              <button className="send-circle stop" onClick={() => { invoke("reset_conversation"); setIsRunning(false); }}>
+              <button className="send-circle stop" onClick={() => { invoke("stop_generation"); setIsRunning(false); }}>
                 <div className="stop-square" />
               </button>
             ) : (
@@ -1701,7 +1701,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 2.0.5</div>
+            <div className="about-version">Version 2.0.6</div>
 
             <div className="about-support">
               <div className="about-support-label">Support the project</div>

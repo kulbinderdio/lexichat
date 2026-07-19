@@ -209,6 +209,9 @@ enum Transport {
     Stdio {
         stdin:  AsyncMutex<ChildStdin>,
         stdout: AsyncMutex<BufReader<ChildStdout>>,
+        /// Tail of the process's stderr, filled by a background reader. Surfaced in errors
+        /// so a server that dies during the handshake explains why (e.g. "profile not found").
+        stderr: std::sync::Arc<std::sync::Mutex<String>>,
         #[allow(dead_code)]
         child:  Child,
     },
@@ -220,6 +223,56 @@ enum Transport {
 }
 
 // ── Live connection ───────────────────────────────────────────────────────────
+
+/// PATH augmented with the common tool locations a Finder/Dock-launched app misses
+/// (Homebrew, Docker Desktop, user bin dirs). Only existing dirs are appended, so it's
+/// harmless on Linux where those paths don't exist. On Windows the inherited PATH is used
+/// as-is (different separator and no equivalent gap).
+fn augmented_path() -> String {
+    #[cfg(not(unix))]
+    { std::env::var("PATH").unwrap_or_default() }
+    #[cfg(unix)]
+    {
+        let mut dirs: Vec<String> = std::env::var("PATH")
+            .map(|p| p.split(':').map(String::from).collect())
+            .unwrap_or_default();
+        let mut extra = vec![
+            "/opt/homebrew/bin", "/opt/homebrew/sbin",
+            "/usr/local/bin", "/usr/local/sbin",
+            "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+            "/Applications/Docker.app/Contents/Resources/bin",
+        ].into_iter().map(String::from).collect::<Vec<_>>();
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = home.to_string_lossy();
+            for sub in [".local/bin", ".cargo/bin", ".deno/bin", ".bun/bin", "go/bin", ".docker/bin", ".volta/bin"] {
+                extra.push(format!("{home}/{sub}"));
+            }
+        }
+        for d in extra {
+            if !dirs.iter().any(|x| x == &d) && std::path::Path::new(&d).is_dir() {
+                dirs.push(d);
+            }
+        }
+        dirs.join(":")
+    }
+}
+
+/// Resolve a bare executable name to its absolute path by searching `path`. Returns None
+/// if `exe` already contains a separator (use it verbatim) or isn't found.
+fn resolve_in_path(exe: &str, path: &str) -> Option<String> {
+    if exe.is_empty() || exe.contains(std::path::MAIN_SEPARATOR) {
+        return None;
+    }
+    let sep = if cfg!(unix) { ':' } else { ';' };
+    for dir in path.split(sep) {
+        if dir.is_empty() { continue; }
+        let cand = std::path::Path::new(dir).join(exe);
+        if cand.is_file() {
+            return Some(cand.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
 
 pub struct MCPConnection {
     pub config: MCPServerConfig,
@@ -244,24 +297,55 @@ impl MCPConnection {
             let exe = parts.next().unwrap_or("");
             let inline_args: Vec<&str> = parts.collect();
 
-            let mut cmd = tokio::process::Command::new(exe);
+            // GUI apps launched from Finder/Dock inherit launchd's minimal PATH, which omits
+            // Homebrew, Docker Desktop and user bin dirs — so `docker`/`npx`/`uvx` fail to
+            // spawn even though they run fine in a terminal. Resolve against an augmented PATH.
+            let path = augmented_path();
+            let exe_abs = resolve_in_path(exe, &path);
+            let program: &str = exe_abs.as_deref().unwrap_or(exe);
+
+            let mut cmd = tokio::process::Command::new(program);
             cmd.args(&inline_args)
                .args(&config.args)
                .envs(&config.env)
+               .env("PATH", &path)   // give the child (and its subprocesses) a full PATH too
                .kill_on_drop(true)
                .stdin(Stdio::piped())
                .stdout(Stdio::piped())
-               .stderr(Stdio::null());
+               .stderr(Stdio::piped());
 
             let mut child = cmd.spawn()
-                .map_err(|e| format!("Failed to start '{}': {e}", config.command))?;
+                .map_err(|e| {
+                    let hint = if e.kind() == std::io::ErrorKind::NotFound {
+                        format!(" — '{exe}' was not found on PATH. Enter its full path (e.g. /usr/local/bin/{exe}), or make sure the tool is installed.")
+                    } else { String::new() };
+                    format!("Failed to start '{}': {e}{hint}", config.command)
+                })?;
 
             let stdin  = child.stdin.take().ok_or("No stdin")?;
             let stdout = child.stdout.take().ok_or("No stdout")?;
 
+            // Drain stderr in the background into a bounded tail buffer so a server that
+            // exits during the handshake can tell us why.
+            let stderr_buf = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            if let Some(errpipe) = child.stderr.take() {
+                let sink = stderr_buf.clone();
+                tokio::spawn(async move {
+                    let mut lines = BufReader::new(errpipe).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if let Ok(mut s) = sink.lock() {
+                            s.push_str(&line);
+                            s.push('\n');
+                            if s.len() > 4000 { let cut = s.len() - 4000; s.drain(..cut); }
+                        }
+                    }
+                });
+            }
+
             Transport::Stdio {
                 stdin:  AsyncMutex::new(stdin),
                 stdout: AsyncMutex::new(BufReader::new(stdout)),
+                stderr: stderr_buf,
                 child,
             }
         };
@@ -313,7 +397,7 @@ impl MCPConnection {
                 }
                 Ok(val)
             }
-            Transport::Stdio { stdin, stdout, .. } => {
+            Transport::Stdio { stdin, stdout, stderr, child } => {
                 let line = serde_json::to_string(&msg).unwrap() + "\n";
                 {
                     let mut s = stdin.lock().await;
@@ -324,7 +408,21 @@ impl MCPConnection {
                 loop {
                     let mut buf = String::new();
                     out.read_line(&mut buf).await.map_err(|e| e.to_string())?;
-                    if buf.is_empty() { return Err("MCP server closed connection".into()); }
+                    if buf.is_empty() {
+                        // Give the background reader a moment to flush the process's dying words.
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        let tail = stderr.lock().map(|s| s.trim().to_string()).unwrap_or_default();
+                        let exit = match child.try_wait() {
+                            Ok(Some(status)) => format!(" (process exited: {status})"),
+                            _ => String::new(),
+                        };
+                        if tail.is_empty() {
+                            return Err(format!("MCP server closed connection{exit}"));
+                        }
+                        let tail = tail.rsplit('\n').take(6).collect::<Vec<_>>()
+                            .into_iter().rev().collect::<Vec<_>>().join("\n");
+                        return Err(format!("MCP server closed connection{exit}. Its output was:\n{tail}"));
+                    }
                     let buf = buf.trim();
                     if buf.is_empty() { continue; }
                     let val: Value = serde_json::from_str(buf)

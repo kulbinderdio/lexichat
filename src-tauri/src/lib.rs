@@ -49,6 +49,9 @@ pub struct AppState {
     /// Id of the saved conversation the current chat maps to, so auto-save
     /// updates the same record. `None` = a fresh chat not yet persisted.
     pub active_conversation_id: Mutex<Option<String>>,
+    /// Set by `stop_generation` to cancel the running agent loop. Reset to false at the
+    /// start of each `send_message`. Checked between steps and while streaming tokens.
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for AppState {
@@ -74,6 +77,7 @@ impl Default for AppState {
             pending_tool_ui: Mutex::new(None),
             apps_allowed: Mutex::new(std::collections::HashSet::new()),
             active_conversation_id: Mutex::new(None),
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 }
@@ -115,6 +119,14 @@ async fn set_ollama_host(host: String, state: State<'_, AppState>) -> Result<(),
 async fn reset_conversation(state: State<'_, AppState>) -> Result<(), String> {
     state.conversation.lock().unwrap().clear();
     *state.active_conversation_id.lock().unwrap() = None;
+    Ok(())
+}
+
+/// Cancel the running agent loop. It stops at the next step boundary or token, whichever
+/// comes first, and emits `agent-done`. Conversation history is left intact.
+#[tauri::command]
+fn stop_generation(state: State<'_, AppState>) -> Result<(), String> {
+    state.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     Ok(())
 }
 
@@ -292,6 +304,10 @@ async fn send_message(
 ) -> Result<(), String> {
     let host = state.ollama_host.lock().unwrap().clone();
 
+    // Fresh run — clear any stop request left over from a previous turn.
+    state.cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+    let cancel = state.cancel.clone();
+
     {
         // Base64-encode any attached images for vision models
         use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
@@ -431,6 +447,7 @@ async fn send_message(
         &app,
         false, // silent = false for interactive chat
         args.max_steps.clamp(1, 50), // configurable; default 20
+        cancel,
     )
     .await
     .map_err(|e| e.to_string())
@@ -1436,6 +1453,7 @@ pub fn run() {
             get_models,
             set_ollama_host,
             reset_conversation,
+            stop_generation,
             send_message,
             get_builtin_schemas,
             get_spec_tools,

@@ -226,6 +226,7 @@ async fn stream_chat<R: tauri::Runtime>(
     keep_alive: Option<&str>,
     app: &AppHandle<R>,
     silent: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<(String, Vec<WireToolCall>)> {
     let client = reqwest::Client::builder()
         // Only time out the initial TCP connection — not the streaming duration.
@@ -254,6 +255,11 @@ async fn stream_chat<R: tauri::Runtime>(
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
+        // Stop pressed mid-generation — abandon the rest of the stream and return what
+        // we have. The agent loop's step-boundary check then ends the run.
+        if let Some(c) = cancel {
+            if c.load(std::sync::atomic::Ordering::SeqCst) { break; }
+        }
         // A mid-stream network error (e.g. "error decoding response body") should not
         // discard a response that's already been partially received — break and return
         // what we have rather than propagating the error.
@@ -632,6 +638,50 @@ fn extract_json_array(s: &str) -> String {
 
 // ── Agent loop ────────────────────────────────────────────────────────────────
 
+/// Backstop that guarantees the user always sees a reply. Called when the interactive
+/// loop is about to end but nothing was ever streamed to the chat window. Forces one
+/// final, tool-free completion and streams it; if the model still returns nothing, emits
+/// a plain message so the chat is never left blank.
+async fn ensure_final_answer<R: tauri::Runtime>(
+    host: &str,
+    model: &str,
+    system_prompt: &str,
+    conversation: &Mutex<Vec<WireMessage>>,
+    options: Option<&ChatOptions>,
+    keep_alive: Option<&str>,
+    app: &AppHandle<R>,
+) {
+    {
+        let mut conv = conversation.lock().unwrap();
+        conv.push(WireMessage {
+            role: "user".into(),
+            content: Some("Now write your complete answer to the user, based on all the work above. Respond in full. Do NOT call any tools.".into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None,
+        });
+    }
+    let wire = {
+        let conv = conversation.lock().unwrap();
+        let mut w = vec![WireMessage {
+            role: "system".into(),
+            content: Some(system_prompt.into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None,
+        }];
+        w.extend(conv.clone());
+        w
+    };
+    // No tools this turn — we want prose, not another tool call.
+    let no_tools: Vec<ToolSchema> = Vec::new();
+    let streamed = match stream_chat(host, model, &wire, &no_tools, options, keep_alive, app, false, None).await {
+        Ok((text, _)) => !text.trim().is_empty(),
+        Err(_) => false,
+    };
+    if !streamed {
+        let _ = app.emit("agent-token", TokenEvent {
+            delta: "I completed the steps but couldn't produce a written summary this time — the model returned no final text. Please try again, or switch to a more capable model (e.g. qwen3).".into(),
+        });
+    }
+}
+
 pub async fn agent_loop<R: tauri::Runtime>(
     host: &str,
     model: &str,
@@ -658,7 +708,10 @@ pub async fn agent_loop<R: tauri::Runtime>(
     app: &AppHandle<R>,
     silent: bool,
     max_steps: usize,
+    // Set by the Stop button; checked between steps and while streaming to abort the run.
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> anyhow::Result<()> {
+    use std::sync::atomic::Ordering;
     let run_start = std::time::Instant::now();
     let mut nudged = false;
     let mut continuations = 0usize;
@@ -678,8 +731,22 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // Tools the model called last step — kept available next step so a multi-step chain
     // isn't broken by them dropping out of the fresh selection.
     let mut last_used: Vec<String> = Vec::new();
+    // Whether any assistant text was ever streamed to the chat. If a run ends with this
+    // still false, we force a final answer so the user never sees a blank reply.
+    let mut streamed_text = false;
     let discoverable_total: usize = tool_groups.iter().map(|g| g.tools.len()).sum();
     for step in 0..max_steps {
+        // Stop requested — end the run cleanly before doing any more work.
+        if cancel.load(Ordering::SeqCst) {
+            if !silent {
+                let _ = app.emit("agent-done", DoneEvent { error: None });
+                let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                    total_ms: run_start.elapsed().as_millis() as u64,
+                    error: None,
+                });
+            }
+            return Ok(());
+        }
         let step_start = std::time::Instant::now();
 
         // Per-step tool selection: with many candidate tools, narrow to those relevant to the
@@ -731,7 +798,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
         // persistent failure (or any other error) ends the run.
         let mut attempt = 0usize;
         let (full_text, tool_calls) = loop {
-            match stream_chat(host, model, &wire, &tools, options.as_ref(), keep_alive.as_deref(), app, silent).await {
+            match stream_chat(host, model, &wire, &tools, options.as_ref(), keep_alive.as_deref(), app, silent, Some(cancel.as_ref())).await {
                 Ok(v) => break v,
                 Err(e) if attempt < MALFORMED_TOOL_CALL_RETRIES
                     && is_malformed_tool_call_error(&e.to_string()) =>
@@ -766,6 +833,8 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 duration_ms: step_ms,
             });
         }
+
+        if !full_text.trim().is_empty() { streamed_text = true; }
 
         // Remember which tools were called so they stay available next step (chain continuity).
         last_used = tool_calls.iter().map(|tc| tc.function.name.clone()).collect();
@@ -820,6 +889,12 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 continue;
             }
             if !silent {
+                // Never end an interactive run blank — salvage a written answer if the
+                // model finished without ever streaming any text.
+                if !streamed_text {
+                    ensure_final_answer(host, model, system_prompt, conversation,
+                        options.as_ref(), keep_alive.as_deref(), app).await;
+                }
                 let _ = app.emit("agent-done", DoneEvent { error: None });
                 let _ = app.emit("debug-run-done", DebugRunDoneEvent {
                     total_ms: run_start.elapsed().as_millis() as u64,
@@ -896,6 +971,12 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // Hit max steps
     let msg = "Stopped: reached maximum steps without a final answer.".to_string();
     if !silent {
+        // The model ran out of steps still working — force it to write up what it has
+        // so the user gets the report rather than a blank window.
+        if !streamed_text {
+            ensure_final_answer(host, model, system_prompt, conversation,
+                options.as_ref(), keep_alive.as_deref(), app).await;
+        }
         let _ = app.emit("agent-done", DoneEvent { error: Some(msg.clone()) });
         let _ = app.emit("debug-run-done", DebugRunDoneEvent {
             total_ms: run_start.elapsed().as_millis() as u64,
@@ -1266,6 +1347,7 @@ mod tests {
             app.handle(),
             false, // interactive chat, as in the failing session
             20,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
@@ -1375,6 +1457,7 @@ mod tests {
         let result = agent_loop(
             &server.uri(), "m", "sys", &[], &groups, 5, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), true, 5,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ).await;
         assert!(result.is_ok(), "run should complete: {result:?}");
     }
@@ -1503,6 +1586,7 @@ mod tests {
         let result = agent_loop(
             &server.uri(), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), false, 20,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
         .await;
 
