@@ -20,7 +20,8 @@ use mcp::{MCPServerConfig, MCPConnection, AuthConfig};
 // ── App state ─────────────────────────────────────────────────────────────────
 
 pub struct AppState {
-    pub ollama_host:          Mutex<String>,
+    /// Active inference backend (Ollama or an OpenAI-compatible endpoint) + its base URL/key.
+    pub backend:              Mutex<ollama::Backend>,
     pub conversation:         Mutex<Vec<ollama::WireMessage>>,
     pub openapi_specs:        Mutex<Vec<RegisteredSpec>>,
     pub sparql_endpoints:     Mutex<Vec<RegisteredSparqlEndpoint>>,
@@ -64,7 +65,7 @@ impl Default for AppState {
             .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
             .unwrap_or_default();
         Self {
-            ollama_host:     Mutex::new("http://localhost:11434".into()),
+            backend:         Mutex::new(ollama::Backend::ollama("http://localhost:11434")),
             conversation:    Mutex::new(Vec::new()),
             openapi_specs:   Mutex::new(Vec::new()),
             sparql_endpoints: Mutex::new(Vec::new()),
@@ -107,15 +108,37 @@ pub fn dirs_path() -> std::path::PathBuf {
 
 // ── Ollama commands ───────────────────────────────────────────────────────────
 
-#[tauri::command]
-async fn get_models(state: State<'_, AppState>) -> Result<Vec<String>, String> {
-    let host = state.ollama_host.lock().unwrap().clone();
-    ollama::list_models(&host).await.map_err(|e| e.to_string())
+/// Build a `Backend` from the frontend's loosely-typed connection fields.
+fn backend_from(provider: Option<String>, base_url: String, api_key: Option<String>) -> ollama::Backend {
+    let kind = match provider.as_deref() {
+        Some("openai") => ollama::ProviderKind::OpenAI,
+        _ => ollama::ProviderKind::Ollama,
+    };
+    ollama::Backend { kind, base_url, api_key: api_key.filter(|k| !k.is_empty()) }
 }
 
+#[derive(Deserialize)]
+struct BackendArgs {
+    base_url: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+}
+
+/// List models from a specific server. Each configured server is queried independently so the UI
+/// can show the union. Uses the `args`-struct IPC convention for verbatim snake_case fields.
 #[tauri::command]
-async fn set_ollama_host(host: String, state: State<'_, AppState>) -> Result<(), String> {
-    *state.ollama_host.lock().unwrap() = host;
+async fn get_models(args: BackendArgs) -> Result<Vec<String>, String> {
+    let backend = backend_from(args.provider, args.base_url, args.api_key);
+    ollama::list_models(&backend).await.map_err(|e| e.to_string())
+}
+
+/// Set the active *default* backend — used by the job designer and background jobs that carry no
+/// explicit server. Interactive chat routes per-message via `send_message` instead.
+#[tauri::command]
+async fn set_backend(args: BackendArgs, state: State<'_, AppState>) -> Result<(), String> {
+    *state.backend.lock().unwrap() = backend_from(args.provider, args.base_url, args.api_key);
     Ok(())
 }
 
@@ -254,6 +277,13 @@ pub struct SendMessageArgs {
     pub message: String,
     pub system_prompt: String,
     pub tools: Vec<ollama::ToolSchema>,
+    // Backend routing: which server this model belongs to. Absent → the active default backend.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
     #[serde(default)]
     pub image_paths: Vec<String>,
     /// Non-image files the user attached. The run_python sandbox is allowed to
@@ -306,7 +336,12 @@ async fn send_message(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let host = state.ollama_host.lock().unwrap().clone();
+    // Route to the server this model belongs to (sent by the frontend). Fall back to the active
+    // default backend when the caller didn't specify one (e.g. legacy callers).
+    let backend = match args.base_url.clone() {
+        Some(url) if !url.is_empty() => backend_from(args.provider.clone(), url, args.api_key.clone()),
+        _ => state.backend.lock().unwrap().clone(),
+    };
 
     // Fresh run — clear any stop request left over from a previous turn.
     state.cancel.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -437,7 +472,7 @@ async fn send_message(
     };
 
     ollama::agent_loop(
-        &host,
+        &backend,
         &args.model,
         &args.system_prompt,
         &always_tools,
@@ -1257,8 +1292,8 @@ async fn draft_job_from_goal(
     args: job_designer::DraftJobArgs,
     state: State<'_, AppState>,
 ) -> Result<job_designer::DraftedJob, String> {
-    let host = state.ollama_host.lock().unwrap().clone();
-    job_designer::draft_job(&host, args).await
+    let backend = state.backend.lock().unwrap().clone();
+    job_designer::draft_job(&backend, args).await
 }
 
 #[tauri::command]
@@ -1460,7 +1495,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_models,
-            set_ollama_host,
+            set_backend,
             reset_conversation,
             stop_generation,
             send_message,

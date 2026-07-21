@@ -101,7 +101,9 @@ export interface Profile {
   maxTools: number;
   chatParams?: ChatParams;
   contextVars?: ContextVar[];
-  host?: string;
+  // Which registered server this profile's default model lives on. undefined = resolve by model.
+  serverId?: string;
+  host?: string; // legacy (pre-registry per-profile host override)
   allowedDirs?: string[];
   // Per-profile override for wiki memory. undefined = follow the global default.
   wikiEnabled?: boolean;
@@ -109,12 +111,70 @@ export interface Profile {
   toolResultLimit?: number;
 }
 
+export type ProviderKind = "ollama" | "openai";
+
+// A configured inference server. Models from every server are shown together in the model
+// dropdown (prefixed with `name`), and each chat is routed to its model's server.
+export interface ServerConfig {
+  id: string;
+  name: string;               // short label; used as the dropdown prefix
+  provider: ProviderKind;
+  baseUrl: string;
+  apiKey?: string;            // OpenAI-compatible only
+  // Exactly what this endpoint returned on the last successful fetch — REPLACED each refresh, so
+  // repointing the server at a different endpoint doesn't leave stale models behind. `undefined`
+  // means "never fetched yet" (drives first-fetch auto-enable).
+  catalog?: string[];
+  // Models the user typed by hand (for endpoints that don't enumerate, e.g. Anthropic). Kept
+  // separate from `catalog` so they survive a refetch. The Models-tab list = catalog ∪ manual.
+  manualModels?: string[];
+  // The curated subset actually shown in the chat dropdown. Small pools auto-enable all
+  // (non-embedding); large ones start empty so the user picks. `undefined` = not curated yet.
+  models?: string[];
+}
+
+// Above this many chat models in a freshly-fetched catalog, don't auto-enable — make the user
+// pick (otherwise a provider like OpenRouter dumps 300+ into the dropdown).
+export const AUTO_ENABLE_MAX = 20;
+
+// Heuristic: models that can't chat (embeddings / rerankers) so they're excluded from auto-enable
+// and flagged in the Models tab. Name-based so it works across providers; the user can override.
+export function isEmbeddingModel(name: string): boolean {
+  return /(^|[-_/.])(embed|embedding|rerank|reranker|bge|gte|minilm|e5)\d*([-_/.]|$)|text-embedding|nomic-embed|mxbai-embed/i.test(name);
+}
+
+/// The full model pool for a server = what it returned last (`catalog`) ∪ hand-typed entries.
+export function serverModelPool(s: ServerConfig): string[] {
+  return [...new Set([...(s.catalog ?? []), ...(s.manualModels ?? [])])];
+}
+
+/// Fold a freshly-fetched model list into a server. `catalog` is REPLACED with exactly what the
+/// endpoint returned (so repointing the server drops the old endpoint's models); hand-typed
+/// entries in `manualModels` are preserved. First fetch auto-enables a small chat set (or none if
+/// large); later fetches keep the user's curated set, pruned to what still exists. An empty fetch
+/// is a no-op (an unreachable endpoint doesn't wipe the current list).
+export function reconcileCatalog(s: ServerConfig, fetched: string[]): ServerConfig {
+  if (fetched.length === 0) return s;
+  const pool = [...new Set([...fetched, ...(s.manualModels ?? [])])];
+  let models: string[];
+  if (s.catalog === undefined) {
+    const chat = pool.filter(m => !isEmbeddingModel(m));
+    models = chat.length <= AUTO_ENABLE_MAX ? chat : [];
+  } else {
+    models = (s.models ?? []).filter(m => pool.includes(m));
+  }
+  return { ...s, catalog: fetched, models };
+}
+
 export interface AppSettings {
+  servers: ServerConfig[];
+  // Legacy single-backend fields — kept for one-time migration into `servers`.
   host: string;
+  provider?: ProviderKind;
+  apiKey?: string;
   maxTools: number;
   webSearchResults: number;
   maxSteps: number;
-  numGPULayers: number | null;
   models: string[];
   enabledTools: Record<string, boolean>;
   toolRegistry: ToolRegistry;
@@ -321,11 +381,13 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
   const selected = settings.profiles.find(p => p.id === selectedId) ?? null;
 
   const newProfile = () => {
+    const firstServer = (settings.servers ?? []).find(s => (s.models ?? []).length > 0);
     const p: Profile = {
       id: uid(),
       name: "New Profile",
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
-      model: settings.models[0] ?? "",
+      model: firstServer?.models?.[0] ?? "",
+      serverId: firstServer?.id,
       enabledTools: { ...settings.enabledTools },
       enabledMcpServerIds: [],
       enabledOpenapiSpecIds: [],
@@ -601,10 +663,24 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
 
             <div className="field" style={{ marginBottom: 12 }}>
               <label>Default Model</label>
-              <select className="admin-input" value={d.model}
-                onChange={e => setDraft({ ...d, model: e.target.value })}>
-                <option value="">— same as global —</option>
-                {settings.models.map(m => <option key={m} value={m}>{m}</option>)}
+              <select className="admin-input"
+                value={d.model ? `${d.serverId ?? ""}${d.model}` : ""}
+                onChange={e => {
+                  const v = e.target.value;
+                  if (!v) { setDraft({ ...d, model: "", serverId: undefined }); return; }
+                  const i = v.indexOf("");
+                  setDraft({ ...d, serverId: v.slice(0, i), model: v.slice(i + 1) });
+                }}>
+                <option value="">— pick when chatting —</option>
+                {(settings.servers ?? []).map(s => {
+                  const ms = s.models ?? [];
+                  if (ms.length === 0) return null;
+                  return (
+                    <optgroup key={s.id} label={s.name}>
+                      {ms.map(m => <option key={s.id + m} value={`${s.id}${m}`}>{s.name} / {m}</option>)}
+                    </optgroup>
+                  );
+                })}
               </select>
             </div>
 
@@ -991,52 +1067,101 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
 // ── Models tab ────────────────────────────────────────────────────────────────
 
 function ModelsTab({ settings, onChange }: { settings: AppSettings; onChange: (s: AppSettings) => void }) {
-  const [newModel, setNewModel] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
+  const [newModel, setNewModel] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState<Record<string, string>>({});
+  const [refreshing, setRefreshing] = useState("");
+  const servers = settings.servers ?? [];
 
-  const addModel = () => {
-    const name = newModel.trim();
-    if (!name || settings.models.includes(name)) return;
-    onChange({ ...settings, models: [...settings.models, name] });
-    setNewModel("");
+  const patch = (id: string, p: Partial<ServerConfig>) =>
+    onChange({ ...settings, servers: servers.map(s => s.id === id ? { ...s, ...p } : s) });
+
+  const toggle = (s: ServerConfig, m: string, on: boolean) => {
+    const enabled = new Set(s.models ?? []);
+    if (on) enabled.add(m); else enabled.delete(m);
+    patch(s.id, { models: [...enabled] });
   };
 
-  const removeModel = (name: string) =>
-    onChange({ ...settings, models: settings.models.filter(m => m !== name) });
+  const addManual = (s: ServerConfig) => {
+    const name = (newModel[s.id] ?? "").trim();
+    if (!name) return;
+    const manualModels = (s.manualModels ?? []).includes(name) ? (s.manualModels ?? []) : [...(s.manualModels ?? []), name];
+    const models       = (s.models       ?? []).includes(name) ? (s.models       ?? []) : [...(s.models       ?? []), name];
+    patch(s.id, { manualModels, models });
+    setNewModel(n => ({ ...n, [s.id]: "" }));
+  };
 
-  const refresh = async () => {
-    setRefreshing(true);
+  const refresh = async (s: ServerConfig) => {
+    setRefreshing(s.id);
     try {
-      const fetched = await invoke<string[]>("get_models");
-      const merged = [...fetched, ...settings.models.filter(m => !fetched.includes(m))];
-      onChange({ ...settings, models: merged });
+      const fetched = await invoke<string[]>("get_models",
+        { args: { base_url: s.baseUrl, provider: s.provider, api_key: s.apiKey ?? null } });
+      const next = reconcileCatalog(s, fetched);
+      patch(s.id, { catalog: next.catalog, models: next.models });
     } catch { }
-    setRefreshing(false);
+    setRefreshing("");
   };
 
   return (
-    <div className="admin-scroll" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div style={{ flex: 1 }}>
-        {settings.models.length === 0 ? (
-          <div className="admin-empty">No models. Add one below or refresh from Ollama.</div>
-        ) : (
-          <section className="admin-section">
-            {settings.models.map(m => (
-              <div key={m} className="admin-row">
-                <span style={{ fontSize: 13, opacity: 0.4 }}>🖥</span>
-                <span style={{ flex: 1, fontFamily: "monospace", fontSize: 12 }}>{m}</span>
-                <button className="icon-btn danger" onClick={() => removeModel(m)}>✕</button>
+    <div className="admin-scroll" style={{ padding: "16px 20px" }}>
+      {servers.length === 0 && <div className="admin-empty">No servers configured. Add one in the Server tab.</div>}
+      {servers.map(s => {
+        const pool = serverModelPool(s);
+        const enabled = new Set(s.models ?? []);
+        const q = (search[s.id] ?? "").toLowerCase();
+        const shown = pool.filter(m => m.toLowerCase().includes(q));
+        const shownChat = shown.filter(m => !isEmbeddingModel(m));
+        return (
+          <section key={s.id} className="admin-section" style={{ marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{s.name}</span>
+              <span style={{ fontSize: 11, opacity: 0.5 }}>{enabled.size} enabled / {pool.length} available</span>
+              <div style={{ flex: 1 }} />
+              <button className="btn" onClick={() => refresh(s)} disabled={refreshing === s.id}>{refreshing === s.id ? "…" : "↻ Refresh"}</button>
+            </div>
+
+            {pool.length > 8 && (
+              <input className="admin-input" style={{ marginBottom: 6 }} value={search[s.id] ?? ""}
+                onChange={e => setSearch(v => ({ ...v, [s.id]: e.target.value }))}
+                placeholder={`Search ${pool.length} models…`} />
+            )}
+
+            {pool.length > 0 && (
+              <div style={{ display: "flex", gap: 12, marginBottom: 6 }}>
+                <button className="link-btn" onClick={() => patch(s.id, { models: [...new Set([...(s.models ?? []), ...shownChat])] })}>
+                  Enable all chat{q ? " (shown)" : ""}
+                </button>
+                <button className="link-btn" onClick={() => patch(s.id, { models: (s.models ?? []).filter(m => !shown.includes(m)) })}>
+                  Disable {q ? "shown" : "all"}
+                </button>
               </div>
-            ))}
+            )}
+
+            <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid var(--border-color,#333)", borderRadius: 6 }}>
+              {shown.length === 0
+                ? <div className="admin-empty" style={{ padding: 10 }}>{pool.length === 0 ? "No models yet — Refresh or add one below." : "No matches."}</div>
+                : shown.map(m => {
+                    const embed = isEmbeddingModel(m);
+                    return (
+                      <label key={m} className="admin-row" style={{ cursor: "pointer", opacity: embed && !enabled.has(m) ? 0.55 : 1 }}>
+                        <input type="checkbox" checked={enabled.has(m)} onChange={e => toggle(s, m, e.target.checked)} />
+                        <span style={{ flex: 1, fontFamily: "monospace", fontSize: 12 }}>{m}</span>
+                        {embed && <span style={{ fontSize: 10, opacity: 0.6, border: "1px solid currentColor", borderRadius: 4, padding: "0 4px" }}>embedding</span>}
+                      </label>
+                    );
+                  })
+              }
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input className="admin-input" style={{ flex: 1 }} value={newModel[s.id] ?? ""}
+                onChange={e => setNewModel(n => ({ ...n, [s.id]: e.target.value }))}
+                placeholder="Add a model by name (e.g. claude-opus-4-8)…"
+                onKeyDown={e => e.key === "Enter" && addManual(s)} />
+              <button className="btn" onClick={() => addManual(s)} disabled={!(newModel[s.id] ?? "").trim()}>Add</button>
+            </div>
           </section>
-        )}
-      </div>
-      <div className="admin-footer-bar">
-        <input className="admin-input" value={newModel} onChange={e => setNewModel(e.target.value)}
-          placeholder="Add model name…" onKeyDown={e => e.key === "Enter" && addModel()} />
-        <button className="btn" onClick={addModel} disabled={!newModel.trim()}>Add</button>
-        <button className="btn" onClick={refresh} disabled={refreshing}>{refreshing ? "…" : "↻ Refresh"}</button>
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -2009,93 +2134,105 @@ function SandboxTab({ dirs, onChange }: { dirs: string[]; onChange: (dirs: strin
 
 // ── Server tab ────────────────────────────────────────────────────────────────
 
-function ServerTab({ settings, onChange, activeProfile, onProfileChange }: {
+// Starter connections for well-known inference APIs. Selecting one fills provider + URL and
+// flags whether an API key is expected; every field stays editable afterwards.
+interface Preset { label: string; provider: ProviderKind; baseUrl: string; needsKey: boolean }
+const SERVER_PRESETS: Preset[] = [
+  { label: "Ollama (local)",            provider: "ollama", baseUrl: "http://localhost:11434",        needsKey: false },
+  { label: "OpenAI",                    provider: "openai", baseUrl: "https://api.openai.com/v1",     needsKey: true  },
+  { label: "Anthropic (OpenAI-compat)", provider: "openai", baseUrl: "https://api.anthropic.com/v1",  needsKey: true  },
+  { label: "Google Gemini (OpenAI-compat)", provider: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", needsKey: true },
+  { label: "Groq",                      provider: "openai", baseUrl: "https://api.groq.com/openai/v1", needsKey: true  },
+  { label: "Together",                  provider: "openai", baseUrl: "https://api.together.xyz/v1",    needsKey: true  },
+  { label: "OpenRouter",                provider: "openai", baseUrl: "https://openrouter.ai/api/v1",   needsKey: true  },
+  { label: "Mistral",                   provider: "openai", baseUrl: "https://api.mistral.ai/v1",      needsKey: true  },
+  { label: "LM Studio / llama.cpp / vLLM (local)", provider: "openai", baseUrl: "http://localhost:1234/v1", needsKey: false },
+];
+
+function ServerTab({ settings, onChange }: {
   settings: AppSettings;
   onChange: (s: AppSettings) => void;
-  activeProfile: Profile | null;
-  onProfileChange: (p: Profile) => void;
 }) {
-  const [testState, setTestState] = useState<"idle" | "testing" | "ok" | string>("idle");
-  const gpuOn  = settings.numGPULayers !== null;
-  const gpuVal = settings.numGPULayers ?? 999;
+  const [testState, setTestState] = useState<Record<string, string>>({});
+  const servers = settings.servers ?? [];
 
-  const effectiveHost = activeProfile?.host || settings.host;
+  const update = (id: string, patch: Partial<ServerConfig>) => {
+    // Changing where a server points invalidates its fetched catalog — clear it (and the enabled
+    // set) so stale models from the old endpoint don't linger; the next fetch reseeds. Hand-typed
+    // models are kept.
+    const resetsCatalog = "baseUrl" in patch || "provider" in patch;
+    onChange({ ...settings, servers: servers.map(s => {
+      if (s.id !== id) return s;
+      const next = { ...s, ...patch };
+      if (resetsCatalog) { next.catalog = undefined; next.models = []; }
+      return next;
+    }) });
+  };
+  const remove = (id: string) =>
+    onChange({ ...settings, servers: servers.filter(s => s.id !== id) });
+  const add = () =>
+    onChange({ ...settings, servers: [...servers,
+      { id: crypto.randomUUID(), name: `Server ${servers.length + 1}`, provider: "ollama", baseUrl: "http://localhost:11434" }] });
 
-  const testConnection = async () => {
-    setTestState("testing");
+  const test = async (s: ServerConfig) => {
+    setTestState(t => ({ ...t, [s.id]: "testing" }));
     try {
-      await invoke("set_ollama_host", { host: effectiveHost });
-      await invoke<string[]>("get_models");
-      setTestState("ok");
-    } catch (e) { setTestState(String(e)); }
+      const list = await invoke<string[]>("get_models",
+        { args: { base_url: s.baseUrl, provider: s.provider, api_key: s.apiKey ?? null } });
+      setTestState(t => ({ ...t, [s.id]: `ok:${list.length}` }));
+    } catch (e) { setTestState(t => ({ ...t, [s.id]: `err:${String(e)}` })); }
   };
 
   return (
     <div className="admin-scroll" style={{ padding: "20px 20px 0" }}>
       <div className="server-section">
-        <h3 className="server-heading">Ollama Server</h3>
-        <div className="field">
-          <label>Default Server URL</label>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input className="admin-input" style={{ flex: 1, fontFamily: "monospace" }}
-              value={settings.host} onChange={e => onChange({ ...settings, host: e.target.value })}
-              placeholder="http://localhost:11434" />
-            <button className="btn" onClick={() => onChange({ ...settings, host: "http://localhost:11434" })}>Reset</button>
-          </div>
-        </div>
-        {activeProfile && (
-          <div className="field" style={{ marginTop: 12 }}>
-            <label>Profile Override — <strong>{activeProfile.name}</strong></label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input className="admin-input" style={{ flex: 1, fontFamily: "monospace" }}
-                value={activeProfile.host ?? ""}
-                onChange={e => onProfileChange({ ...activeProfile, host: e.target.value || undefined })}
-                placeholder={`Inherits: ${settings.host}`} />
-              {activeProfile.host && (
-                <button className="btn" onClick={() => onProfileChange({ ...activeProfile, host: undefined })}>Clear</button>
+        <h3 className="server-heading">Inference Servers</h3>
+        <p className="server-note" style={{ marginTop: 0 }}>
+          Add any Ollama or OpenAI-compatible endpoint (OpenAI, Anthropic, Groq, OpenRouter, Together, Mistral,
+          or local servers like LM Studio / llama.cpp / vLLM). Models from every server appear together in the
+          model dropdown, prefixed with the server name, and each chat is routed to its model's server. Keys are
+          stored locally.
+        </p>
+
+        {servers.map(s => {
+          const st = testState[s.id] ?? "";
+          return (
+            <div key={s.id} style={{ border: "1px solid var(--border-color, #333)", borderRadius: 8, padding: 12, marginTop: 12 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input className="admin-input" style={{ flex: "0 0 150px" }} value={s.name}
+                  onChange={e => update(s.id, { name: e.target.value })} placeholder="Server name" />
+                <select className="admin-input" style={{ flex: "0 0 140px" }} value={s.provider}
+                  onChange={e => update(s.id, { provider: e.target.value as ProviderKind })}>
+                  <option value="ollama">Ollama</option>
+                  <option value="openai">OpenAI-compatible</option>
+                </select>
+                <select className="admin-input" style={{ flex: 1 }}
+                  value={SERVER_PRESETS.find(p => p.provider === s.provider && p.baseUrl === s.baseUrl)?.label ?? ""}
+                  onChange={e => { const p = SERVER_PRESETS.find(x => x.label === e.target.value); if (p) update(s.id, { provider: p.provider, baseUrl: p.baseUrl }); }}>
+                  <option value="">Preset…</option>
+                  {SERVER_PRESETS.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
+                </select>
+                <button className="icon-btn danger" onClick={() => remove(s.id)} title="Remove server">✕</button>
+              </div>
+              <input className="admin-input" style={{ fontFamily: "monospace", marginTop: 8 }} value={s.baseUrl}
+                onChange={e => update(s.id, { baseUrl: e.target.value })}
+                placeholder={s.provider === "openai" ? "https://api.openai.com/v1" : "http://localhost:11434"} />
+              {s.provider === "openai" && (
+                <input className="admin-input" type="password" style={{ fontFamily: "monospace", marginTop: 8 }} value={s.apiKey ?? ""}
+                  onChange={e => update(s.id, { apiKey: e.target.value || undefined })}
+                  placeholder="API key (blank for keyless local servers)" />
               )}
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+                <button className="btn" onClick={() => test(s)} disabled={st === "testing"}>Test</button>
+                {st === "testing" && <span style={{ fontSize: 12, opacity: 0.6 }}>Testing…</span>}
+                {st.startsWith("ok:") && <span style={{ fontSize: 12, color: "#4ade80" }}>✓ {st.slice(3)} models</span>}
+                {st.startsWith("err:") && <span style={{ fontSize: 12, color: "#f87171" }}>✕ {st.slice(4)}</span>}
+              </div>
             </div>
-          </div>
-        )}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 10 }}>
-          <button className="btn primary" onClick={testConnection} disabled={testState === "testing"}>
-            Test Connection
-          </button>
-          {testState === "testing" && <span style={{ fontSize: 12, opacity: 0.6 }}>Testing…</span>}
-          {testState === "ok" && <span style={{ fontSize: 12, color: "#4ade80" }}>✓ Connected</span>}
-          {testState !== "idle" && testState !== "testing" && testState !== "ok" && (
-            <span style={{ fontSize: 12, color: "#f87171" }}>✕ {testState}</span>
-          )}
-        </div>
-        <p className="server-note">Default URL for all profiles. Set a profile override to use a different Ollama instance per profile.</p>
-      </div>
+          );
+        })}
 
-      <div className="admin-divider" />
-
-      <div className="server-section" style={{ paddingTop: 20 }}>
-        <h3 className="server-heading">GPU Layers</h3>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <label className="toggle-row">
-            <input type="checkbox" checked={gpuOn}
-              onChange={e => onChange({ ...settings, numGPULayers: e.target.checked ? 999 : null })} />
-            <span style={{ fontSize: 13 }}>Override GPU layer offload</span>
-          </label>
-          {gpuOn && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 13 }}>Layers:</span>
-              <button className="stepper-btn" onClick={() => onChange({ ...settings, numGPULayers: Math.max(0, gpuVal - 1) })}>−</button>
-              <span style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, minWidth: 36, textAlign: "center" }}>{gpuVal}</span>
-              <button className="stepper-btn" onClick={() => onChange({ ...settings, numGPULayers: Math.min(999, gpuVal + 1) })}>+</button>
-              <button className="btn" onClick={() => onChange({ ...settings, numGPULayers: null })}>Reset</button>
-            </div>
-          )}
-          {gpuOn && (
-            <p className="server-note" style={{ marginTop: 0 }}>
-              {gpuVal === 0 ? "CPU only." : gpuVal >= 999 ? "All layers on GPU." : `${gpuVal} layers on GPU, rest on CPU.`}
-            </p>
-          )}
-          <p className="server-note">Leave off to let Ollama decide (recommended). Set to 0 for CPU-only, 999 for full GPU offload.</p>
-        </div>
+        <button className="btn" style={{ marginTop: 12 }} onClick={add}>+ Add Server</button>
       </div>
     </div>
   );
@@ -2140,7 +2277,7 @@ function DefaultsTab({ settings, onChange }: { settings: AppSettings; onChange: 
 
 export function AdminPanel({ settings, onSave, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("tools");
-  const [draft, setDraft] = useState<AppSettings>({ ...settings, models: [...settings.models] });
+  const [draft, setDraft] = useState<AppSettings>({ ...settings, servers: [...(settings.servers ?? [])], models: [...(settings.models ?? [])] });
 
   // The active profile (if any) or global settings is the "context" for MCP/OpenAPI/Sandbox/Server tabs
   const activeProfile = draft.profiles.find(p => p.id === draft.activeProfileId) ?? null;
@@ -2197,10 +2334,6 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
       setDraft(d => ({ ...d, allowedDirs: dirs }));
     }
   };
-  const setActiveProfile = (p: Profile) => {
-    setDraft(d => ({ ...d, profiles: d.profiles.map(existing => existing.id === p.id ? p : existing) }));
-  };
-
   const tabs: { id: Tab; icon: string; label: string }[] = [
     { id: "profiles", icon: "🤖",  label: "Profiles" },
     { id: "tools",    icon: "⚡",  label: "Tools" },
@@ -2247,7 +2380,7 @@ export function AdminPanel({ settings, onSave, onClose }: Props) {
           {tab === "sparql"  && <SparqlTab stored={ctxSparql} onChange={setCtxSparql} />}
           {tab === "mcp"     && <MCPTab stored={ctxMCP} onChange={setCtxMCP} />}
           {tab === "sandbox" && <SandboxTab dirs={ctxDirs} onChange={setCtxDirs} />}
-          {tab === "server"  && <ServerTab  settings={draft} onChange={setDraft} activeProfile={activeProfile} onProfileChange={setActiveProfile} />}
+          {tab === "server"  && <ServerTab  settings={draft} onChange={setDraft} />}
           {tab === "defaults" && <DefaultsTab settings={draft} onChange={setDraft} />}
         </div>
       </div>

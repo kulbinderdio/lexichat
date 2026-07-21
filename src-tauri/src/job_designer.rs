@@ -104,7 +104,7 @@ fn path_in_allowed(path: &str, allowed: &[String]) -> bool {
     })
 }
 
-pub async fn draft_job(host: &str, args: DraftJobArgs) -> Result<DraftedJob, String> {
+pub async fn draft_job(backend: &crate::ollama::Backend, args: DraftJobArgs) -> Result<DraftedJob, String> {
     let tool_lines = args.tool_catalog.iter()
         .map(|t| format!("- {}: {}", t.name, t.description))
         .collect::<Vec<_>>()
@@ -120,7 +120,7 @@ pub async fn draft_job(host: &str, args: DraftJobArgs) -> Result<DraftedJob, Str
         args.goal.trim(), tool_lines, dir_lines,
     );
 
-    let raw = crate::ollama::complete(host, &args.model, DESIGNER_SYSTEM, &user_msg)
+    let raw = crate::ollama::complete(backend, &args.model, DESIGNER_SYSTEM, &user_msg)
         .await
         .map_err(|e| format!("The model could not draft a job: {e}"))?;
 
@@ -322,7 +322,7 @@ mod tests {
         let goal = "Every weekday at 7am, search the web for UK energy policy news, skip anything \
                     already covered by reading and rewriting /Users/dio/Briefings/covered.md, and \
                     save a one-page PDF brief to /Users/dio/Briefings/brief.pdf.";
-        let d = draft_job("http://localhost:11434", DraftJobArgs { goal: goal.into(), ..a })
+        let d = draft_job(&crate::ollama::Backend::ollama("http://localhost:11434"), DraftJobArgs { goal: goal.into(), ..a })
             .await.expect("draft");
         eprintln!("name={:?} schedule={:?} out={:?}", d.job.name, d.job.schedule, d.job.output_file);
         for s in &d.job.steps { eprintln!("  [{}] {:?} tool={:?}", s.step_type, s.instruction, s.tool_name); }

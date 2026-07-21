@@ -27,6 +27,10 @@ pub struct WireMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WireToolCall {
+    /// OpenAI requires a stable id linking an assistant tool call to its tool result. Ollama
+    /// omits it; we synthesise ids when converting stored history to the OpenAI wire format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub function: WireToolFunction,
 }
 
@@ -161,50 +165,290 @@ pub struct ChatOptions {
     pub stop: Option<Vec<String>>,
 }
 
-// ── Ollama REST API ───────────────────────────────────────────────────────────
+// ── Backend (inference provider) ───────────────────────────────────────────────
 
-pub async fn list_models(host: &str) -> anyhow::Result<Vec<String>> {
-    #[derive(Deserialize)]
-    struct TagsResponse {
-        models: Vec<ModelEntry>,
-    }
-    #[derive(Deserialize)]
-    struct ModelEntry {
-        name: String,
+/// Which inference API dialect a backend speaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    /// Native Ollama REST — `/api/chat`, `/api/tags`, NDJSON streaming, no auth.
+    Ollama,
+    /// OpenAI-compatible Chat Completions — `/v1/chat/completions`, `/v1/models`, SSE,
+    /// Bearer auth. Covers OpenAI, Anthropic (compat endpoint), Groq, Together, OpenRouter,
+    /// Mistral, and local servers (LM Studio, llama.cpp, vLLM).
+    OpenAI,
+}
+
+impl Default for ProviderKind {
+    fn default() -> Self { ProviderKind::Ollama }
+}
+
+/// A resolved inference endpoint: dialect + base URL + optional API key.
+#[derive(Debug, Clone)]
+pub struct Backend {
+    pub kind: ProviderKind,
+    /// Base URL. Ollama: e.g. `http://localhost:11434`. OpenAI: includes the version
+    /// segment, e.g. `https://api.openai.com/v1`.
+    pub base_url: String,
+    pub api_key: Option<String>,
+}
+
+impl Backend {
+    /// Convenience for the default local backend and for tests.
+    pub fn ollama(base_url: impl Into<String>) -> Self {
+        Self { kind: ProviderKind::Ollama, base_url: base_url.into(), api_key: None }
     }
 
-    let url = format!("{}/api/tags", host);
-    let resp: TagsResponse = reqwest::get(&url).await?.json().await?;
-    Ok(resp.models.into_iter().map(|m| m.name).collect())
+    fn base(&self) -> &str { self.base_url.trim_end_matches('/') }
+
+    fn chat_url(&self) -> String {
+        match self.kind {
+            ProviderKind::Ollama => format!("{}/api/chat", self.base()),
+            ProviderKind::OpenAI => format!("{}/chat/completions", self.base()),
+        }
+    }
+
+    fn models_url(&self) -> String {
+        match self.kind {
+            ProviderKind::Ollama => format!("{}/api/tags", self.base()),
+            ProviderKind::OpenAI => format!("{}/models", self.base()),
+        }
+    }
+
+    fn is_openai(&self) -> bool { self.kind == ProviderKind::OpenAI }
+
+    /// Attach auth to a request builder (Bearer for OpenAI when a key is set).
+    fn auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match (self.kind, self.api_key.as_deref()) {
+            (ProviderKind::OpenAI, Some(k)) if !k.is_empty() => rb.bearer_auth(k),
+            _ => rb,
+        }
+    }
+}
+
+// ── Model listing ───────────────────────────────────────────────────────────────
+
+pub async fn list_models(backend: &Backend) -> anyhow::Result<Vec<String>> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let resp = backend.auth(client.get(backend.models_url()))
+        .send().await?
+        .error_for_status()?;
+    let v: serde_json::Value = resp.json().await?;
+    let mut names: Vec<String> = match backend.kind {
+        ProviderKind::Ollama => v["models"].as_array().map(|a| a.iter()
+            .filter_map(|m| m["name"].as_str().map(String::from)).collect()).unwrap_or_default(),
+        // OpenAI `/v1/models` → { data: [ { id, ... } ] }
+        ProviderKind::OpenAI => v["data"].as_array().map(|a| a.iter()
+            .filter_map(|m| m["id"].as_str().map(String::from)).collect()).unwrap_or_default(),
+    };
+    // OpenAI catalogs come unsorted and long — sort for a usable dropdown. Ollama's order
+    // (roughly recency) is already sensible, so leave it.
+    if backend.is_openai() { names.sort(); }
+    Ok(names)
 }
 
 // ── Streaming chat ─────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: &'a [WireMessage],
+/// Build the (non-streaming flag toggled by caller) chat request body for either dialect.
+fn build_chat_request(
+    backend: &Backend,
+    model: &str,
+    messages: &[WireMessage],
+    tools: &[ToolSchema],
+    options: Option<&ChatOptions>,
+    keep_alive: Option<&str>,
     stream: bool,
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
-    tools: &'a [ToolSchema],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<&'a ChatOptions>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    keep_alive: Option<&'a str>,
+) -> serde_json::Value {
+    use serde_json::json;
+    match backend.kind {
+        ProviderKind::Ollama => {
+            let mut b = json!({ "model": model, "messages": messages, "stream": stream });
+            if !tools.is_empty() { b["tools"] = json!(tools); }
+            if let Some(o) = options { b["options"] = json!(o); }
+            if let Some(k) = keep_alive { b["keep_alive"] = json!(k); }
+            b
+        }
+        ProviderKind::OpenAI => {
+            let mut b = json!({
+                "model": model,
+                "messages": to_openai_messages(messages),
+                "stream": stream,
+            });
+            if !tools.is_empty() { b["tools"] = json!(tools); }
+            if let Some(o) = options { apply_openai_options(&mut b, o); }
+            b
+        }
+    }
 }
 
-#[derive(Deserialize)]
-struct ChatChunk {
-    message: Option<ChunkMessage>,
-    #[allow(dead_code)]
-    done: Option<bool>,
+/// Map the Ollama-shaped `ChatOptions` onto OpenAI's top-level sampling fields. Ollama-only
+/// knobs (top_k, repeat_penalty, num_ctx) have no standard OpenAI equivalent and are dropped.
+fn apply_openai_options(b: &mut serde_json::Value, o: &ChatOptions) {
+    use serde_json::json;
+    if let Some(t) = o.temperature { b["temperature"] = json!(t); }
+    if let Some(p) = o.top_p { b["top_p"] = json!(p); }
+    if let Some(n) = o.num_predict { b["max_tokens"] = json!(n); }
+    if let Some(s) = o.seed { b["seed"] = json!(s); }
+    if let Some(stop) = &o.stop { b["stop"] = json!(stop); }
 }
 
-#[derive(Deserialize)]
-struct ChunkMessage {
-    content: Option<String>,
-    thinking: Option<String>,
-    tool_calls: Option<Vec<WireToolCall>>,
+/// Convert stored history into OpenAI chat messages, synthesising tool-call ids (Ollama omits
+/// them). Assistant tool calls and their following `tool` results are matched FIFO — the agent
+/// loop always appends an assistant(tool_calls) message immediately followed by its results in
+/// order, so a running queue of ids lines up correctly.
+fn to_openai_messages(messages: &[WireMessage]) -> Vec<serde_json::Value> {
+    use serde_json::json;
+    let mut out = Vec::with_capacity(messages.len());
+    let mut pending: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut seq = 0usize;
+    for m in messages {
+        let has_calls = m.tool_calls.as_ref().map_or(false, |t| !t.is_empty());
+        if m.role == "assistant" && has_calls {
+            let mut arr = Vec::new();
+            for tc in m.tool_calls.as_ref().unwrap() {
+                let id = match &tc.id {
+                    Some(x) if !x.is_empty() => x.clone(),
+                    _ => { seq += 1; format!("call_{seq}") }
+                };
+                pending.push_back(id.clone());
+                arr.push(json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        // OpenAI wants arguments as a JSON *string*.
+                        "arguments": serde_json::to_string(&tc.function.arguments)
+                            .unwrap_or_else(|_| "{}".into()),
+                    }
+                }));
+            }
+            let mut msg = json!({ "role": "assistant", "tool_calls": arr });
+            if let Some(c) = &m.content { if !c.is_empty() { msg["content"] = json!(c); } }
+            out.push(msg);
+        } else if m.role == "tool" {
+            let id = pending.pop_front().unwrap_or_else(|| { seq += 1; format!("call_{seq}") });
+            out.push(json!({
+                "role": "tool",
+                "tool_call_id": id,
+                "content": m.content.clone().unwrap_or_default(),
+            }));
+        } else {
+            out.push(openai_plain_message(m));
+        }
+    }
+    out
+}
+
+/// A system/user/assistant message with no tool calls. User messages carrying images become an
+/// OpenAI content-parts array (`image_url` data URIs); everything else is a plain string.
+fn openai_plain_message(m: &WireMessage) -> serde_json::Value {
+    use serde_json::json;
+    if let Some(imgs) = &m.images {
+        if !imgs.is_empty() {
+            let mut parts = Vec::new();
+            if let Some(c) = &m.content {
+                if !c.is_empty() { parts.push(json!({ "type": "text", "text": c })); }
+            }
+            for b64 in imgs {
+                let mime = guess_image_mime(b64);
+                parts.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{mime};base64,{b64}") }
+                }));
+            }
+            return json!({ "role": m.role, "content": parts });
+        }
+    }
+    json!({ "role": m.role, "content": m.content.clone().unwrap_or_default() })
+}
+
+/// Guess an image MIME from the leading bytes of its base64 (magic-number prefixes). Good enough
+/// for a data URI — the wrong guess only matters to strict servers, and PNG is a safe default.
+fn guess_image_mime(b64: &str) -> &'static str {
+    if b64.starts_with("/9j/") { "image/jpeg" }
+    else if b64.starts_with("iVBORw0KGgo") { "image/png" }
+    else if b64.starts_with("R0lGOD") { "image/gif" }
+    else if b64.starts_with("UklGR") { "image/webp" }
+    else { "image/png" }
+}
+
+/// Accumulator for an OpenAI streamed tool call — name and argument fragments arrive across many
+/// SSE deltas keyed by `index` and must be concatenated before the JSON is parseable.
+#[derive(Default)]
+struct OaiPartialCall {
+    id: String,
+    name: String,
+    args: String,
+}
+
+/// Parse one Ollama NDJSON line into the running response. `Err` propagates a stream error.
+fn parse_ollama_line<R: tauri::Runtime>(
+    line: &str,
+    full_text: &mut String,
+    tool_calls: &mut Vec<WireToolCall>,
+    app: &AppHandle<R>,
+    silent: bool,
+) -> anyhow::Result<()> {
+    let v: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => return Ok(()) };
+    if let Some(err) = v["error"].as_str() { return Err(anyhow::anyhow!("{err}")); }
+    let msg = &v["message"];
+    if let Some(t) = msg["thinking"].as_str() {
+        if !t.is_empty() && !silent { let _ = app.emit("agent-thinking", ThinkingEvent { delta: t.into() }); }
+    }
+    if let Some(c) = msg["content"].as_str() {
+        if !c.is_empty() {
+            full_text.push_str(c);
+            if !silent { let _ = app.emit("agent-token", TokenEvent { delta: c.into() }); }
+        }
+    }
+    if let Some(tcs) = msg["tool_calls"].as_array() {
+        for tc in tcs {
+            if let Ok(wtc) = serde_json::from_value::<WireToolCall>(tc.clone()) { tool_calls.push(wtc); }
+        }
+    }
+    Ok(())
+}
+
+/// Parse one OpenAI SSE line into the running response + tool-call accumulator. Non-`data:`
+/// lines (comments, `event:`) and `[DONE]` are skipped; `Err` propagates a stream error.
+fn parse_openai_line<R: tauri::Runtime>(
+    line: &str,
+    full_text: &mut String,
+    calls: &mut Vec<OaiPartialCall>,
+    app: &AppHandle<R>,
+    silent: bool,
+) -> anyhow::Result<()> {
+    let data = match line.strip_prefix("data:") { Some(d) => d.trim(), None => return Ok(()) };
+    if data == "[DONE]" { return Ok(()); }
+    let v: serde_json::Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => return Ok(()) };
+    if let Some(err) = v["error"]["message"].as_str().or_else(|| v["error"].as_str()) {
+        return Err(anyhow::anyhow!("{err}"));
+    }
+    let delta = &v["choices"][0]["delta"];
+    // Some OpenAI-compatible servers (e.g. reasoning models via vLLM) stream reasoning here.
+    if let Some(r) = delta["reasoning_content"].as_str().or_else(|| delta["reasoning"].as_str()) {
+        if !r.is_empty() && !silent { let _ = app.emit("agent-thinking", ThinkingEvent { delta: r.into() }); }
+    }
+    if let Some(c) = delta["content"].as_str() {
+        if !c.is_empty() {
+            full_text.push_str(c);
+            if !silent { let _ = app.emit("agent-token", TokenEvent { delta: c.into() }); }
+        }
+    }
+    if let Some(tcs) = delta["tool_calls"].as_array() {
+        for tc in tcs {
+            let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+            while calls.len() <= idx { calls.push(OaiPartialCall::default()); }
+            let slot = &mut calls[idx];
+            if let Some(id) = tc["id"].as_str() { if !id.is_empty() { slot.id = id.to_string(); } }
+            let f = &tc["function"];
+            if let Some(n) = f["name"].as_str() { if !n.is_empty() { slot.name.push_str(n); } }
+            if let Some(a) = f["arguments"].as_str() { slot.args.push_str(a); }
+        }
+    }
+    Ok(())
 }
 
 /// True when an Ollama error is its tool-call parser rejecting the model's own output
@@ -219,10 +463,19 @@ fn is_malformed_tool_call_error(msg: &str) -> bool {
         || m.contains("closed by")
 }
 
+/// True when a server rejects the request because the model/endpoint can't do tool calling at all
+/// (e.g. OpenRouter: "No endpoints found that support tool use"). Such a model can still chat, so
+/// the run should retry without tools rather than hard-fail.
+fn is_tools_unsupported_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    let unsupported = m.contains("not support") || m.contains("unsupported") || m.contains("no endpoints found");
+    unsupported && (m.contains("tool") || m.contains("function call"))
+}
+
 /// Stream one LLM turn. Returns (full_text, tool_calls).
 /// When `silent` is true all `app.emit` calls are skipped (used by background jobs).
 async fn stream_chat<R: tauri::Runtime>(
-    host: &str,
+    backend: &Backend,
     model: &str,
     messages: &[WireMessage],
     tools: &[ToolSchema],
@@ -237,25 +490,28 @@ async fn stream_chat<R: tauri::Runtime>(
         // Long multi-tool responses can take many minutes; a global timeout kills them.
         .connect_timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let url = format!("{}/api/chat", host);
 
-    let body = ChatRequest { model, messages, stream: true, tools, options, keep_alive };
-    let resp = client.post(&url).json(&body).send().await?;
+    let body = build_chat_request(backend, model, messages, tools, options, keep_alive, true);
+    let resp = backend.auth(client.post(backend.chat_url()).json(&body)).send().await?;
 
-    // Surface HTTP errors immediately — Ollama returns JSON {"error":"..."} on 4xx/5xx
+    // Surface HTTP errors immediately. Ollama returns {"error":"..."}; OpenAI {"error":{"message":...}}.
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        // Try to extract Ollama's error message
         let msg = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
-            .and_then(|v| v["error"].as_str().map(String::from))
+            .and_then(|v| v["error"]["message"].as_str().or_else(|| v["error"].as_str()).map(String::from))
             .unwrap_or_else(|| format!("HTTP {status}: {body}"));
         return Err(anyhow::anyhow!(msg));
     }
 
+    let openai = backend.is_openai();
     let mut full_text = String::new();
     let mut tool_calls: Vec<WireToolCall> = Vec::new();
+    let mut oai_calls: Vec<OaiPartialCall> = Vec::new();
+    // Line buffer: SSE/NDJSON events can be split across network chunks, so hold the trailing
+    // partial line until its newline arrives rather than parsing chunk boundaries directly.
+    let mut buf = String::new();
     let mut stream = resp.bytes_stream();
 
     while let Some(chunk) = stream.next().await {
@@ -270,46 +526,38 @@ async fn stream_chat<R: tauri::Runtime>(
         let bytes = match chunk {
             Ok(b) => b,
             Err(e) => {
-                if full_text.is_empty() && tool_calls.is_empty() {
+                if full_text.is_empty() && tool_calls.is_empty() && oai_calls.is_empty() {
                     return Err(anyhow::anyhow!("{e}"));
                 }
                 break;
             }
         };
-        // Ollama sends one JSON object per line; skip chunks with invalid UTF-8
-        let text = match std::str::from_utf8(&bytes) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        for line in text.lines() {
+        match std::str::from_utf8(&bytes) {
+            Ok(s) => buf.push_str(s),
+            Err(_) => continue, // skip chunks that split a multibyte sequence
+        }
+        while let Some(nl) = buf.find('\n') {
+            let line: String = buf.drain(..=nl).collect();
             let line = line.trim();
             if line.is_empty() { continue; }
-            // Check for inline error (can appear mid-stream on some Ollama versions)
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
-                if let Some(err) = v["error"].as_str() {
-                    return Err(anyhow::anyhow!("{err}"));
-                }
+            if openai {
+                parse_openai_line(line, &mut full_text, &mut oai_calls, app, silent)?;
+            } else {
+                parse_ollama_line(line, &mut full_text, &mut tool_calls, app, silent)?;
             }
-            let parsed: ChatChunk = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if let Some(msg) = parsed.message {
-                if let Some(delta) = msg.thinking {
-                    if !delta.is_empty() {
-                        if !silent { let _ = app.emit("agent-thinking", ThinkingEvent { delta }); }
-                    }
-                }
-                if let Some(delta) = msg.content {
-                    if !delta.is_empty() {
-                        full_text.push_str(&delta);
-                        if !silent { let _ = app.emit("agent-token", TokenEvent { delta }); }
-                    }
-                }
-                if let Some(tcs) = msg.tool_calls {
-                    tool_calls.extend(tcs);
-                }
-            }
+        }
+    }
+
+    // Assemble OpenAI streamed tool calls (fragments concatenated across deltas → parse once).
+    if openai {
+        for c in oai_calls {
+            if c.name.is_empty() { continue; }
+            let args: serde_json::Value = serde_json::from_str(&c.args)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            tool_calls.push(WireToolCall {
+                id: if c.id.is_empty() { None } else { Some(c.id) },
+                function: WireToolFunction { name: c.name, arguments: args },
+            });
         }
     }
 
@@ -433,7 +681,7 @@ fn parse_usize_array(s: &str) -> Vec<usize> {
 /// Pick the tools relevant to `context` from `groups`, capped at `cap`. Two-level with pure
 /// fallbacks — a failed or empty selection never stalls the run, it just widens the set.
 pub async fn select_tools_for_step(
-    host: &str,
+    backend: &Backend,
     model: &str,
     context: &str,
     groups: &[ToolGroup],
@@ -455,7 +703,7 @@ pub async fn select_tools_for_step(
         unrelated. When in doubt, include it. Reply with ONLY a JSON array of the group \
         numbers, e.g. [0,2,3]. Output only the JSON array.";
     let user1 = format!("Task/context:\n{context}\n\nTool groups:\n{group_list}");
-    let picked = complete(host, model, sys1, &user1).await.ok()
+    let picked = complete(backend, model, sys1, &user1).await.ok()
         .map(|r| parse_usize_array(&r)).unwrap_or_default();
     let mut chosen: Vec<&ToolGroup> = {
         let c: Vec<&ToolGroup> = picked.iter().filter_map(|&i| groups.get(i)).collect();
@@ -492,7 +740,7 @@ pub async fn select_tools_for_step(
     let sys2 = "You select the minimum set of tools needed for a task. Reply with ONLY a JSON \
         array of tool name strings, e.g. [\"tool_a\",\"tool_b\"]. Output only the JSON array.";
     let user2 = format!("Task/context:\n{context}\n\nAvailable tools:\n{tool_list}");
-    let names: Vec<String> = complete(host, model, sys2, &user2).await.ok()
+    let names: Vec<String> = complete(backend, model, sys2, &user2).await.ok()
         .map(|r| serde_json::from_str(&extract_json_array(&r)).unwrap_or_default())
         .unwrap_or_default();
     let nameset: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
@@ -536,21 +784,16 @@ fn build_discovery_context(conv: &[WireMessage]) -> String {
     out
 }
 
-#[derive(Serialize)]
-struct CompleteReq<'a> {
-    model: &'a str,
-    messages: &'a [WireMessage],
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    think: Option<bool>,
-}
-
-/// One POST to /api/chat, returning the raw body text (or a reqwest error).
+/// One non-streaming chat POST, returning the raw body text (or a reqwest error). `think` is an
+/// Ollama-only hint (skip reasoning); it's ignored for OpenAI backends.
 async fn post_chat(
-    client: &reqwest::Client, url: &str, model: &str, messages: &[WireMessage], think: Option<bool>,
+    client: &reqwest::Client, backend: &Backend, model: &str, messages: &[WireMessage], think: Option<bool>,
 ) -> reqwest::Result<String> {
-    let body = CompleteReq { model, messages, stream: false, think };
-    client.post(url).json(&body).send().await?
+    let mut body = build_chat_request(backend, model, messages, &[], None, None, false);
+    if backend.kind == ProviderKind::Ollama {
+        if let Some(t) = think { body["think"] = serde_json::json!(t); }
+    }
+    backend.auth(client.post(backend.chat_url()).json(&body)).send().await?
         .error_for_status()?
         .text().await
 }
@@ -577,7 +820,7 @@ fn describe_reqwest(e: &reqwest::Error) -> String {
 /// a one-shot call has no user in the loop to hit "retry", so a single dropped connection must
 /// not fail the whole operation. A genuine server *response* error (bad request, model missing)
 /// is returned immediately — retrying it is pointless.
-pub async fn complete(host: &str, model: &str, system: &str, user: &str) -> anyhow::Result<String> {
+pub async fn complete(backend: &Backend, model: &str, system: &str, user: &str) -> anyhow::Result<String> {
     let messages = vec![
         WireMessage { role: "system".into(), content: Some(system.into()),
             tool_calls: None, tool_call_id: None, name: None, images: None },
@@ -590,16 +833,15 @@ pub async fn complete(host: &str, model: &str, system: &str, user: &str) -> anyh
         // hard total timeout would cut it off.
         .connect_timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let url = format!("{}/api/chat", host);
 
     const ATTEMPTS: usize = 3;
     let mut last = String::new();
     for attempt in 0..ATTEMPTS {
         // think:false first; if the server *responds* with an error (some models reject the
         // flag), retry once without it. A transport error falls through to the backoff below.
-        let result = match post_chat(&client, &url, model, &messages, Some(false)).await {
+        let result = match post_chat(&client, backend, model, &messages, Some(false)).await {
             Ok(t) => Ok(t),
-            Err(e) if e.is_status() => post_chat(&client, &url, model, &messages, None).await,
+            Err(e) if e.is_status() => post_chat(&client, backend, model, &messages, None).await,
             Err(e) => Err(e),
         };
 
@@ -607,7 +849,10 @@ pub async fn complete(host: &str, model: &str, system: &str, user: &str) -> anyh
             Ok(text) => {
                 let content = serde_json::from_str::<serde_json::Value>(&text)
                     .ok()
-                    .and_then(|v| v["message"]["content"].as_str().map(String::from))
+                    .and_then(|v| match backend.kind {
+                        ProviderKind::Ollama => v["message"]["content"].as_str().map(String::from),
+                        ProviderKind::OpenAI => v["choices"][0]["message"]["content"].as_str().map(String::from),
+                    })
                     .unwrap_or_default();
                 return Ok(content);
             }
@@ -653,7 +898,7 @@ fn extract_json_array(s: &str) -> String {
 /// final, tool-free completion and streams it; if the model still returns nothing, emits
 /// a plain message so the chat is never left blank.
 async fn ensure_final_answer<R: tauri::Runtime>(
-    host: &str,
+    backend: &Backend,
     model: &str,
     system_prompt: &str,
     conversation: &Mutex<Vec<WireMessage>>,
@@ -681,7 +926,7 @@ async fn ensure_final_answer<R: tauri::Runtime>(
     };
     // No tools this turn — we want prose, not another tool call.
     let no_tools: Vec<ToolSchema> = Vec::new();
-    let streamed = match stream_chat(host, model, &wire, &no_tools, options, keep_alive, app, false, None).await {
+    let streamed = match stream_chat(backend, model, &wire, &no_tools, options, keep_alive, app, false, None).await {
         Ok((text, _)) => !text.trim().is_empty(),
         Err(_) => false,
     };
@@ -693,7 +938,7 @@ async fn ensure_final_answer<R: tauri::Runtime>(
 }
 
 pub async fn agent_loop<R: tauri::Runtime>(
-    host: &str,
+    backend: &Backend,
     model: &str,
     system_prompt: &str,
     // Tools sent every step, never filtered (e.g. the wiki workflow).
@@ -744,6 +989,9 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // Whether any assistant text was ever streamed to the chat. If a run ends with this
     // still false, we force a final answer so the user never sees a blank reply.
     let mut streamed_text = false;
+    // Set once a server reports the model can't do tool calling; the rest of the run then sends no
+    // tools (and skips per-step selection) so a non-tool model degrades to plain chat.
+    let mut disable_tools = false;
     let discoverable_total: usize = tool_groups.iter().map(|g| g.tools.len()).sum();
     for step in 0..max_steps {
         // Stop requested — end the run cleanly before doing any more work.
@@ -760,14 +1008,15 @@ pub async fn agent_loop<R: tauri::Runtime>(
         let step_start = std::time::Instant::now();
 
         // Per-step tool selection: with many candidate tools, narrow to those relevant to the
-        // current step; small sets are sent whole. `always_tools` are always included.
-        let tools: Vec<ToolSchema> = {
+        // current step; small sets are sent whole. `always_tools` are always included. Once the
+        // backend has told us tools aren't supported, send none (and skip the selection call).
+        let mut tools: Vec<ToolSchema> = if disable_tools { Vec::new() } else {
             let mut v = always_tools.to_vec();
             if discoverable_total <= SELECTION_THRESHOLD {
                 v.extend(tool_groups.iter().flat_map(|g| g.tools.iter().cloned()));
             } else {
                 let context = { let conv = conversation.lock().unwrap(); build_discovery_context(&conv) };
-                let mut selected = select_tools_for_step(host, model, &context, tool_groups, cap).await;
+                let mut selected = select_tools_for_step(backend, model, &context, tool_groups, cap).await;
                 for name in &last_used {
                     if !selected.iter().any(|t| &t.function.name == name)
                         && !v.iter().any(|t| &t.function.name == name) {
@@ -808,7 +1057,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
         // persistent failure (or any other error) ends the run.
         let mut attempt = 0usize;
         let (full_text, tool_calls) = loop {
-            match stream_chat(host, model, &wire, &tools, options.as_ref(), keep_alive.as_deref(), app, silent, Some(cancel.as_ref())).await {
+            match stream_chat(backend, model, &wire, &tools, options.as_ref(), keep_alive.as_deref(), app, silent, Some(cancel.as_ref())).await {
                 Ok(v) => break v,
                 Err(e) if attempt < MALFORMED_TOOL_CALL_RETRIES
                     && is_malformed_tool_call_error(&e.to_string()) =>
@@ -819,6 +1068,19 @@ pub async fn agent_loop<R: tauri::Runtime>(
                             step,
                             attempt,
                             error: e.to_string(),
+                        });
+                    }
+                }
+                // Model/endpoint can't do tool calling — drop tools and re-sample this step (and
+                // every later step). `!tools.is_empty()` guards against re-entry once cleared.
+                Err(e) if !tools.is_empty() && is_tools_unsupported_error(&e.to_string()) => {
+                    disable_tools = true;
+                    tools.clear();
+                    if !silent {
+                        let _ = app.emit("agent-retry", RetryEvent {
+                            step,
+                            attempt,
+                            error: format!("This model doesn't support tool use — continuing without tools. ({e})"),
                         });
                     }
                 }
@@ -902,7 +1164,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 // Never end an interactive run blank — salvage a written answer if the
                 // model finished without ever streaming any text.
                 if !streamed_text {
-                    ensure_final_answer(host, model, system_prompt, conversation,
+                    ensure_final_answer(backend, model, system_prompt, conversation,
                         options.as_ref(), keep_alive.as_deref(), app).await;
                 }
                 let _ = app.emit("agent-done", DoneEvent { error: None });
@@ -989,7 +1251,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
         // The model ran out of steps still working — force it to write up what it has
         // so the user gets the report rather than a blank window.
         if !streamed_text {
-            ensure_final_answer(host, model, system_prompt, conversation,
+            ensure_final_answer(backend, model, system_prompt, conversation,
                 options.as_ref(), keep_alive.as_deref(), app).await;
         }
         let _ = app.emit("agent-done", DoneEvent { error: Some(msg.clone()) });
@@ -1287,7 +1549,7 @@ mod tests {
             .expect(1..)
             .mount(&server).await;
 
-        let out = complete(&server.uri(), "m", "sys", "user").await.expect("should recover");
+        let out = complete(&Backend::ollama(server.uri()), "m", "sys", "user").await.expect("should recover");
         assert_eq!(out, "{\"ok\":true}");
     }
 
@@ -1304,7 +1566,7 @@ mod tests {
             .expect(2)
             .mount(&server).await;
 
-        let err = complete(&server.uri(), "missing", "s", "u").await.unwrap_err();
+        let err = complete(&Backend::ollama(server.uri()), "missing", "s", "u").await.unwrap_err();
         assert!(err.to_string().contains("404"), "got: {err}");
     }
 
@@ -1355,7 +1617,7 @@ mod tests {
             tokio::sync::Mutex::new(HashMap::new());
 
         let result = agent_loop(
-            &server.uri(),
+            &Backend::ollama(server.uri()),
             "qwen3.6:latest",
             "You are a helpful assistant.",
             &[],
@@ -1411,7 +1673,7 @@ mod tests {
     #[tokio::test]
     async fn select_under_cap_skips_the_model() {
         let groups = vec![group("A", &["a1", "a2"]), group("B", &["b1"])];
-        let picked = select_tools_for_step("http://127.0.0.1:1", "m", "task", &groups, 10).await;
+        let picked = select_tools_for_step(&Backend::ollama("http://127.0.0.1:1"), "m", "task", &groups, 10).await;
         let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
         assert_eq!(names, ["a1", "a2", "b1"]);
     }
@@ -1435,7 +1697,7 @@ mod tests {
             group("Members", &["m1", "m2"]),                       // group 0 (3 ≤ cap)
             group("Bills", &["b1", "b2", "b3", "b4", "b5", "b6"]), // group 1
         ];
-        let picked = select_tools_for_step(&server.uri(), "m", "find an MP", &groups, 5).await;
+        let picked = select_tools_for_step(&Backend::ollama(server.uri()), "m", "find an MP", &groups, 5).await;
         let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
         assert_eq!(names, ["m1", "m2"], "should return only the chosen group's tools");
     }
@@ -1482,7 +1744,7 @@ mod tests {
             tokio::sync::Mutex::new(HashMap::new());
 
         let result = agent_loop(
-            &server.uri(), "m", "sys", &[], &groups, 5, None, None,
+            &Backend::ollama(server.uri()), "m", "sys", &[], &groups, 5, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), true, 5,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ).await;
@@ -1510,7 +1772,7 @@ mod tests {
             group("Bills", &["b1", "b2"]),
             group("Hansard", &["h1","h2","h3","h4","h5","h6","h7","h8","h9","h10"]),
         ]; // 16 total > cap 8
-        let picked = select_tools_for_step(&server.uri(), "m",
+        let picked = select_tools_for_step(&Backend::ollama(server.uri()), "m",
             "Summarise the Employment Rights Bill using the Bills API", &groups, 8).await;
         let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
         assert!(names.contains(&"b1") && names.contains(&"b2"), "Bills must be pulled in: {names:?}");
@@ -1538,7 +1800,7 @@ mod tests {
             group("Mapbox", &["search_and_geocode_tool", "static_map_image_tool"]),
             group("Other", &["o1","o2","o3","o4","o5","o6","o7","o8","o9","o10"]),
         ]; // 16 > cap 8
-        let picked = select_tools_for_step(&server.uri(), "m",
+        let picked = select_tools_for_step(&Backend::ollama(server.uri()), "m",
             "please geocode this place for me", &groups, 8).await;
         let names: Vec<&str> = picked.iter().map(|t| t.function.name.as_str()).collect();
         assert!(names.contains(&"search_and_geocode_tool"),
@@ -1638,7 +1900,7 @@ mod tests {
             tokio::sync::Mutex::new(HashMap::new());
 
         let result = agent_loop(
-            &server.uri(), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
+            &Backend::ollama(server.uri()), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), false, 20,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         )
@@ -1646,5 +1908,176 @@ mod tests {
 
         assert!(result.is_err(), "a persistent parse failure must surface, not hang");
         // The mock's `.expect(...)` verifies the retry count when `server` drops.
+    }
+
+    // ── OpenAI adapter ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn to_openai_messages_matches_tool_ids_and_stringifies_args() {
+        let convo = vec![
+            WireMessage { role: "user".into(), content: Some("hi".into()),
+                tool_calls: None, tool_call_id: None, name: None, images: None },
+            WireMessage { role: "assistant".into(), content: None,
+                tool_calls: Some(vec![WireToolCall {
+                    id: None, // no id stored → must be synthesised and reused by the result
+                    function: WireToolFunction { name: "search".into(),
+                        arguments: serde_json::json!({ "q": "cats" }) },
+                }]),
+                tool_call_id: None, name: None, images: None },
+            WireMessage { role: "tool".into(), content: Some("2 results".into()),
+                tool_calls: None, tool_call_id: None, name: Some("search".into()), images: None },
+        ];
+        let out = to_openai_messages(&convo);
+        assert_eq!(out[0]["role"], "user");
+        // Assistant tool call: arguments serialised as a JSON *string*, id synthesised.
+        let call = &out[1]["tool_calls"][0];
+        assert_eq!(call["function"]["arguments"], "{\"q\":\"cats\"}");
+        let id = call["id"].as_str().unwrap().to_string();
+        // Tool result must reference the same id (FIFO match).
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["tool_call_id"].as_str().unwrap(), id);
+    }
+
+    #[test]
+    fn to_openai_messages_encodes_images_as_content_parts() {
+        let convo = vec![WireMessage {
+            role: "user".into(), content: Some("what's this".into()),
+            tool_calls: None, tool_call_id: None, name: None,
+            images: Some(vec!["/9j/abc".into()]), // JPEG magic prefix
+        }];
+        let out = to_openai_messages(&convo);
+        let parts = out[0]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert!(parts[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/jpeg;base64,/9j/abc"));
+    }
+
+    /// Drive the real agent loop against an OpenAI-compatible endpoint: step 0 streams a tool
+    /// call (arguments fragmented across SSE deltas), step 1 streams the final answer. Verifies
+    /// SSE parsing, tool-call accumulation, and that the tool result is fed back with a matching
+    /// `tool_call_id` in OpenAI shape.
+    #[tokio::test]
+    async fn openai_agent_loop_streams_a_tool_call_and_completes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        struct OaiFlow { n: Arc<AtomicUsize>, bodies: Arc<Mutex<Vec<String>>> }
+        impl Respond for OaiFlow {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                self.bodies.lock().unwrap().push(String::from_utf8_lossy(&req.body).into_owned());
+                let step = self.n.fetch_add(1, Ordering::SeqCst);
+                let sse = if step == 0 {
+                    // Tool call with arguments split "{" + "}" across two deltas.
+                    "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\
+                     data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_xyz\",\"type\":\"function\",\"function\":{\"name\":\"get_current_datetime\",\"arguments\":\"{\"}}]}}]}\n\
+                     data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"}\"}}]}}]}\n\
+                     data: [DONE]\n"
+                } else {
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"All done.\"}}]}\n\
+                     data: [DONE]\n"
+                };
+                ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+            }
+        }
+
+        let server = MockServer::start().await;
+        let bodies = Arc::new(Mutex::new(Vec::new()));
+        Mock::given(method("POST")).and(path("/chat/completions"))
+            .respond_with(OaiFlow { n: Arc::new(AtomicUsize::new(0)), bodies: bodies.clone() })
+            .mount(&server).await;
+
+        let backend = Backend { kind: ProviderKind::OpenAI, base_url: server.uri(), api_key: None };
+        let app = tauri::test::mock_app();
+        let conversation = Mutex::new(vec![WireMessage {
+            role: "user".into(), content: Some("what time is it".into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None,
+        }]);
+        let mcp: tokio::sync::Mutex<HashMap<String, MCPConnection>> =
+            tokio::sync::Mutex::new(HashMap::new());
+
+        let result = agent_loop(
+            &backend, "gpt-4o-mini", "You are helpful.",
+            &[tool("get_current_datetime")], // always-on tool, no selection LLM call
+            &[], 0, None, None,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0,
+            app.handle(), false, 20,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ).await;
+
+        assert!(result.is_ok(), "OpenAI run should complete: {result:?}");
+        let convo = conversation.lock().unwrap();
+        let last = convo.last().unwrap();
+        assert_eq!(last.role, "assistant");
+        assert_eq!(last.content.as_deref(), Some("All done."));
+        // The tool must have run (a datetime string was fed back as a tool message).
+        assert!(convo.iter().any(|m| m.role == "tool"), "tool result appended");
+        // Step-1 request must carry the prior tool result in OpenAI shape with the matching id.
+        let second = &bodies.lock().unwrap()[1];
+        assert!(second.contains("\"role\":\"tool\""), "history sent in OpenAI tool shape: {second}");
+        assert!(second.contains("call_xyz"), "tool_call_id preserved: {second}");
+    }
+
+    #[test]
+    fn detects_tools_unsupported_errors() {
+        assert!(is_tools_unsupported_error("No endpoints found that support tool use."));
+        assert!(is_tools_unsupported_error("This model does not support tools"));
+        assert!(is_tools_unsupported_error("function calling is not supported by this model"));
+        // Not a tools-capability problem — must not trigger the fallback.
+        assert!(!is_tools_unsupported_error("rate limit exceeded"));
+        assert!(!is_tools_unsupported_error("XML syntax error on line 14"));
+    }
+
+    /// A model whose endpoint rejects tool use (OpenRouter-style) should drop tools and still
+    /// answer, rather than hard-failing the run.
+    #[tokio::test]
+    async fn agent_loop_falls_back_when_tools_unsupported() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        struct ToolGate;
+        impl Respond for ToolGate {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                let body = String::from_utf8_lossy(&req.body);
+                if body.contains("\"tools\"") {
+                    // Reject the tool-bearing request the way OpenRouter does.
+                    ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                        "error": { "message": "No endpoints found that support tool use." }
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_raw(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Answered without tools.\"}}]}\n\
+                         data: [DONE]\n",
+                        "text/event-stream")
+                }
+            }
+        }
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/chat/completions"))
+            .respond_with(ToolGate).mount(&server).await;
+
+        let backend = Backend { kind: ProviderKind::OpenAI, base_url: server.uri(), api_key: None };
+        let app = tauri::test::mock_app();
+        let conversation = Mutex::new(vec![WireMessage {
+            role: "user".into(), content: Some("list my files".into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None,
+        }]);
+        let mcp: tokio::sync::Mutex<HashMap<String, MCPConnection>> =
+            tokio::sync::Mutex::new(HashMap::new());
+
+        let result = agent_loop(
+            &backend, "some/model", "You are helpful.",
+            &[tool("list_files")], // always-on tool → first request carries tools
+            &[], 0, None, None,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0,
+            app.handle(), false, 20,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        ).await;
+
+        assert!(result.is_ok(), "run should survive an unsupported-tools endpoint: {result:?}");
+        let convo = conversation.lock().unwrap();
+        assert_eq!(convo.last().unwrap().content.as_deref(), Some("Answered without tools."));
     }
 }

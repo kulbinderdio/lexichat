@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Settings, tab by tab — LexiChat Docs</title>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-NHGZKJ6KE1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-NHGZKJ6KE1');
+</script>
+<meta name="description" content="A visual tour of the LexiChat Settings dialog — every tab explained with screenshots: Profiles, Tools, Models, OpenAPI, SPARQL, MCP, Sandbox, Server, and Defaults."/>
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet"/>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui'] },
+      colors: { accent: '#6366f1', 'accent-light': '#818cf8', 'accent-dark': '#4f46e5' }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+  .gradient-text { background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .glass { background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .shot { border: 1px solid rgb(226 232 240); border-radius: 0.9rem; box-shadow: 0 20px 45px rgba(15,23,42,0.10); background: #fff; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased">
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav class="fixed top-0 w-full z-50 glass border-b border-slate-200/60">
+  <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+    <a href="../index.html" class="flex items-center gap-2.5">
+      <img src="../resources/lexi1.png" alt="LexiChat" class="w-8 h-8 rounded-xl"/>
+      <span class="font-bold text-lg tracking-tight">LexiChat</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8">
+      <a href="index.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">← All Docs</a>
+      <a href="getting-started.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Getting Started</a>
+      <a href="features.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Features</a>
+      <a href="tools.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Tools</a>
+      <a href="integrations.html" class="text-sm font-medium text-slate-600 hover:text-accent transition-colors">Integrations</a>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Layout ───────────────────────────────────────────────────────────────── -->
+<div class="max-w-5xl mx-auto px-6 pt-28 pb-24 flex gap-12">
+
+  <!-- Sidebar -->
+  <aside class="hidden lg:block w-56 flex-shrink-0">
+    <div class="sticky top-24 space-y-1">
+      <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">The nine tabs</div>
+      <a href="#profiles" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🤖 Profiles</a>
+      <a href="#tools" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">⚡ Tools</a>
+      <a href="#models" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🖥 Models</a>
+      <a href="#openapi" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🌐 OpenAPI</a>
+      <a href="#sparql" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🔗 SPARQL</a>
+      <a href="#mcp" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🔌 MCP</a>
+      <a href="#sandbox" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🔒 Sandbox</a>
+      <a href="#server" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">⚙️ Server</a>
+      <a href="#defaults" class="block text-sm text-slate-600 hover:text-accent py-1 transition-colors">🎲 Defaults</a>
+    </div>
+  </aside>
+
+  <!-- Content -->
+  <article class="flex-1 min-w-0">
+    <div class="mb-4">
+      <a href="index.html" class="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-accent transition-colors">
+        <span class="material-symbols-outlined text-base">arrow_back</span> Docs
+      </a>
+    </div>
+
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3">Settings, tab by tab</h1>
+    <p class="text-lg text-slate-600 mb-6">Open Settings with the <strong>gear icon (⚙)</strong> in the top-right toolbar. The dialog has nine tabs — this page walks through each one with a screenshot and what it does.</p>
+
+    <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-12 text-sm text-slate-700 flex items-start gap-2">
+      <span class="material-symbols-outlined text-accent text-lg flex-shrink-0">info</span>
+      <span>Most tabs are <strong>scoped to the active profile</strong> — when a profile is selected (shown as <em>Profile: Teacher</em> under the tab bar), you're editing that profile's tools and integrations. The <strong>Server</strong>, <strong>Models</strong>, and <strong>Defaults</strong> tabs are global.</span>
+    </div>
+
+    <!-- Profiles -->
+    <section id="profiles" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">person</span> Profiles</h2>
+      <p class="text-slate-600 mb-5">Profiles are saved personas you switch between instantly. Each bundles a <strong>model</strong>, a <strong>system prompt</strong>, a set of enabled <strong>built-in tools</strong>, and which <strong>OpenAPI / SPARQL / MCP</strong> integrations it may use — plus its own file sandbox. The active profile is marked, and the detail pane shows everything it has enabled.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-profiles.png" alt="Profiles tab showing a list of profiles and the Teacher profile detail" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Click a profile to make it <strong>Active</strong>; the whole app (model, tools, integrations, sandbox) switches with it.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> <strong>Export / Import</strong> a profile as JSON to move it between machines or share it — re-enter any credentials after import.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> With <strong>no profile</strong> selected, chats fall back to a conservative safe default (read-only file tools + web, no integrations).</li>
+      </ul>
+    </section>
+
+    <!-- Tools -->
+    <section id="tools" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">bolt</span> Tools</h2>
+      <p class="text-slate-600 mb-5">The built-in tool catalogue — file operations, web search, fetch a page, date/time, and the Python code sandbox. Tick a tool to let the current profile use it. Read-only tools (list, read, search) are safe to leave on; mutating ones (write, move, delete) and <strong>Run&nbsp;Python</strong> are opt-in.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-tools.png" alt="Tools tab with built-in tools and checkboxes" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Every file tool is still bound by the <a href="#sandbox" class="text-accent hover:underline">Sandbox</a> — it can only touch the folders you've granted.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Run Python has an extra global master switch and asks for approval before each run.</li>
+      </ul>
+    </section>
+
+    <!-- Models -->
+    <section id="models" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">monitor</span> Models</h2>
+      <p class="text-slate-600 mb-5">Choose which models appear in the chat dropdown, per server. Each server shows an <strong>enabled&nbsp;/&nbsp;available</strong> count. Small local lists (your Ollama) auto-enable; large catalogues (OpenRouter's hundreds) get a <strong>search box</strong> and start empty so you pick just the ones you use. <strong>Embedding</strong> models are tagged and left off — they can't chat.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-models.png" alt="Models tab showing per-server model lists for Ollama and OpenRouter" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> <strong>Refresh</strong> re-fetches a server's model list; <strong>Enable all chat</strong> / <strong>Disable all</strong> act on what's shown.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> <strong>Add a model by name</strong> for endpoints that don't publish a list (e.g. <code class="bg-slate-100 px-1 rounded text-xs">claude-opus-4-8</code>).</li>
+      </ul>
+    </section>
+
+    <!-- OpenAPI -->
+    <section id="openapi" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">public</span> OpenAPI</h2>
+      <p class="text-slate-600 mb-5">Turn any REST API into tools by pasting its OpenAPI (Swagger) spec — each operation becomes a callable tool. LexiChat ships with built-ins for Wikipedia, Companies House, Postcodes, UK Police, UK Parliament, openFDA, RxNorm and more. Expand a row to see its generated tools; <strong>Edit</strong> to change the base URL or auth.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-openapi.png" alt="OpenAPI tab listing registered REST API specs" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> One spec = one host; the base URL is applied to every operation.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Enable per profile — a profile only sees the APIs it opts into.</li>
+      </ul>
+    </section>
+
+    <!-- SPARQL -->
+    <section id="sparql" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">link</span> SPARQL</h2>
+      <p class="text-slate-600 mb-5">Linked-data endpoints. Each one becomes two tools — a <strong>query</strong> tool and a <strong>schema</strong> tool. Built-ins cover HM Land Registry and OpenDataCommunities; add your own (like Wikidata). Expanding a row reveals the generated tools, a <em>when-to-use</em> hint, read-only status, and the prefixes / example query that steer the model.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-sparql.png" alt="SPARQL tab with an expanded Wikidata endpoint showing its tools and prefixes" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> <strong>Read-only</strong> — update queries (INSERT/DELETE) are rejected.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> The schema hint and example query dramatically improve how well a model queries the endpoint.</li>
+      </ul>
+    </section>
+
+    <!-- MCP -->
+    <section id="mcp" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">cable</span> MCP</h2>
+      <p class="text-slate-600 mb-5">Connect <strong>Model Context Protocol</strong> servers — either a local command (stdio) or an HTTP URL — to plug in external tool suites like Mapbox or an n8n gateway. Each row shows its connection status and, when active, a tool count. <strong>Edit</strong> to change the command / URL / env / auth, or use the refresh button to reconnect.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-mcp.png" alt="MCP tab listing connected MCP servers with status and tool counts" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> A green <strong>✓ N tools</strong> badge means the server connected and advertised that many tools.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Enabled per profile, like the other integrations.</li>
+      </ul>
+    </section>
+
+    <!-- Sandbox -->
+    <section id="sandbox" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">lock</span> Sandbox</h2>
+      <p class="text-slate-600 mb-5">The folder allowlist for file tools. File operations can <strong>only</strong> touch folders listed here — nothing else on your disk is reachable, even if the model asks. Click <strong>Add Folder</strong> and pick a directory to grant access.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-sandbox.png" alt="Sandbox tab showing an allowed folder" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Paths are canonicalised and checked on every file call — a hard boundary, not a suggestion.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Can be set per profile, so a "Research" persona and a "Finance" persona see different folders.</li>
+      </ul>
+    </section>
+
+    <!-- Server -->
+    <section id="server" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">dns</span> Server <span class="ml-1 px-2 py-0.5 bg-indigo-600 text-white text-[10px] font-black tracking-widest uppercase rounded-full align-middle">New</span></h2>
+      <p class="text-slate-600 mb-5">Add any <strong>Ollama</strong> or <strong>OpenAI-compatible</strong> endpoint — OpenAI, Anthropic, Groq, OpenRouter, Together, Mistral, or a local server (LM Studio, llama.cpp, vLLM). Give it a name, pick a provider or preset, paste the URL and (for cloud) an API key, and hit <strong>Test</strong>. Models from every server appear together in the chat dropdown, prefixed by server name, and each chat is routed to its model's server.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-server.png" alt="Server tab with an Ollama and an OpenRouter inference server configured" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">shield</span> <strong>Private by default:</strong> a local Ollama server keeps everything on your machine. A cloud server only sends the chats you point at it, using your own key.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> API keys are stored locally on your device — never uploaded anywhere by LexiChat.</li>
+      </ul>
+    </section>
+
+    <!-- Defaults -->
+    <section id="defaults" class="mb-16 scroll-mt-24">
+      <h2 class="text-xl font-semibold mb-2 flex items-center gap-2"><span class="material-symbols-outlined text-accent">tune</span> Defaults</h2>
+      <p class="text-slate-600 mb-5">Global chat defaults for new conversations. Pick a <strong>Response Style</strong> (Precise / Balanced / Creative), <strong>Response Length</strong> (Short / Medium / Long / Auto) and <strong>Memory</strong> (Standard / Extended). The <strong>Advanced</strong> section exposes raw temperature and top-p — left at <em>model default</em> unless you set them.</p>
+      <figure class="mb-5"><img src="../resources/settings/settings-defaults.png" alt="Defaults tab with response style, length, memory presets and advanced sliders" class="w-full shot" loading="lazy"/></figure>
+      <ul class="space-y-2 text-slate-600 text-sm">
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Profiles can override these, and you can change them per-chat via the sliders icon in the input bar.</li>
+        <li class="flex items-start gap-2"><span class="material-symbols-outlined text-accent text-base flex-shrink-0 mt-0.5">check_circle</span> Leaving the advanced sliders unset lets each model use its own tuned defaults.</li>
+      </ul>
+    </section>
+
+    <!-- Next -->
+    <div class="mt-4 p-6 bg-white border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div>
+        <div class="font-semibold mb-1">Want the deeper reference?</div>
+        <p class="text-sm text-slate-500">Profiles, system prompts, and chat-parameter tuning are covered in detail in Configuration.</p>
+      </div>
+      <a href="configuration.html" class="inline-flex items-center gap-2 bg-accent hover:bg-accent-dark text-white px-5 py-2.5 rounded-xl font-semibold text-sm transition-colors flex-shrink-0">
+        Configuration <span class="material-symbols-outlined text-base">arrow_forward</span>
+      </a>
+    </div>
+
+  </article>
+</div>
+
+</body>
+</html>

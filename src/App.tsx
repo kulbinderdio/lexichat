@@ -7,7 +7,7 @@ import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft } from "luc
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
-import { AdminPanel, AppSettings, Profile, StoredOpenAPISpec, StoredSparqlEndpoint } from "./AdminPanel";
+import { AdminPanel, AppSettings, Profile, ServerConfig, StoredOpenAPISpec, StoredSparqlEndpoint, reconcileCatalog } from "./AdminPanel";
 import { dedupeRegistry } from "./profileIO";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -33,7 +33,7 @@ interface ToolUi {
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "tool-result" | "error";
+  role: "user" | "assistant" | "tool-result" | "error" | "notice";
   text: string;
   streaming?: boolean;
   toolCalls?: ToolCall[];
@@ -92,6 +92,14 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "get_current_datetime", description: "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use whenever you need today's date or a timestamp for a filename.", parameters: { type: "object", properties: {}, required: [] } } },
   { type: "function", function: { name: "run_python", description: "Execute Python code in a secure sandbox to compute or answer questions (math, data processing, string/logic work). Use print() to output results. Supports a subset of Python: NO class definitions and NO third-party packages (no numpy/pandas/requests). For file access use the provided BUILT-IN functions read_file(path)->str, write_file(path, content)->int, and list_files(dir)->list — call them directly; do NOT define your own versions and do NOT use open() or pathlib (they are disabled). To parse JSON, `import json` then json.loads(read_file(path)) — the json module (loads/dumps) IS available (but json.load(fp) is not); most other stdlib (collections, os, datetime, re) is NOT available, so use plain dict/list/set. Paths must be within the user's allowed folders or attached files.", parameters: { type: "object", properties: { code: { type: "string", description: "The Python source code to execute." } }, required: ["code"] } } },
 ];
+
+// Built-in tools a chat gets when NO profile is active: read-only / no-side-effect only. Mutating
+// file tools, email, code execution, and all registered OpenAPI/MCP/SPARQL integrations require an
+// explicit profile. (Product decision — the no-profile default must not expose everything.)
+const SAFE_DEFAULT_BUILTINS = new Set([
+  "read_file", "list_files", "search_files", "search_in_files", "get_file_info",
+  "list_directory_tree", "web_search", "fetch_webpage", "get_current_datetime",
+]);
 
 const WIKI_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "wiki_list", description: "List all pages in the persistent wiki.", parameters: { type: "object", properties: {}, required: [] } } },
@@ -311,11 +319,12 @@ function injectBuiltinSparql(endpoints: StoredSparqlEndpoint[]): StoredSparqlEnd
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_SETTINGS: AppSettings = {
+  servers: [{ id: "default-ollama", name: "Ollama", provider: "ollama", baseUrl: "http://localhost:11434" }],
   host: "http://localhost:11434",
+  provider: "ollama",
   maxTools: 30,
   webSearchResults: 10,
   maxSteps: 20,
-  numGPULayers: null,
   models: [],
   enabledTools: { read_file: true, list_files: true, web_search: true },
   toolRegistry: { mcpServers: [], openapiSpecs: [], sparqlEndpoints: [] },
@@ -339,6 +348,23 @@ function injectBuiltinSpecs(specs: StoredOpenAPISpec[]): StoredOpenAPISpec[] {
     }
   }
   return result;
+}
+
+// The model dropdown encodes both the server id and the model name in one option value, since
+// model names aren't globally unique across servers. A control char that never appears in a
+// server id or model name keeps decoding unambiguous.
+const MODEL_SEP = "";
+const encModel = (serverId: string, model: string) => `${serverId}${MODEL_SEP}${model}`;
+const decModel = (v: string): { serverId: string; model: string } => {
+  const i = v.indexOf(MODEL_SEP);
+  return i < 0 ? { serverId: "", model: v } : { serverId: v.slice(0, i), model: v.slice(i + 1) };
+};
+
+/// Which server a (serverId, model) selection routes to: the named server if it exists, else the
+/// first server that lists the model, else the first server.
+function serverForModel(servers: ServerConfig[], serverId: string | undefined, model: string): ServerConfig | undefined {
+  if (serverId) { const s = servers.find(x => x.id === serverId); if (s) return s; }
+  return servers.find(s => (s.models ?? []).includes(model)) ?? servers[0];
 }
 
 function dedupeById<T extends { id: string }>(items: T[]): T[] {
@@ -388,6 +414,18 @@ export function loadSettings(): AppSettings {
     const parsed = s ? JSON.parse(s) : {};
     const migrated = migrateToRegistry(parsed);
     const loaded: AppSettings = { ...DEFAULT_SETTINGS, ...migrated };
+    // Migrate the legacy single-backend fields into the server registry (once).
+    if (!Array.isArray(migrated.servers) || migrated.servers.length === 0) {
+      const legacyProvider = (migrated.provider ?? "ollama") as "ollama" | "openai";
+      loaded.servers = [{
+        id: "default-server",
+        name: legacyProvider === "openai" ? "OpenAI" : "Ollama",
+        provider: legacyProvider,
+        baseUrl: migrated.host || "http://localhost:11434",
+        apiKey: migrated.apiKey,
+        models: migrated.models ?? [],
+      }];
+    }
     loaded.toolRegistry = {
       ...loaded.toolRegistry,
       openapiSpecs: injectBuiltinSpecs(loaded.toolRegistry.openapiSpecs ?? []),
@@ -834,7 +872,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
             post({ jsonrpc: "2.0", id, result: {
               protocolVersion: "2026-01-26",
               hostCapabilities: {},
-              hostInfo: { name: "LexiChat", version: "2.0.11" },
+              hostInfo: { name: "LexiChat", version: "2.0.12" },
               hostContext: {
                 toolInfo: {
                   id: "1",
@@ -998,6 +1036,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [selectedModel, setSelectedModel] = useState("");
+  const [selectedServerId, setSelectedServerId] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [showAdmin, setShowAdmin] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
@@ -1018,24 +1057,46 @@ export default function App() {
   const activeProfile: Profile | null =
     settings.profiles.find(p => p.id === settings.activeProfileId) ?? null;
 
-  const effectiveHost = activeProfile?.host || settings.host;
+  // Flat list of every (server, model) the dropdown can offer, in server order.
+  const modelOptions = (settings.servers ?? []).flatMap(s =>
+    (s.models ?? []).map(m => ({ serverId: s.id, serverName: s.name, model: m })));
+  // Refetch models only when a server's *connection* changes (not when its model list is merged).
+  const serversKey = JSON.stringify((settings.servers ?? []).map(s => [s.id, s.provider, s.baseUrl, s.apiKey ?? ""]));
 
-  // Fetch models and sync host on mount and when effective host changes
-  const fetchModels = useCallback(async () => {
-    try {
-      await invoke("set_ollama_host", { host: effectiveHost });
-      const list = await invoke<string[]>("get_models");
+  // Fetch each server's models independently and merge into that server's persisted list, so the
+  // dropdown shows the union across all configured backends.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const servers = settings.servers ?? [];
+      const results = await Promise.all(servers.map(async s => {
+        try {
+          const list = await invoke<string[]>("get_models",
+            { args: { base_url: s.baseUrl, provider: s.provider, api_key: s.apiKey ?? null } });
+          return { id: s.id, list };
+        } catch { return { id: s.id, list: [] as string[] }; }
+      }));
+      if (cancelled) return;
       setSettings(prev => {
-        const merged = [...list, ...prev.models.filter(m => !list.includes(m))];
-        const updated = { ...prev, models: merged };
+        const merged = (prev.servers ?? []).map(s => {
+          const found = results.find(r => r.id === s.id);
+          return found ? reconcileCatalog(s, found.list) : s;
+        });
+        const updated = { ...prev, servers: merged };
         saveSettings(updated);
         return updated;
       });
-      setSelectedModel(m => m && list.includes(m) ? m : (list[0] ?? ""));
-    } catch { /* Ollama not running */ }
-  }, [effectiveHost]); // eslint-disable-line react-hooks/exhaustive-deps
+    })();
+    return () => { cancelled = true; };
+  }, [serversKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { fetchModels(); }, [effectiveHost]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Keep the selection valid: if the chosen model vanished (server removed, list changed), fall
+  // back to the first available option.
+  useEffect(() => {
+    if (modelOptions.length === 0) return;
+    const valid = modelOptions.some(o => o.serverId === selectedServerId && o.model === selectedModel);
+    if (!valid) { setSelectedServerId(modelOptions[0].serverId); setSelectedModel(modelOptions[0].model); }
+  }, [serversKey, modelOptions.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1172,12 +1233,18 @@ export default function App() {
 
     // The step is being re-sampled: discard the partial text the failed attempt streamed,
     // otherwise the retry's tokens append to it.
-    listen<{ step: number; attempt: number; error: string }>("agent-retry", () => {
+    listen<{ step: number; attempt: number; error: string }>("agent-retry", e => {
       if (!streamActive()) return;
       setMessages(prev => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "assistant" && last.streaming) return prev.slice(0, -1);
-        return prev;
+        let next = prev;
+        const last = next[next.length - 1];
+        if (last?.role === "assistant" && last.streaming) next = next.slice(0, -1);
+        // Tool-use fallback: tell the user the model can't use tools (fired once per run).
+        if (e.payload.error?.includes("support tool use")) {
+          next = [...next, { id: uid(), role: "notice",
+            text: "This model doesn't support tools — continuing without them (no file access, web search, or other tools)." }];
+        }
+        return next;
       });
     }).then(u => cleanup.push(u));
 
@@ -1277,11 +1344,13 @@ export default function App() {
     // capability that defaults off. Once the master is on it behaves like any other
     // tool: enabled unless a profile explicitly opts out.
     const runPythonMaster = settings.enabledTools.run_python === true;
-    const enabledTools = ALL_BUILTIN_TOOLS.filter(t =>
-      t.function.name === "run_python"
-        ? runPythonMaster && effectiveEnabledTools.run_python !== false
-        : effectiveEnabledTools[t.function.name] !== false
-    );
+    const enabledTools = ALL_BUILTIN_TOOLS.filter(t => {
+      const name = t.function.name;
+      // No active profile → conservative read-only default; an explicit global "off" still applies.
+      if (!activeProfile) return SAFE_DEFAULT_BUILTINS.has(name) && settings.enabledTools[name] !== false;
+      if (name === "run_python") return runPythonMaster && effectiveEnabledTools.run_python !== false;
+      return effectiveEnabledTools[name] !== false;
+    });
     // Wiki memory: the active profile can override the global default; an unset profile
     // (undefined) inherits it.
     const wikiEnabled = (activeProfile?.wikiEnabled ?? settings.wikiEnabled) === true;
@@ -1320,15 +1389,17 @@ export default function App() {
 
       // Build dynamic suffix describing any registered external tools
       const registry = settings.toolRegistry;
+      // With no active profile, no integrations are enabled, so the prompt must not advertise them
+      // (otherwise the model would try to call tools the backend doesn't have).
       const ctxOpenAPI = activeProfile
         ? registry.openapiSpecs.filter(s => activeProfile.enabledOpenapiSpecIds.includes(s.id) && s.enabled !== false)
-        : registry.openapiSpecs.filter(s => s.enabled !== false);
+        : [];
       const ctxMCP = activeProfile
         ? registry.mcpServers.filter(s => activeProfile.enabledMcpServerIds.includes(s.id))
-        : registry.mcpServers;
+        : [];
       const ctxSparql = activeProfile
         ? registry.sparqlEndpoints.filter(s => (activeProfile.enabledSparqlEndpointIds ?? []).includes(s.id) && s.enabled !== false)
-        : registry.sparqlEndpoints.filter(s => s.enabled !== false);
+        : [];
       const externalParts: string[] = [];
       if (ctxOpenAPI.length > 0)
         externalParts.push(`OpenAPI services you can call: ${ctxOpenAPI.map(s => s.title).join(", ")}.`);
@@ -1359,22 +1430,26 @@ export default function App() {
         ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
         : `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}`;
 
-      // MCP servers this profile may use. With no active profile, all registered servers are
-      // visible; the backend filters strictly by this list, so an empty list means none.
+      // MCP servers this profile may use. With no active profile, none are enabled (conservative
+      // default) — a profile must opt in. The backend filters strictly by this list.
       const enabledMcpServerIds = activeProfile
         ? activeProfile.enabledMcpServerIds
-        : registry.mcpServers.map(s => s.id);
+        : [];
       const disabledMcpTools = ctxMCP.flatMap(srv =>
         Object.entries(srv.enabledTools ?? {})
           .filter(([, en]) => !en)
           .map(([name]) => name)
       );
 
+      const targetServer = serverForModel(settings.servers ?? [], selectedServerId, selectedModel);
       await invoke("send_message", {
         args: {
           model: selectedModel,
           message: fullText,
           system_prompt: systemPrompt,
+          base_url: targetServer?.baseUrl ?? null,
+          provider: targetServer?.provider ?? null,
+          api_key: targetServer?.apiKey ?? null,
           tools: enabledTools,
           image_paths: imagePaths,
           file_paths: otherFiles,
@@ -1459,7 +1534,7 @@ export default function App() {
         openapi = openapi.map(sp => ov[sp.id] ? { ...sp, auth: ov[sp.id] } : sp);
       }
     } else {
-      openapi = registry.openapiSpecs;
+      openapi = []; // no profile → no registered APIs (conservative default)
     }
 
     // SPARQL endpoints — including built-in ones — are profile-scoped: a profile only
@@ -1473,15 +1548,19 @@ export default function App() {
         sparql = sparql.map(ep => ov[ep.id] ? { ...ep, auth: ov[ep.id] } : ep);
       }
     } else {
-      sparql = registry.sparqlEndpoints;
+      sparql = []; // no profile → no registered SPARQL endpoints (conservative default)
     }
 
-    const host = profile?.host || s.host;
+    // Default backend (for the job designer + background jobs that carry no explicit server):
+    // the profile's chosen server, else the first configured server.
+    const defSrv = (s.servers ?? []).find(x => x.id === profile?.serverId) ?? (s.servers ?? [])[0];
     const dirs = profile?.allowedDirs ?? s.allowedDirs ?? [];
     await invoke("set_mcp_servers",   { servers: mcp }).catch(() => {});
     await invoke("set_openapi_specs", { specs: openapi.filter(sp => sp.enabled !== false) }).catch(() => {});
     await invoke("set_sparql_endpoints", { endpoints: sparql.filter(ep => ep.enabled !== false) }).catch(() => {});
-    await invoke("set_ollama_host",   { host }).catch(() => {});
+    if (defSrv) {
+      await invoke("set_backend", { args: { base_url: defSrv.baseUrl, provider: defSrv.provider, api_key: defSrv.apiKey ?? null } }).catch(() => {});
+    }
     await invoke("set_allowed_dirs",  { dirs }).catch(() => {});
   };
 
@@ -1511,14 +1590,20 @@ export default function App() {
     setSettings(newSettings);
     await syncServers(newSettings);
     const ap = newSettings.profiles.find(p => p.id === newSettings.activeProfileId);
-    if (ap?.model && newSettings.models.includes(ap.model)) setSelectedModel(ap.model);
+    if (ap?.model) {
+      const srv = serverForModel(newSettings.servers ?? [], ap.serverId, ap.model);
+      if (srv && (srv.models ?? []).includes(ap.model)) { setSelectedServerId(srv.id); setSelectedModel(ap.model); }
+    }
   };
 
   const handleProfileChange = async (id: string) => {
     const profile = settings.profiles.find(p => p.id === id) ?? null;
     const updated = { ...settings, activeProfileId: id || null };
     await handleSaveSettings(updated);
-    if (profile?.model && settings.models.includes(profile.model)) setSelectedModel(profile.model);
+    if (profile?.model) {
+      const srv = serverForModel(updated.servers ?? [], profile.serverId, profile.model);
+      if (srv && (srv.models ?? []).includes(profile.model)) { setSelectedServerId(srv.id); setSelectedModel(profile.model); }
+    }
     setChatParams(profile?.chatParams ?? updated.chatParams ?? DEFAULT_CHAT_PARAMS);
     await syncServers(updated);
     await handleReset();
@@ -1581,7 +1666,7 @@ export default function App() {
       {/* Jobs view — full page, replaces chat when active */}
       {view === "jobs" && (
         <JobsPanel
-          models={settings.models}
+          models={[...new Set((settings.servers ?? []).flatMap(s => s.models ?? []))]}
           profiles={settings.profiles}
           activeProfileId={settings.activeProfileId ?? null}
           globalOpenapiSpecs={settings.toolRegistry.openapiSpecs}
@@ -1644,6 +1729,7 @@ export default function App() {
                 />
               );
               if (msg.role === "error")       return <div key={msg.id} className="msg-error">⚠ {msg.text}</div>;
+              if (msg.role === "notice")      return <div key={msg.id} style={{ fontSize: 12, opacity: 0.6, fontStyle: "italic", padding: "4px 8px" }}>ℹ {msg.text}</div>;
               return null;
             })}
             {isRunning && !messages.some(m => m.streaming) && (
@@ -1690,13 +1776,23 @@ export default function App() {
             <ChatParamsButton params={chatParams} onChange={setChatParams} disabled={isRunning} />
             <select
               className="model-select"
-              value={selectedModel}
-              onChange={e => setSelectedModel(e.target.value)}
-              disabled={settings.models.length === 0}
+              value={selectedModel ? encModel(selectedServerId, selectedModel) : ""}
+              onChange={e => { const d = decModel(e.target.value); setSelectedServerId(d.serverId); setSelectedModel(d.model); }}
+              disabled={modelOptions.length === 0}
             >
-              {settings.models.length === 0
+              {modelOptions.length === 0
                 ? <option>No models found</option>
-                : settings.models.map(m => <option key={m}>{m}</option>)
+                : (settings.servers ?? []).map(s => {
+                    const ms = s.models ?? [];
+                    if (ms.length === 0) return null;
+                    // Only one server → skip the prefix; multiple → show "server / model".
+                    const single = (settings.servers ?? []).filter(x => (x.models ?? []).length > 0).length <= 1;
+                    return (
+                      <optgroup key={s.id} label={s.name}>
+                        {ms.map(m => <option key={s.id + m} value={encModel(s.id, m)}>{single ? m : `${s.name} / ${m}`}</option>)}
+                      </optgroup>
+                    );
+                  })
               }
             </select>
             <div className="input-spacer" />
@@ -1739,7 +1835,7 @@ export default function App() {
               Runs entirely on-device via Ollama. Reads files, searches the web,
               calls APIs, and keeps your data private.
             </p>
-            <div className="about-version">Version 2.0.11</div>
+            <div className="about-version">Version 2.0.12</div>
 
             <div className="about-support">
               <div className="about-support-label">Support the project</div>

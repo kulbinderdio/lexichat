@@ -317,11 +317,13 @@ pub async fn execute_job(
         images: None,
     }]);
 
-    // Resolve host: prefer profile context, fall back to active AppState
-    let host = job.profile_context.as_ref()
+    // Resolve backend: a per-job host override is treated as an Ollama URL (legacy config);
+    // otherwise inherit the active AppState backend (which may be an OpenAI-compatible endpoint).
+    let backend = job.profile_context.as_ref()
         .map(|c| c.ollama_host.clone())
         .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| state.ollama_host.lock().unwrap().clone());
+        .map(crate::ollama::Backend::ollama)
+        .unwrap_or_else(|| state.backend.lock().unwrap().clone());
 
     // When using steps, derive the active tool set from step tool_names — only those
     // tools are sent to the LLM, keeping the context tight and reducing token usage.
@@ -438,7 +440,7 @@ pub async fn execute_job(
 
         let job_groups = job_tool_groups(all_tools);
         let r = agent_loop(
-            &host, &job.model, &system_prompt, &[], &job_groups, 0,
+            &backend, &job.model, &system_prompt, &[], &job_groups, 0,
             None, None, &conversation,
             registered_specs, Vec::new(), &temp_mcp, ctx.allowed_dirs.clone(),
             Vec::new(), // no attached-file sandbox paths in jobs
@@ -468,7 +470,7 @@ pub async fn execute_job(
 
         let job_groups = job_tool_groups(all_tools);
         agent_loop(
-            &host, &job.model, &system_prompt, &[], &job_groups, 0,
+            &backend, &job.model, &system_prompt, &[], &job_groups, 0,
             None, None, &conversation,
             specs, Vec::new(), &state.mcp_connections, allowed_dirs,
             Vec::new(), // no attached-file sandbox paths in jobs
