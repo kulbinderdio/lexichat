@@ -170,15 +170,21 @@ async function run(code, files) {
   }
 
   const images = captureFigures();
-  const outFiles = collectOutputs();
-  // Only surface saved image/SVG files inline when NO matplotlib figure was captured — otherwise
-  // a run that both plots and savefig()s the same chart would show it twice. (Files are still
-  // written to disk regardless.)
+  let outFiles = collectOutputs();
+  // Charts are shown INLINE (with a download button) — they must NOT also count as output files,
+  // or a model that savefig()s a displayed chart triggers an intrusive "save to a folder" prompt
+  // for something already on screen. So: any image in /work/out is rendered inline and dropped
+  // from outFiles; only genuine non-image outputs (xlsx/csv/pdf the user asked for) remain to save.
   if (images.length === 0) {
-    for (const f of outFiles) {
+    // No open figure captured — promote saved image files to the inline view, then drop them.
+    outFiles = outFiles.filter((f) => {
       const url = imageDataUrl(f.name, f.b64);
-      if (url) images.push(url);
-    }
+      if (url) { images.push(url); return false; }
+      return true;
+    });
+  } else {
+    // A figure was captured inline already — drop redundant image files (the same chart).
+    outFiles = outFiles.filter((f) => !imageDataUrl(f.name, f.b64));
   }
   return { output: stdout, images, outFiles, error };
 }
