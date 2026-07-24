@@ -1,13 +1,14 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, ChangeEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft } from "lucide-react";
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
 import { AdminPanel, AppSettings, Profile, ServerConfig, StoredOpenAPISpec, StoredSparqlEndpoint, reconcileCatalog } from "./AdminPanel";
+import { runPython, warmPyodide, drainCodeToolCalls, PyFile } from "./pyodide/runner";
 import { dedupeRegistry } from "./profileIO";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -36,12 +37,14 @@ interface ChatMessage {
   role: "user" | "assistant" | "tool-result" | "error" | "notice";
   text: string;
   streaming?: boolean;
+  status?: string;           // transient phase label shown with the thinking dots (e.g. "Selecting tools…")
   toolCalls?: ToolCall[];
   toolName?: string;
   toolArgs?: string;
   imageDataUrls?: string[];  // base64 data URIs for attached images
   ui?: ToolUi;               // MCP-App interactive UI to render in a sandboxed iframe
   toolImages?: string[];     // base64 data: image URLs from a tool result (e.g. a Mapbox map)
+  artifact?: { title: string; html: string }; // model-authored HTML artifact (create_artifact)
 }
 
 // MCP servers approved to render/interact with apps this session (frontend mirror
@@ -90,7 +93,8 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "compose_email", description: "Build a base64url-encoded RFC 2822 email ready for the Gmail API. Returns ONLY the raw base64url string — use the entire return value as the 'raw' field in gmail_sendmessage, with no modification.", parameters: { type: "object", properties: { to: { type: "string", description: "Recipient email address(es), comma-separated." }, from: { type: "string", description: "Sender email address (optional)." }, subject: { type: "string", description: "Email subject line." }, body: { type: "string", description: "Plain text email body." }, reply_to_message_id: { type: "string", description: "Message-ID to reply to, for threading (optional)." } }, required: ["to","subject","body"] } } },
   { type: "function", function: { name: "fetch_webpage", description: "Fetch and read the full text content of a webpage by URL. Strips HTML and returns readable text. This is the correct tool whenever the user wants to see, read, open, or show an article or page — including the full article behind a web_search result (pass that result's URL). Do NOT refuse such requests or claim you can only summarise; call this tool instead. Also use it to read any specific URL the user provides.", parameters: { type: "object", properties: { url: { type: "string", description: "Full URL to fetch, must start with http:// or https://" } }, required: ["url"] } } },
   { type: "function", function: { name: "get_current_datetime", description: "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use whenever you need today's date or a timestamp for a filename.", parameters: { type: "object", properties: {}, required: [] } } },
-  { type: "function", function: { name: "run_python", description: "Execute Python code in a secure sandbox to compute or answer questions (math, data processing, string/logic work). Use print() to output results. Supports a subset of Python: NO class definitions and NO third-party packages (no numpy/pandas/requests). For file access use the provided BUILT-IN functions read_file(path)->str, write_file(path, content)->int, and list_files(dir)->list — call them directly; do NOT define your own versions and do NOT use open() or pathlib (they are disabled). To parse JSON, `import json` then json.loads(read_file(path)) — the json module (loads/dumps) IS available (but json.load(fp) is not); most other stdlib (collections, os, datetime, re) is NOT available, so use plain dict/list/set. Paths must be within the user's allowed folders or attached files.", parameters: { type: "object", properties: { code: { type: "string", description: "The Python source code to execute." } }, required: ["code"] } } },
+  { type: "function", function: { name: "run_python", description: "Execute real Python (CPython) in a secure, offline sandbox to compute, analyse data, and CREATE CHARTS. The full standard library plus numpy, pandas, matplotlib, scipy, sympy, openpyxl (read/write Excel .xlsx), and beautifulsoup4 (parse HTML) are available — import them normally. Use print() for text output. Files live in a virtual workspace at /work/uploads/: the user's attached files are there — documents (PDF, Word) are ALREADY extracted to plain text, so just open() and read them (do NOT try to PDF-parse); data files (CSV, Excel, JSON) are as-is for pandas. SAVE any output (files, charts) to /work/out/ (kept for the user). (For a plain read/summary of a document with no computation, prefer the read_file tool — no code or permission needed.) Use normal Python I/O — open(), pathlib, pd.read_csv('/work/uploads/data.csv'). TO SHOW A GRAPH, build a matplotlib figure (e.g. `import matplotlib.pyplot as plt; plt.plot(x, y)`) — it is rendered INLINE in the chat automatically — you do NOT need to save it (do NOT hand-draw ASCII or SVG). Only use plt.savefig('/work/out/name.png') if the user explicitly wants a saved file — /work/out is an in-memory scratch path, but anything you write there is copied to a real folder on the user's disk and the tool result reports that real absolute path. When telling the user where a file was saved, quote the real path from the tool result (the line marked SAVED TO DISK); NEVER tell the user the file is at /work/out (they cannot open that). No network access. Do not read/write paths outside /work.", parameters: { type: "object", properties: { code: { type: "string", description: "The Python source code to execute." } }, required: ["code"] } } },
+  { type: "function", function: { name: "create_artifact", description: "Render a rich, self-contained HTML page inline in the chat, with a Save button (saves as a .html file the user can open in any browser). Use this for polished deliverables — formatted reports, dashboards, styled tables/cards, or simple interactive views — when plain markdown isn't enough. The HTML MUST be fully self-contained: inline all CSS in a <style> tag and any JS in a <script> tag; NO external URLs, fonts, images, or CDNs (they are blocked). To include a chart, map or image you generated earlier THIS TURN (e.g. a matplotlib chart from run_python, or a map), use the placeholder token as the image source: <img src=\"{{figure:1}}\"> for the first such image, {{figure:2}} for the second, and so on (in the order they were created) — LexiChat substitutes the real image. Do NOT paste base64 image data yourself. Any other images must be data: URIs. It renders in a sandboxed frame. Do NOT put your final prose answer inside the artifact — write a short summary in chat and put the rich content in the artifact.", parameters: { type: "object", properties: { title: { type: "string", description: "Short title for the artifact (used as the saved filename and header)." }, html: { type: "string", description: "A complete, self-contained HTML document (or fragment) with all CSS/JS inlined and no external resources." } }, required: ["title", "html"] } } },
 ];
 
 // Built-in tools a chat gets when NO profile is active: read-only / no-side-effect only. Mutating
@@ -473,55 +477,6 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function SaveMenu({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const saveAs = async (ext: string) => {
-    setOpen(false);
-    const filters = ext === "docx"
-      ? [{ name: "Word Document", extensions: ["docx"] }]
-      : ext === "pdf"
-      ? [{ name: "PDF", extensions: ["pdf"] }]
-      : [{ name: "Text File", extensions: ["txt"] }];
-    const path = await save({ title: "Save response", filters });
-    if (!path) return;
-    const finalPath = path.endsWith(`.${ext}`) ? path : `${path}.${ext}`;
-    await invoke("save_document", { path: finalPath, content: text });
-  };
-
-  return (
-    <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
-      <button className="copy-btn" onClick={() => setOpen(o => !o)} title="Save as…">
-        ···
-      </button>
-      {open && (
-        <div className="save-menu-dropdown">
-          <div className="save-menu-header">Save response as</div>
-          <button className="save-menu-item" onClick={() => saveAs("txt")}>
-            <span className="save-menu-ext">TXT</span>Plain text
-          </button>
-          <button className="save-menu-item" onClick={() => saveAs("pdf")}>
-            <span className="save-menu-ext">PDF</span>PDF document
-          </button>
-          <button className="save-menu-item" onClick={() => saveAs("docx")}>
-            <span className="save-menu-ext" style={{ background: "rgba(59,130,246,0.15)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.25)" }}>DOC</span>Word document
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Message bubbles ───────────────────────────────────────────────────────────
 
 function UserMessage({ text, imageDataUrls }: { text: string; imageDataUrls?: string[] }) {
@@ -539,30 +494,90 @@ function UserMessage({ text, imageDataUrls }: { text: string; imageDataUrls?: st
   );
 }
 
-function AssistantMessage({ msg }: { msg: ChatMessage }) {
+// Shared react-markdown renderers for assistant messages: links open externally, and only
+// data:/blob: images render. A model that emits `![](/work/out/chart.png)` or a remote URL would
+// otherwise show a broken-image icon — real chart output arrives via the inline tool-image path.
+const mdComponents: Components = {
+  a: ({ href, children }) => (
+    <a href={href} onClick={e => { e.preventDefault(); if (href) openUrl(href); }}>{children}</a>
+  ),
+  img: ({ src, alt }) =>
+    typeof src === "string" && (src.startsWith("data:") || src.startsWith("blob:"))
+      ? <img src={src} alt={alt ?? ""} style={{ maxWidth: "100%", borderRadius: 8 }} />
+      : null,
+};
+
+// Save an inline base64 image (e.g. a generated chart) to disk via the native save dialog.
+async function downloadImage(dataUrl: string, base: string) {
+  const mime = dataUrl.match(/^data:([^;,]+)/)?.[1] || "image/png";
+  const ext = mime === "image/svg+xml" ? "svg" : mime === "image/jpeg" ? "jpg" : (mime.split("/")[1] || "png");
+  const safeBase = base.replace(/[^a-z0-9_-]+/gi, "_") || "image";
+  try {
+    const path = await save({ title: "Save image", defaultPath: `${safeBase}.${ext}`,
+      filters: [{ name: "Image", extensions: [ext] }] });
+    if (!path) return;
+    await invoke("save_data_url", { args: { path, data_url: dataUrl } });
+  } catch { /* cancelled */ }
+}
+
+// True if this assistant message is the LAST assistant bubble in its turn — so we show a single
+// "Save…" on it (Save exports the whole turn's response, even when split across bubbles).
+function isLastAssistantInTurn(msgs: ChatMessage[], i: number): boolean {
+  if (msgs[i].role !== "assistant") return false;
+  for (let j = i + 1; j < msgs.length; j++) {
+    if (msgs[j].role === "user") return true;      // next turn started → i was the last assistant
+    if (msgs[j].role === "assistant") return false; // a later assistant bubble in this turn
+  }
+  return true; // end of conversation
+}
+
+// data: image URLs (charts/maps) produced in the CURRENT turn — i.e. tool-result images since the
+// last user message. These back the `{{figure:N}}` token (1-indexed) in reports and artifacts.
+function collectTurnFigures(msgs: ChatMessage[]): string[] {
+  let start = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role === "user") { start = i; break; } }
+  return msgs.slice(start)
+    .filter(m => m.role === "tool-result")
+    .flatMap(m => m.toolImages ?? [])
+    .filter(u => u.startsWith("data:"));
+}
+// Replace {{figure:N}} tokens with figure data URLs. `asMarkdown` wraps in markdown image syntax
+// (for report text); otherwise substitutes the raw URL (for artifact HTML `src="…"`).
+function substituteFigures(text: string, figs: string[], asMarkdown: boolean): { out: string; used: Set<number> } {
+  const used = new Set<number>();
+  const out = text.replace(/\{\{figure:(\d+)\}\}/g, (whole, n) => {
+    const i = Number(n) - 1;
+    if (!figs[i]) return whole;
+    used.add(i);
+    return asMarkdown ? `![Figure ${n}](${figs[i]})` : figs[i];
+  });
+  return { out, used };
+}
+
+function AssistantMessage({ msg, onExport }: { msg: ChatMessage; onExport?: (msgId: string) => void }) {
   const showThinking = msg.streaming && !msg.text && (!msg.toolCalls || msg.toolCalls.length === 0);
   return (
     <div className="msg-assistant">
       <img src={lexiLogo} className="assistant-avatar" alt="Lexi" />
       <div className="assistant-content">
         {showThinking ? (
-          <ThinkingDots />
+          <div className="thinking-row">
+            <ThinkingDots />
+            {msg.status && <span className="thinking-status">{msg.status}</span>}
+          </div>
         ) : msg.streaming ? (
           <div className="assistant-text">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => (
-              <a href={href} onClick={e => { e.preventDefault(); if (href) openUrl(href); }}>{children}</a>
-            )}}>{msg.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{msg.text}</ReactMarkdown>
             <span className="streaming-cursor" />
           </div>
         ) : (
           msg.text && (
             <div className="assistant-text">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => (
-                <a href={href} onClick={e => { e.preventDefault(); if (href) openUrl(href); }}>{children}</a>
-              )}}>{msg.text}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{msg.text}</ReactMarkdown>
             </div>
           )
         )}
+
 
         {msg.toolCalls && msg.toolCalls.length > 0 && (
           <div className="tool-calls">
@@ -579,7 +594,12 @@ function AssistantMessage({ msg }: { msg: ChatMessage }) {
         {!msg.streaming && msg.text && (
           <div style={{ display: "flex", gap: 4 }}>
             <CopyButton text={msg.text} />
-            <SaveMenu text={msg.text} />
+            {onExport && (
+              <button className="copy-btn" title="Save the full response as a report (HTML / PDF / Word)"
+                onClick={() => onExport(msg.id)}>
+                <span aria-hidden="true">📄</span> Save…
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -822,6 +842,10 @@ function UrlListResult({ name, result, onSend }: { name: string; result: string;
 // ── MCP App (SEP-1865) sandboxed iframe + postMessage bridge ──────────────────
 export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: string; onSend: (text: string) => void }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // Set by the effect; called from the iframe's onLoad to proactively deliver render data,
+  // so an app whose one-shot "ready"/"initialize" announce raced ahead of our listener still
+  // gets its content instead of rendering a blank frame.
+  const kickRef = useRef<(() => void) | null>(null);
   const [approved, setApproved] = useState(approvedMcpApps.has(ui.server_id));
 
   useEffect(() => {
@@ -845,6 +869,25 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
     const proxyCall = async (toolNameArg: string, argsObj: unknown) =>
       invoke("mcp_ui_call_tool", { args: { server_id: ui.server_id, tool_name: toolNameArg, arguments: argsObj ?? {} } });
 
+    // Deliver the tool's input + result to the app. Reused by the reactive handshake below
+    // and by the proactive onLoad kick.
+    const pushToolData = () => {
+      post({ jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: ui.arguments ?? {} } });
+      post({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: {
+        content: ui.content ?? [],
+        structuredContent: ui.structured ?? undefined,
+        _meta: ui.meta ?? undefined,
+      }});
+    };
+
+    // Proactive delivery covering both dialects — an app only understands one and ignores the
+    // other. Fired on iframe load (and retried) so a missed one-shot announce doesn't blank it.
+    const kick = () => {
+      pushToolData();                                                                   // ext-apps
+      post({ type: "ui-lifecycle-iframe-render-data", payload: { renderData: ui.structured ?? null } }); // MCP-UI
+    };
+    kickRef.current = kick;
+
     const onMessage = async (event: MessageEvent) => {
       if (event.source !== iframe.contentWindow) return; // only this app's iframe
       const data = event.data as Record<string, unknown> | null;
@@ -855,16 +898,6 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
       if (data.jsonrpc === "2.0" && typeof data.method === "string") {
         const { id, method } = data as { id?: unknown; method: string };
         const params = (data.params ?? {}) as Record<string, unknown>;
-
-        // Push the tool's input + result so the app can render its content.
-        const pushToolData = () => {
-          post({ jsonrpc: "2.0", method: "ui/notifications/tool-input", params: { arguments: ui.arguments ?? {} } });
-          post({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: {
-            content: ui.content ?? [],
-            structuredContent: ui.structured ?? undefined,
-            _meta: ui.meta ?? undefined,
-          }});
-        };
 
         try {
           if (method === "ui/initialize") {
@@ -945,7 +978,7 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
     };
 
     window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
+    return () => { window.removeEventListener("message", onMessage); kickRef.current = null; };
   }, [approved, ui, onSend]);
 
   if (!ui.html) return null;
@@ -981,19 +1014,56 @@ export function McpAppFrame({ ui, toolName, onSend }: { ui: ToolUi; toolName: st
         title={`mcp-app-${toolName}`}
         sandbox="allow-scripts allow-forms"
         srcDoc={ui.html}
+        onLoad={() => {
+          // The app's one-shot ready/init announce may have raced ahead of our message
+          // listener (→ blank frame). Proactively deliver render data now, and retry a
+          // couple of times in case the app's own listener isn't attached yet.
+          const k = kickRef.current;
+          if (!k) return;
+          k();
+          setTimeout(() => kickRef.current?.(), 150);
+          setTimeout(() => kickRef.current?.(), 500);
+        }}
         style={{ width: "100%", height: 420, border: "1px solid var(--border)", borderRadius: 8, background: "#fff", marginTop: 6 }}
       />
     </div>
   );
 }
 
+// Model-authored HTML artifact (create_artifact) — rendered inline in a sandboxed frame with a
+// Save button. Static-or-scripted HTML; sandbox allows scripts but not same-origin/network.
+function ArtifactFrame({ title, html }: { title: string; html: string }) {
+  const saveArtifact = async () => {
+    const safe = title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "artifact";
+    try {
+      const path = await save({ title: "Save artifact", defaultPath: `${safe}.html`,
+        filters: [{ name: "HTML", extensions: ["html"] }] });
+      if (!path) return;
+      await invoke("write_file_text", { path, content: html });
+    } catch { /* cancelled */ }
+  };
+  return (
+    <div className="msg-tool-result artifact-block">
+      <div className="artifact-head">
+        <span className="artifact-title">▤ {title}</span>
+        <button className="artifact-save" onClick={saveArtifact}>Save HTML…</button>
+      </div>
+      <iframe className="artifact-frame" sandbox="allow-scripts" srcDoc={html} title={`artifact-${title}`} />
+    </div>
+  );
+}
+
 export function ToolResultRow({
-  name, result, args, ui, images, onSend, onAttach,
+  name, result, args, ui, images, artifact, onSend, onAttach,
 }: {
   name: string; result: string; args?: string; ui?: ToolUi; images?: string[];
+  artifact?: { title: string; html: string };
   onSend: (text: string) => void;
   onAttach: (path: string, prompt: string) => void;
 }) {
+  if (artifact?.html) {
+    return <ArtifactFrame title={artifact.title} html={artifact.html} />;
+  }
   if (ui?.html) {
     return <McpAppFrame ui={ui} toolName={name} onSend={onSend} />;
   }
@@ -1003,8 +1073,14 @@ export function ToolResultRow({
     return (
       <div className="msg-tool-result">
         {images.map((src, i) => (
-          <img key={i} src={src} alt={`${name} image ${i + 1}`}
-            style={{ maxWidth: "100%", borderRadius: 10, display: "block", marginTop: i ? 8 : 0 }} />
+          <div key={i} style={{ position: "relative", marginTop: i ? 8 : 0, display: "inline-block", maxWidth: "100%" }}>
+            <img src={src} alt={`${name} image ${i + 1}`}
+              style={{ maxWidth: "100%", borderRadius: 10, display: "block" }} />
+            <button title="Save image" onClick={() => downloadImage(src, `${name}-${i + 1}`)}
+              style={{ position: "absolute", top: 8, right: 8, width: 28, height: 28, borderRadius: 8,
+                border: "none", cursor: "pointer", background: "rgba(15,23,42,0.55)", color: "#fff",
+                fontSize: 15, lineHeight: "28px", textAlign: "center", padding: 0 }}>⤓</button>
+          </div>
         ))}
       </div>
     );
@@ -1049,6 +1125,65 @@ export default function App() {
   const [jobBadge, setJobBadge] = useState(0);
   // Pending run_python execution awaiting the user's approval.
   const [permissionRequest, setPermissionRequest] = useState<{ code: string } | null>(null);
+  // Styled-report export: preview of the themed HTML before saving.
+  const [reportPreview, setReportPreview] = useState<{ html: string; markdown: string; title: string } | null>(null);
+
+  const exportReport = async (msgId: string) => {
+    // Gather the WHOLE turn's response — the model may emit prose across several steps (split into
+    // multiple assistant bubbles). Turn = messages between the preceding and next user message.
+    const msgs = messagesRef.current;
+    const idx = msgs.findIndex(m => m.id === msgId);
+    if (idx < 0) return;
+    let s = 0;
+    for (let i = idx; i >= 0; i--) { if (msgs[i].role === "user") { s = i + 1; break; } }
+    let e = msgs.length;
+    for (let i = idx + 1; i < msgs.length; i++) { if (msgs[i].role === "user") { e = i; break; } }
+    const turn = msgs.slice(s, e);
+    const markdown = turn.filter(m => m.role === "assistant" && m.text).map(m => m.text).join("\n\n");
+    if (!markdown.trim()) return;
+
+    const m = markdown.match(/^#\s+(.+)$/m);
+    const title = (m?.[1] ?? "LexiChat Report").trim();
+    const subtitle = activeProfile?.name;
+    // Figures generated in this turn: {{figure:N}} tokens go inline; the rest append as a section.
+    const figs = turn.filter(x => x.role === "tool-result").flatMap(x => x.toolImages ?? []).filter(u => u.startsWith("data:"));
+    const { out: md2, used } = substituteFigures(markdown, figs, true);
+    const unused = figs.filter((_, i) => !used.has(i));
+    try {
+      const html = await invoke<string>("render_report_html", { args: { markdown: md2, title, subtitle, figures: unused } });
+      setReportPreview({ html, markdown, title });
+    } catch (err) {
+      setMessages(prev => [...prev, { id: uid(), role: "error", text: `Could not render report: ${String(err)}` }]);
+    }
+  };
+
+  // HTML and Word both save the exact themed HTML (Word opens HTML `.doc` with styling + inline
+  // images) — so both keep the report's look and its charts.
+  const saveReportAs = async (fmt: "html" | "doc") => {
+    if (!reportPreview) return;
+    const safe = reportPreview.title.replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "report";
+    const label = fmt === "doc" ? "Word Document" : "HTML report";
+    try {
+      const path = await save({ title: "Save report", defaultPath: `${safe}.${fmt}`,
+        filters: [{ name: label, extensions: [fmt] }] });
+      if (!path) return;
+      await invoke("write_file_text", { path, content: reportPreview.html });
+      setReportPreview(null);
+      setMessages(prev => [...prev, { id: uid(), role: "notice", text: `Report saved: ${path}` }]);
+    } catch (err) {
+      setMessages(prev => [...prev, { id: uid(), role: "error", text: `Could not save report: ${String(err)}` }]);
+    }
+  };
+
+  // Faithful PDF: open the styled report in the browser, where Print → Save as PDF is exact.
+  const printReport = async () => {
+    if (!reportPreview) return;
+    try {
+      await invoke("open_html_in_browser", { html: reportPreview.html });
+    } catch (err) {
+      setMessages(prev => [...prev, { id: uid(), role: "error", text: `Could not open the report: ${String(err)}` }]);
+    }
+  };
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1125,6 +1260,23 @@ export default function App() {
   const streamOwner = useRef(0);
   const streamActive = () => streamOwner.current === streamEpoch.current;
 
+  // Dev control (debug builds): the /dev/run HTTP endpoint drives runs through send() headlessly.
+  // Refs keep the listener (registered once) pointed at the latest state/functions.
+  const sendRef = useRef<((t: string) => Promise<void>) | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const isRunningRef = useRef(false);
+  const autoApproveControlRef = useRef(false);
+  const settingsRef = useRef(settings);
+  const selectedModelRef = useRef(selectedModel);
+  const chatParamsRef = useRef<ChatParams | null>(null);
+  const profileSwitchRef = useRef<((id: string) => Promise<void>) | null>(null);
+  const handleResetRef = useRef<(() => Promise<void>) | null>(null);
+  const forceAllowCodeToolsRef = useRef(false); // dev-control transient override for allow_code_tools
+  messagesRef.current = messages;
+  isRunningRef.current = isRunning;
+  settingsRef.current = settings;
+  selectedModelRef.current = selectedModel;
+
   // Cancel a running agent loop and supersede its stream so late events are dropped.
   const stopActiveRun = () => {
     invoke("stop_generation").catch(() => {});
@@ -1186,14 +1338,30 @@ export default function App() {
   useEffect(() => {
     const cleanup: Array<() => void> = [];
 
+    // Pre-load the Python runtime so the first run_python (or a scheduled job) isn't cold.
+    warmPyodide();
+
     listen<{ delta: string }>("agent-token", e => {
       if (!streamActive()) return;
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === "assistant" && last.streaming) {
-          return [...prev.slice(0, -1), { ...last, text: last.text + e.payload.delta }];
+          return [...prev.slice(0, -1), { ...last, text: last.text + e.payload.delta, status: undefined }];
         }
         return [...prev, { id: uid(), role: "assistant", text: e.payload.delta, streaming: true }];
+      });
+    }).then(u => cleanup.push(u));
+
+    // Phase label for the otherwise-silent stretches (tool selection, prompt eval) — shown next
+    // to the thinking dots so a working run never looks hung.
+    listen<{ phase: string }>("agent-status", e => {
+      if (!streamActive()) return;
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.streaming) {
+          return [...prev.slice(0, -1), { ...last, status: e.payload.phase }];
+        }
+        return [...prev, { id: uid(), role: "assistant", text: "", streaming: true, status: e.payload.phase }];
       });
     }).then(u => cleanup.push(u));
 
@@ -1213,13 +1381,19 @@ export default function App() {
       });
     }).then(u => cleanup.push(u));
 
-    listen<{ name: string; result: string; ui?: ToolUi; images?: string[] }>("agent-tool-result", e => {
+    listen<{ name: string; result: string; ui?: ToolUi; images?: string[]; artifact?: { title: string; html: string } }>("agent-tool-result", e => {
       if (!streamActive()) return;
       setMessages(prev => {
         // Find args for this tool call from the most recent streaming assistant message
         const streamingMsg = [...prev].reverse().find(m => m.role === "assistant" && m.streaming);
         const matchingCall = streamingMsg?.toolCalls?.find(tc => tc.name === e.payload.name);
         const closed = prev.map(m => m.streaming ? { ...m, streaming: false } : m);
+        // Resolve {{figure:N}} tokens in a model artifact against charts generated this turn.
+        let artifact = e.payload.artifact;
+        if (artifact?.html && artifact.html.includes("{{figure:")) {
+          const figs = collectTurnFigures(prev);
+          artifact = { ...artifact, html: substituteFigures(artifact.html, figs, false).out };
+        }
         return [...closed, {
           id: uid(), role: "tool-result",
           text: e.payload.result,
@@ -1227,6 +1401,7 @@ export default function App() {
           toolArgs: matchingCall?.args,
           ui: e.payload.ui,
           toolImages: e.payload.images,
+          artifact,
         }];
       });
     }).then(u => cleanup.push(u));
@@ -1265,7 +1440,130 @@ export default function App() {
 
     // Code-execution permission request from the run_python sandbox.
     listen<{ code: string }>("agent-permission-request", e => {
+      // Dev control auto-approves so headless runs aren't blocked on the modal.
+      if (autoApproveControlRef.current) {
+        invoke("respond_code_permission", { approved: true }).catch(() => {});
+        return;
+      }
       setPermissionRequest({ code: e.payload.code });
+    }).then(u => cleanup.push(u));
+
+    // run_python execution: the backend hands us code + staged files; run them in the Pyodide
+    // worker (WASM CPython in the webview) and send the result back.
+    listen<{ request_id: number; code: string; files: PyFile[] }>("run-python-request", async e => {
+      const res = await runPython(e.payload.code, e.payload.files ?? []);
+      await invoke("respond_python_result", { args: {
+        request_id: e.payload.request_id,
+        output: res.output, error: res.error, images: res.images, out_files: res.outFiles,
+      } }).catch(() => {});
+    }).then(u => cleanup.push(u));
+
+    // Dev control (debug builds): the /dev/run HTTP endpoint drives a real chat turn headlessly.
+    // Runs against the CURRENT active profile/settings, auto-approves the code-exec prompt, then
+    // reports back a structured trace of the new messages. Config switching is a later phase.
+    // Snapshot of the app's current config, for GET /dev/state and the config reply.
+    const currentState = () => {
+      const s = settingsRef.current;
+      const ap = s.profiles.find(p => p.id === s.activeProfileId) ?? null;
+      const cp = chatParamsRef.current;
+      return {
+        activeProfile: ap?.name ?? null,
+        activeProfileId: s.activeProfileId,
+        model: selectedModelRef.current,
+        reasoning: cp?.reasoning ?? "auto",
+        numCtx: cp?.numCtx ?? null,
+        allowCodeTools: !!ap?.allowCodeTools || forceAllowCodeToolsRef.current,
+        profiles: s.profiles.map(p => ({
+          id: p.id, name: p.name, model: p.model,
+          allowCodeTools: !!p.allowCodeTools, maxTools: p.maxTools,
+        })),
+      };
+    };
+
+    listen<{ id: number }>("dev-control-state", e => {
+      invoke("dev_control_report", { args: { id: e.payload.id, trace: currentState() } }).catch(() => {});
+    }).then(u => cleanup.push(u));
+
+    listen<{ id: number; params: { profile?: string; reasoning?: "on" | "off" | "auto"; numCtx?: number; model?: string; allowCodeTools?: boolean } }>("dev-control-config", async e => {
+      const { id, params } = e.payload;
+      if (params.profile) {
+        const s = settingsRef.current;
+        const target = s.profiles.find(p => p.name === params.profile || p.id === params.profile);
+        if (target) await profileSwitchRef.current?.(target.id);
+      }
+      if (params.reasoning) setChatParams(p => ({ ...p, reasoning: params.reasoning === "auto" ? undefined : params.reasoning }));
+      if (typeof params.numCtx === "number") setChatParams(p => ({ ...p, numCtx: params.numCtx }));
+      if (params.model) setSelectedModel(String(params.model));
+      if (typeof params.allowCodeTools === "boolean") forceAllowCodeToolsRef.current = params.allowCodeTools;
+      await new Promise(r => setTimeout(r, 350)); // let profile switch / state settle
+      invoke("dev_control_report", { args: { id, trace: currentState() } }).catch(() => {});
+    }).then(u => cleanup.push(u));
+
+    listen<{ id: number; params: { message?: string; reasoning?: "on" | "off" | "auto"; numCtx?: number; model?: string; allowCodeTools?: boolean; fresh?: boolean } }>("dev-control-run", async e => {
+      const { id, params } = e.payload;
+      const message = String(params?.message ?? "");
+      const report = (trace: unknown) => invoke("dev_control_report", { args: { id, trace } }).catch(() => {});
+      if (!message.trim()) { report({ error: "empty message" }); return; }
+      // Fresh conversation per run by default so tests aren't contaminated by prior history
+      // (reset first — it also restores chatParams, which the overrides below then re-apply).
+      if (params.fresh !== false) { await handleResetRef.current?.(); await new Promise(r => setTimeout(r, 100)); }
+      // Optional per-run setting overrides so an external driver can A/B speed vs. quality.
+      if (params.reasoning) setChatParams(p => ({ ...p, reasoning: params.reasoning === "auto" ? undefined : params.reasoning }));
+      if (typeof params.numCtx === "number") setChatParams(p => ({ ...p, numCtx: params.numCtx }));
+      if (params.model) setSelectedModel(String(params.model));
+      if (typeof params.allowCodeTools === "boolean") forceAllowCodeToolsRef.current = params.allowCodeTools;
+      if (params.reasoning || params.numCtx != null || params.model) await new Promise(r => setTimeout(r, 250)); // let state + sendRef settle
+      drainCodeToolCalls(); // clear any stale code-tool log
+      const startLen = messagesRef.current.length;
+      autoApproveControlRef.current = true;
+      const t0 = performance.now();
+      try {
+        await sendRef.current?.(message);
+        // send() returns before the agent loop finishes; wait for isRunning to settle to false.
+        await new Promise(r => setTimeout(r, 250)); // grace for isRunning → true
+        const deadline = Date.now() + 880_000;
+        while (isRunningRef.current && Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 150));
+        }
+      } catch (err) {
+        report({ error: String(err), elapsedMs: Math.round(performance.now() - t0) }); autoApproveControlRef.current = false; return;
+      }
+      autoApproveControlRef.current = false;
+      const elapsedMs = Math.round(performance.now() - t0);
+      const codeToolCalls = drainCodeToolCalls();
+      const trace = messagesRef.current.slice(startLen).map(m => ({
+        role: m.role,
+        text: m.text || undefined,
+        toolCalls: m.toolCalls?.map(tc => ({ name: tc.name, args: tc.args })),
+        toolName: m.toolName,
+        toolResult: m.role === "tool-result" ? m.text : undefined,
+        images: (m.toolImages?.length ?? m.imageDataUrls?.length) || undefined,
+        ui: m.ui ? { server_id: m.ui.server_id, hasHtml: !!m.ui.html } : undefined,
+        artifact: m.artifact ? { title: m.artifact.title, htmlLen: m.artifact.html.length } : undefined,
+        status: m.status,
+      }));
+      const finalAnswer = [...messagesRef.current.slice(startLen)].reverse()
+        .find(m => m.role === "assistant" && !!m.text)?.text;
+      report({ finalAnswer, elapsedMs, codeToolCalls, messages: trace });
+    }).then(u => cleanup.push(u));
+
+    // run_python produced output files but no sandbox folder is configured to save them. Ask the
+    // user to pick a folder — it's added to the sandbox and the stashed files are written there.
+    // We never write outside the sandbox.
+    listen<{ files: string[] }>("sandbox-save-request", async e => {
+      const names = e.payload.files ?? [];
+      const dir = await open({
+        directory: true,
+        title: `Choose a folder to save ${names.length} file(s) and add it to the sandbox`,
+      }).catch(() => null);
+      if (!dir || typeof dir !== "string") return; // user cancelled → files discarded
+      try {
+        const saved = await invoke<string[]>("save_pending_outputs", { dir });
+        setMessages(prev => [...prev, { id: uid(), role: "notice",
+          text: `Saved to sandbox folder (now added to the sandbox): ${saved.join(", ")}` }]);
+      } catch (err) {
+        setMessages(prev => [...prev, { id: uid(), role: "error", text: `Could not save files: ${String(err)}` }]);
+      }
     }).then(u => cleanup.push(u));
 
     // Persist refreshed OAuth2 access tokens so they survive restarts.
@@ -1346,8 +1644,13 @@ export default function App() {
     const runPythonMaster = settings.enabledTools.run_python === true;
     const enabledTools = ALL_BUILTIN_TOOLS.filter(t => {
       const name = t.function.name;
-      // No active profile → conservative read-only default; an explicit global "off" still applies.
-      if (!activeProfile) return SAFE_DEFAULT_BUILTINS.has(name) && settings.enabledTools[name] !== false;
+      if (!activeProfile) {
+        // No active profile → conservative read-only default. Exception: run_python is allowed
+        // when its global master switch is explicitly on (an opt-in security capability, still
+        // gated by the per-run permission prompt) — so code execution doesn't need a profile.
+        if (name === "run_python") return runPythonMaster;
+        return SAFE_DEFAULT_BUILTINS.has(name) && settings.enabledTools[name] !== false;
+      }
       if (name === "run_python") return runPythonMaster && effectiveEnabledTools.run_python !== false;
       return effectiveEnabledTools[name] !== false;
     });
@@ -1361,7 +1664,7 @@ export default function App() {
     const otherFiles = attachedFiles.filter(f => !isImage(f));
 
     const fullText = otherFiles.length > 0
-      ? `${text}\n\nAttached files:\n${otherFiles.map(f => `- ${f}`).join("\n")}`
+      ? `${text}\n\nThe user has attached the following local file(s). Use the read_file tool to read them directly (it extracts text from PDF, Word, and plain text automatically). This IS the document the user is referring to — do NOT search or fetch the web for it:\n${otherFiles.map(f => `- ${f}`).join("\n")}`
       : text;
 
     // Build display text — only list non-image attachments (images shown as thumbnails)
@@ -1412,7 +1715,7 @@ export default function App() {
       if (ctxMCP.length > 0)
         externalParts.push(`MCP servers connected: ${ctxMCP.map(s => s.name).join(", ")}.`);
       const externalSuffix = externalParts.length > 0
-        ? `\nTOOL ROUTING: connected data tools are available — strongly prefer them over web_search whenever the user's request matches their topic, and only fall back to web_search for general open-web information they do not cover. ${externalParts.join(" ")}`
+        ? `\nTOOL ROUTING: connected data tools are available — strongly prefer them over web_search whenever the user's request matches their topic, and only fall back to web_search for general open-web information they do not cover. When the user's question is about a topic a connected tool covers (e.g. crime/safety, house prices/property, planning, deprivation/demographics, health/care ratings), call the tool(s) that match WHAT THE USER ACTUALLY ASKED and answer from their real returned data — do not answer a data question from general knowledge, and do not substitute a map or geocode for the data. But stay on topic: only call the tools relevant to the question — do NOT pull in unrelated data tools just because they exist, and if a tool keeps failing, stop and answer with what you have rather than retrying it many times. ${externalParts.join(" ")}`
         : "";
 
       const resolved = resolveParams(chatParams);
@@ -1426,9 +1729,23 @@ export default function App() {
 
       const wikiSuffix = wikiEnabled ? WIKI_SYSTEM_PROMPT_BLOCK : "";
 
+      // Never emit remote image URLs — the CSP blocks them so they render as nothing; tool/chart
+      // images are already shown inline. (The model kept appending mapbox/OSM image URLs.)
+      const outputRulesSuffix = "\n\nOUTPUT RULES: NEVER write a markdown image or link pointing at a remote http(s):// image URL (a map, chart, tile, etc.) — remote images are blocked and will NOT display. Any map, chart, or image produced by a tool or by run_python is ALREADY shown inline in the chat; just refer to it as \"shown above\". Do not paste image/tile URLs into your answer.";
+
+      // The model has no clock — give it today's date so "latest/recent/this month" queries work
+      // without needing a tool call, and warn that some data sources lag.
+      const now = new Date();
+      const dateSuffix = `\n\nTODAY'S DATE is ${now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })} (${now.toISOString().slice(0, 10)}). Use this whenever the user asks for the "latest", "recent", "current", "this month/year", "today", etc. — you already know today's date and do not need a tool for it. Be aware some data sources lag behind today (e.g. UK police street-crime data is usually 1–2 months old), so the "latest available" data may be for an earlier month than the current one — request the most recent month the source actually offers.`;
+
+      // Code-mode: when the profile allows code to call tools, tell the model about the Python API.
+      const codeToolsSuffix = (activeProfile?.allowCodeTools || forceAllowCodeToolsRef.current)
+        ? "\n\nCODE-MODE TOOLS: inside run_python you can call registered tools directly. ALWAYS call `tools = await list_tools()` FIRST to get the EXACT tool names and their `parameters` schema — never guess a tool name or a group label. Each entry is {name, description, parameters}. Then `data = await call_tool(\"exact_tool_name\", {\"arg\": \"value\"})` runs one and returns a dict/list (parsed JSON) or string; build the args from the tool's parameters schema. Both are async — you MUST `await` them. Prefer this for multi-source work: fetch with call_tool, then compute/aggregate/plot with pandas/numpy/matplotlib in the same script, instead of many separate tool-call steps."
+        : "";
+
       const systemPrompt = allowedDirs.length > 0
-        ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
-        : `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}`;
+        ? `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}${codeToolsSuffix}${outputRulesSuffix}${dateSuffix}\nThe user's configured folders are: ${allowedDirs.join(", ")}. Rules for file operations:\n- When reading or listing files without a specified path, use these folders immediately — do not ask for clarification.\n- When writing or saving a file without a specified path, save it to ${allowedDirs[0]} with a sensible filename derived from the content (e.g. sikhism_article.pdf). Never call write_file without a full absolute path.\n- Always use full absolute paths — never '.' or '~'.`
+        : `${effectiveBase}${externalSuffix}${contextVarsSuffix}${wikiSuffix}${codeToolsSuffix}${outputRulesSuffix}${dateSuffix}`;
 
       // MCP servers this profile may use. With no active profile, none are enabled (conservative
       // default) — a profile must opt in. The backend filters strictly by this list.
@@ -1461,6 +1778,7 @@ export default function App() {
           num_ctx: resolved.numCtx,
           num_predict: resolved.numPredict,
           stop: resolved.stop ?? null,
+          think: resolved.think ?? null,
           keep_alive: resolved.keepAlive ?? null,
           web_search_results: settings.webSearchResults ?? 10,
           max_steps: settings.maxSteps ?? 20,
@@ -1468,6 +1786,7 @@ export default function App() {
           enabled_mcp_server_ids: enabledMcpServerIds,
           max_tools: (activeProfile?.maxTools ?? settings.maxTools) || null,
           tool_result_limit: activeProfile?.toolResultLimit ?? null,
+          allow_code_tools: forceAllowCodeToolsRef.current || (activeProfile?.allowCodeTools ?? false),
         }
       });
     } catch (err) {
@@ -1476,12 +1795,18 @@ export default function App() {
       // render it twice. Errors thrown before the loop starts still surface.
       const text = String(err);
       setMessages(prev => {
-        const last = prev[prev.length - 1];
-        if (last?.role === "error" && last.text === text) return prev;
-        return [...prev, { id: uid(), role: "error", text }];
+        // Close any streaming "Thinking…" bubble so it can't strand as a zombie (no stop
+        // button, dots forever). An empty closed assistant message renders nothing.
+        const closed = prev
+          .map(m => (m.streaming ? { ...m, streaming: false } : m))
+          .filter(m => !(m.role === "assistant" && !m.streaming && !m.text && !(m.toolCalls?.length)));
+        const last = closed[closed.length - 1];
+        if (last?.role === "error" && last.text === text) return closed;
+        return [...closed, { id: uid(), role: "error", text }];
       });
     }
   };
+  sendRef.current = send; // keep the dev-control listener pointed at the latest send()
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
@@ -1608,6 +1933,9 @@ export default function App() {
     await syncServers(updated);
     await handleReset();
   };
+  chatParamsRef.current = chatParams;
+  profileSwitchRef.current = handleProfileChange;
+  handleResetRef.current = handleReset;
 
   const canSend = (input.trim().length > 0 || attachedFiles.length > 0) && !isRunning && !!selectedModel;
 
@@ -1713,9 +2041,9 @@ export default function App() {
           </div>
         ) : (
           <div className="messages">
-            {messages.map(msg => {
+            {messages.map((msg, i) => {
               if (msg.role === "user")        return <UserMessage key={msg.id} text={msg.text} imageDataUrls={msg.imageDataUrls} />;
-              if (msg.role === "assistant")   return <AssistantMessage key={msg.id} msg={msg} />;
+              if (msg.role === "assistant")   return <AssistantMessage key={msg.id} msg={msg} onExport={isLastAssistantInTurn(messages, i) ? exportReport : undefined} />;
               if (msg.role === "tool-result") return (
                 <ToolResultRow
                   key={msg.id}
@@ -1724,6 +2052,7 @@ export default function App() {
                   args={msg.toolArgs}
                   ui={msg.ui}
                   images={msg.toolImages}
+                  artifact={msg.artifact}
                   onSend={send}
                   onAttach={(path, prompt) => { setAttachedFiles([path]); setInput(prompt); }}
                 />
@@ -1797,7 +2126,7 @@ export default function App() {
             </select>
             <div className="input-spacer" />
             {isRunning ? (
-              <button className="send-circle stop" onClick={() => { invoke("stop_generation"); setIsRunning(false); }}>
+              <button className="send-circle stop" onClick={stopActiveRun}>
                 <div className="stop-square" />
               </button>
             ) : (
@@ -1893,6 +2222,25 @@ export default function App() {
                 setPermissionRequest(null);
               }}>Allow &amp; run</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {reportPreview && (
+        <div className="modal-overlay" onClick={() => setReportPreview(null)}>
+          <div className="report-preview-modal" onClick={e => e.stopPropagation()}>
+            <div className="report-preview-head">
+              <span className="report-preview-title">Report preview — {reportPreview.title}</span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>Save as</span>
+                <button className="btn primary" onClick={() => saveReportAs("html")} title="Styled report with charts embedded — opens in any browser">HTML</button>
+                <button className="btn" onClick={printReport} title="Opens the styled report in your browser — then Print → Save as PDF for an exact copy">PDF…</button>
+                <button className="btn" onClick={() => saveReportAs("doc")} title="Opens in Word with styling and charts">Word</button>
+                <button className="btn" onClick={() => setReportPreview(null)}>Close</button>
+              </div>
+            </div>
+            {/* sandbox="" → static HTML+CSS only, no scripts/same-origin — safe by construction. */}
+            <iframe className="report-preview-frame" sandbox="" srcDoc={reportPreview.html} title="Report preview" />
           </div>
         </div>
       )}

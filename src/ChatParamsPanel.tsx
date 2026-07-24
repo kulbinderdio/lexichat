@@ -19,6 +19,9 @@ export interface ChatParams {
   stopSequences?: string;
   systemPromptOverride?: string;
   keepAlive?: string;
+  // Reasoning toggle for thinking models (Qwen3, etc.). undefined = model default.
+  // "off" skips the pre-answer reasoning pass — much faster per turn on local models.
+  reasoning?: "on" | "off";
 }
 
 export const DEFAULT_CHAT_PARAMS: ChatParams = {
@@ -38,6 +41,7 @@ export function resolveParams(p: ChatParams): {
   stop?: string[];
   keepAlive?: string;
   systemPromptOverride?: string;
+  think?: boolean;
 } {
   // Only non-default presets override Ollama — "balanced", "auto", "short" let
   // the model use its own defaults so we never accidentally truncate tool schemas.
@@ -55,6 +59,7 @@ export function resolveParams(p: ChatParams): {
     stop: p.stopSequences ? p.stopSequences.split(",").map(s => s.trim()).filter(Boolean) : undefined,
     keepAlive: p.keepAlive,
     systemPromptOverride: p.systemPromptOverride || undefined,
+    think: p.reasoning === "off" ? false : p.reasoning === "on" ? true : undefined,
   };
 }
 
@@ -62,7 +67,8 @@ export function hasAdvancedOverrides(p: ChatParams): boolean {
   return p.temperature !== undefined || p.topP !== undefined || p.topK !== undefined ||
     p.repeatPenalty !== undefined || (p.seed !== undefined && p.seed !== null) ||
     p.numCtx !== undefined || p.numPredict !== undefined ||
-    !!p.stopSequences || !!p.systemPromptOverride || !!p.keepAlive;
+    !!p.stopSequences || !!p.systemPromptOverride || !!p.keepAlive ||
+    p.reasoning !== undefined;
 }
 
 export function hasCustomParams(p: ChatParams): boolean {
@@ -165,6 +171,18 @@ export function AdvancedParamsContent({
       <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 14, padding: "6px 8px", background: "var(--surface2)", borderRadius: 6 }}>
         Preset: <b>{draft.style}</b> · These override the preset values for this context.
       </div>
+
+      <ChipRow<"default" | "on" | "off">
+        label="Reasoning"
+        desc="Thinking models (Qwen3, etc.) reason before answering. Off is much faster per turn; On is better for hard multi-step tasks. (Ollama only.)"
+        value={draft.reasoning ?? "default"}
+        options={[
+          { value: "default", label: "Model default" },
+          { value: "off", label: "Off (faster)" },
+          { value: "on", label: "On" },
+        ]}
+        onChange={v => set("reasoning", v === "default" ? undefined : v)}
+      />
 
       <SliderRow label="Temperature"
         tooltip="Controls randomness. Lower = more focused, Higher = more creative."
@@ -353,6 +371,18 @@ function SimpleParamsPopover({ params, onChange, onClose, onAdvanced, anchor }: 
           { value: "long",  label: "Extended", desc: "8 192 tokens" },
         ]}
         onChange={v => set("contextSize", v)}
+      />
+
+      <ChipRow<"default" | "on" | "off">
+        label="Reasoning"
+        desc="Thinking models (e.g. Qwen3) reason before answering. Off is much faster per reply; On helps on hard multi-step tasks."
+        value={params.reasoning ?? "default"}
+        options={[
+          { value: "default", label: "Auto",  desc: "Model default" },
+          { value: "off",     label: "Off",   desc: "Faster replies" },
+          { value: "on",      label: "On",    desc: "Deeper thinking" },
+        ]}
+        onChange={v => set("reasoning", v === "default" ? undefined : v)}
       />
 
       <div style={{ borderTop: "1px solid var(--border-light)", margin: "2px 0 12px" }} />

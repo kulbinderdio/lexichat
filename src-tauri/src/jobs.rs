@@ -446,6 +446,7 @@ pub async fn execute_job(
             Vec::new(), // no attached-file sandbox paths in jobs
             10, 0, app, true, 25, // web_search=10, tool_result_limit=default; 25 steps — enough headroom for multi-step workflows
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), // jobs aren't user-cancellable
+            false, // discover_tools: jobs keep the deterministic LLM pre-flight
         ).await;
         // temp_mcp drops here → MCPConnections drop → kill_on_drop kills stdio processes
         r
@@ -476,6 +477,7 @@ pub async fn execute_job(
             Vec::new(), // no attached-file sandbox paths in jobs
             10, 0, app, true, 25, // web_search=10, tool_result_limit=default; 25 steps — enough headroom for multi-step workflows
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), // jobs aren't user-cancellable
+            false, // discover_tools: jobs keep the deterministic LLM pre-flight
         ).await
     };
 

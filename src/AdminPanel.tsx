@@ -109,6 +109,9 @@ export interface Profile {
   wikiEnabled?: boolean;
   // Max chars of a tool result fed back to the model. undefined = default (6000).
   toolResultLimit?: number;
+  // Allow code (run_python) to call registered tools via call_tool() / list_tools() (code-mode).
+  // Off unless opted in — it lets sandboxed Python invoke any tool this profile enables.
+  allowCodeTools?: boolean;
 }
 
 export type ProviderKind = "ollama" | "openai";
@@ -808,6 +811,21 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
             </div>
 
             <div className="field" style={{ marginBottom: 12 }}>
+              <label className="admin-checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" className="admin-checkbox"
+                  checked={d.allowCodeTools === true}
+                  onChange={e => setDraft({ ...d, allowCodeTools: e.target.checked })} />
+                <span>🛠️ Allow code to call tools</span>
+              </label>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                Let sandboxed Python (run_python) call this profile's registered tools via
+                <code> call_tool()</code> / <code>list_tools()</code> — the model can fetch, chain and
+                aggregate across APIs/MCP in one code block. Off by default: it lets code invoke any
+                tool this profile enables. Requires the run_python master switch.
+              </div>
+            </div>
+
+            <div className="field" style={{ marginBottom: 12 }}>
               <label>Chat Defaults</label>
               <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8 }}>
                 New chats in this profile start with these settings (can still be changed per chat).
@@ -1047,17 +1065,26 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
           <div style={{ display: "flex", alignItems: "center", gap: 12, width: "100%" }}>
             <div style={{ flex: 1 }}>
               <div className="admin-row-title">Max agent steps</div>
-              <div className="admin-row-sub">Tool-calling rounds the agent may take before it must answer. Raise for deep multi-source research.</div>
+              <div className="admin-row-sub">Tool-calling rounds the agent may take before it must answer. Raise for deep multi-source research, or set to No limit (runaway loops are still stopped by the built-in loop guards).</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <button className="stepper-btn" onClick={() => setMaxSteps(Math.max(5, (settings.maxSteps ?? 20) - 5))}>−</button>
-              <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "monospace", minWidth: 28, textAlign: "center" }}>{settings.maxSteps ?? 20}</span>
-              <button className="stepper-btn" onClick={() => setMaxSteps(Math.min(50, (settings.maxSteps ?? 20) + 5))}>+</button>
+              <button className="stepper-btn" disabled={settings.maxSteps === 0}
+                onClick={() => setMaxSteps(Math.max(5, (settings.maxSteps ?? 20) - 5))}>−</button>
+              <span style={{ fontSize: 14, fontWeight: 600, fontFamily: "monospace", minWidth: 40, textAlign: "center" }}>
+                {settings.maxSteps === 0 ? "∞" : (settings.maxSteps ?? 20)}
+              </span>
+              <button className="stepper-btn" disabled={settings.maxSteps === 0}
+                onClick={() => setMaxSteps(Math.min(200, (settings.maxSteps ?? 20) + 5))}>+</button>
             </div>
           </div>
-          {(settings.maxSteps ?? 20) !== 20 && (
-            <button className="link-btn" onClick={() => setMaxSteps(20)}>Reset to default (20)</button>
-          )}
+          <div style={{ display: "flex", gap: 12 }}>
+            <button className="link-btn" onClick={() => setMaxSteps(settings.maxSteps === 0 ? 20 : 0)}>
+              {settings.maxSteps === 0 ? "Set a numeric limit" : "No limit (∞)"}
+            </button>
+            {settings.maxSteps !== 20 && settings.maxSteps !== 0 && (
+              <button className="link-btn" onClick={() => setMaxSteps(20)}>Reset to default (20)</button>
+            )}
+          </div>
         </div>
       </section>
     </div>

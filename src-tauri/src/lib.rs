@@ -1,5 +1,6 @@
 mod ollama;
 mod tools;
+mod report;
 mod openapi;
 mod sparql;
 mod mcp;
@@ -7,7 +8,6 @@ mod jobs;
 mod job_designer;
 mod history;
 mod wiki;
-mod sandbox;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -41,12 +41,22 @@ pub struct AppState {
     /// In-flight code-execution permission request: the agent loop parks a
     /// oneshot sender here while it waits for the frontend to approve/deny.
     pub pending_code_permission: Mutex<Option<tokio::sync::oneshot::Sender<bool>>>,
+    /// In-flight `run_python` executions, keyed by request id: the agent loop parks a oneshot
+    /// here while the Pyodide worker in the webview runs the code; `respond_python_result` routes
+    /// the answer back by id. A map (not a single slot) so a background job and an interactive
+    /// chat can each have a run in flight without clobbering each other. See `ollama.rs`.
+    pub pending_python_result: Mutex<HashMap<u64, tokio::sync::oneshot::Sender<ollama::PyResult>>>,
+    /// Monotonic id source for `run_python` requests.
+    pub python_request_seq: std::sync::atomic::AtomicU64,
     /// Scratch slot: an MCP-App UI payload stashed by dispatch_tool for the agent
     /// loop to attach to the next `agent-tool-result` event.
     pub pending_tool_ui: Mutex<Option<ollama::ToolUiPayload>>,
     /// Base64 image `data:` URLs from the last tool result, rendered inline regardless of the
     /// MCP-App/approval flow. Taken by the agent loop when it emits the tool-result event.
     pub pending_tool_images: Mutex<Vec<String>>,
+    /// Model-authored HTML artifact (from `create_artifact`) stashed by dispatch for the agent
+    /// loop to attach to the next tool-result event (rendered inline in a sandboxed iframe).
+    pub pending_artifact: Mutex<Option<ollama::ArtifactPayload>>,
     /// MCP server ids the user has approved to render/interact with apps this
     /// session (set by `approve_mcp_app`; reset on restart).
     pub apps_allowed: Mutex<std::collections::HashSet<String>>,
@@ -56,6 +66,20 @@ pub struct AppState {
     /// Set by `stop_generation` to cancel the running agent loop. Reset to false at the
     /// start of each `send_message`. Checked between steps and while streaming tokens.
     pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Files `run_python` wrote to /work/out that couldn't be saved because no sandbox folder is
+    /// configured. Stashed (name, bytes) while the user is asked to add a folder; written by
+    /// `save_pending_outputs`. We never write outside the sandbox.
+    pub pending_output_files: Mutex<Vec<(String, Vec<u8>)>>,
+    /// Whether the active run's profile allows code (`run_python`) to call registered tools via
+    /// `call_tool` (code-mode). Set at `send_message` start. Off unless the profile opts in.
+    pub code_tools_allowed: Mutex<bool>,
+    /// Built-in tool names the active run may call from code (the profile's enabled built-ins,
+    /// minus run_python itself). Used to gate `call_tool_from_code`.
+    pub run_callable_builtins: Mutex<std::collections::HashSet<String>>,
+    /// Dev control server (debug builds): in-flight `/dev/run` requests, keyed by id. The server
+    /// parks a oneshot here and the frontend resolves it via `dev_control_report` with the trace.
+    pub pending_dev_run: Mutex<HashMap<u64, tokio::sync::oneshot::Sender<serde_json::Value>>>,
+    pub dev_run_seq: std::sync::atomic::AtomicU64,
 }
 
 impl Default for AppState {
@@ -78,11 +102,19 @@ impl Default for AppState {
             pending_email_raw: Mutex::new(None),
             code_exec_unlocked: Mutex::new(false),
             pending_code_permission: Mutex::new(None),
+            pending_python_result: Mutex::new(HashMap::new()),
+            python_request_seq: std::sync::atomic::AtomicU64::new(0),
             pending_tool_ui: Mutex::new(None),
             pending_tool_images: Mutex::new(Vec::new()),
+            pending_artifact: Mutex::new(None),
             apps_allowed: Mutex::new(std::collections::HashSet::new()),
             active_conversation_id: Mutex::new(None),
             cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending_output_files: Mutex::new(Vec::new()),
+            code_tools_allowed: Mutex::new(false),
+            run_callable_builtins: Mutex::new(std::collections::HashSet::new()),
+            pending_dev_run: Mutex::new(HashMap::new()),
+            dev_run_seq: std::sync::atomic::AtomicU64::new(0),
         }
     }
 }
@@ -144,6 +176,9 @@ async fn set_backend(args: BackendArgs, state: State<'_, AppState>) -> Result<()
 
 #[tauri::command]
 async fn reset_conversation(state: State<'_, AppState>) -> Result<(), String> {
+    // Cancel any in-flight run so its late events (e.g. a slow run_python) can't bleed into the
+    // fresh chat. send_message resets this to false when the next run starts.
+    state.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
     state.conversation.lock().unwrap().clear();
     *state.active_conversation_id.lock().unwrap() = None;
     Ok(())
@@ -307,6 +342,14 @@ pub struct SendMessageArgs {
     pub num_predict: Option<i32>,
     #[serde(default)]
     pub stop: Option<Vec<String>>,
+    /// Ollama reasoning toggle. `Some(false)` disables a thinking model's pre-answer reasoning
+    /// pass (much faster per turn). `None` leaves the model's default (Qwen3 etc. reason by default).
+    #[serde(default)]
+    pub think: Option<bool>,
+    /// Whether this profile allows code (`run_python`) to call registered tools via `call_tool`
+    /// (code-mode). Off unless the profile opts in.
+    #[serde(default)]
+    pub allow_code_tools: bool,
     #[serde(default)]
     pub keep_alive: Option<String>,
     #[serde(default = "default_web_search_results")]
@@ -373,6 +416,14 @@ async fn send_message(
 
     // Collect built-in tool schemas (frontend-provided: file tools, wiki, etc.)
     let builtin_tools = args.tools.clone();
+
+    // Code-mode: record whether this run's profile lets code call tools, and which built-ins are
+    // callable from code (enabled built-ins minus run_python, to prevent code re-entering itself).
+    *state.code_tools_allowed.lock().unwrap() = args.allow_code_tools;
+    *state.run_callable_builtins.lock().unwrap() = builtin_tools.iter()
+        .map(|t| t.function.name.clone())
+        .filter(|n| n != "run_python" && n != "find_tools")
+        .collect();
 
     // The wiki tools are one workflow, not independent tools: the system prompt requires a
     // wiki_search before every write and a wiki_append to log.md after it. Per-step selection
@@ -456,6 +507,7 @@ async fn send_message(
     let options = if args.temperature.is_some() || args.top_p.is_some() || args.top_k.is_some()
         || args.repeat_penalty.is_some() || args.seed.is_some()
         || args.num_ctx.is_some() || args.num_predict.is_some() || args.stop.is_some()
+        || args.think.is_some()
     {
         Some(ollama::ChatOptions {
             temperature: args.temperature,
@@ -466,6 +518,7 @@ async fn send_message(
             num_ctx: args.num_ctx,
             num_predict: args.num_predict,
             stop: args.stop.clone(),
+            think: args.think,
         })
     } else {
         None
@@ -490,8 +543,9 @@ async fn send_message(
         args.tool_result_limit.unwrap_or(0), // 0 → default
         &app,
         false, // silent = false for interactive chat
-        args.max_steps.clamp(1, 50), // configurable; default 20
+        if args.max_steps == 0 { usize::MAX } else { args.max_steps.max(1) }, // 0 = no limit; else uncapped (loop guards still stop runaways)
         cancel,
+        true, // discover_tools: interactive chat uses find_tools discovery for large tool sets
     )
     .await
     .map_err(|e| e.to_string())
@@ -508,6 +562,192 @@ fn respond_code_permission(approved: bool, state: State<'_, AppState>) -> Result
         let _ = tx.send(approved);
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct PyOutFile { name: String, b64: String }
+
+#[derive(Deserialize)]
+struct RespondPythonResultArgs {
+    #[serde(default)] request_id: u64,
+    #[serde(default)] output: String,
+    #[serde(default)] error: Option<String>,
+    #[serde(default)] images: Vec<String>,
+    #[serde(default)] out_files: Vec<PyOutFile>,
+}
+
+/// Frontend's response to a `run-python-request`: the Pyodide worker's output, chart images, and
+/// any files it wrote to /work/out. Output files are persisted ONLY inside a configured sandbox
+/// directory (the first allowed dir), under a sanitised (traversal-safe) basename; the real
+/// absolute path is reported to the model. If no sandbox folder is configured we NEVER write
+/// outside the sandbox — the files are stashed and the user is asked to add a folder (see
+/// `save_pending_outputs`). Resolves the oneshot the agent loop awaits.
+#[tauri::command]
+fn respond_python_result(args: RespondPythonResultArgs, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    use tauri::Emitter as _;
+    let allowed = state.allowed_dirs.lock().unwrap().clone();
+    let sandbox = allowed.first().cloned();
+    let mut saved: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    let mut pending: Vec<(String, Vec<u8>)> = Vec::new();
+    for f in &args.out_files {
+        // file_name() strips any path components — no traversal outside the sandbox dir.
+        let Some(name) = std::path::Path::new(&f.name).file_name().and_then(|n| n.to_str()).map(String::from) else { continue };
+        let bytes = match B64.decode(&f.b64) { Ok(b) => b, Err(e) => { failed.push(format!("{name}: {e}")); continue; } };
+        match &sandbox {
+            Some(dir) => {
+                let dest = std::path::Path::new(dir).join(&name);
+                match std::fs::write(&dest, &bytes) {
+                    Ok(()) => saved.push(dest.display().to_string()),
+                    Err(e) => failed.push(format!("{name}: {e}")),
+                }
+            }
+            // No sandbox folder → don't write anywhere; stash and ask the user to add one.
+            None => pending.push((name, bytes)),
+        }
+    }
+
+    let mut output = args.output;
+    if let Some(err) = args.error { if !err.is_empty() { output.push_str("\n[Python error]\n"); output.push_str(&err); } }
+    if !saved.is_empty() {
+        output.push_str(&format!(
+            "\n[SAVED TO DISK — report THESE exact real path(s) to the user; do NOT mention \
+             /work/out (an in-memory scratch path the user cannot open):\n{}]",
+            saved.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n")));
+    }
+    if !pending.is_empty() {
+        let names: Vec<String> = pending.iter().map(|(n, _)| n.clone()).collect();
+        *state.pending_output_files.lock().unwrap() = pending;
+        let _ = app.emit("sandbox-save-request", serde_json::json!({ "files": names }));
+        output.push_str(&format!(
+            "\n[File(s) generated ({}) but NO sandbox folder is configured, so they were NOT \
+             written to disk (files are only ever saved inside the sandbox). The user has been \
+             asked to choose a folder to add to the sandbox. Any chart is shown inline and can be \
+             saved with its ⤓ download button. Do NOT claim the file is saved at /work/out.]",
+            names.join(", ")));
+    }
+    if !failed.is_empty() {
+        output.push_str(&format!("\n[Could not save to disk: {}]", failed.join("; ")));
+    }
+
+    if let Some(tx) = state.pending_python_result.lock().unwrap().remove(&args.request_id) {
+        let _ = tx.send(ollama::PyResult { output, images: args.images });
+    }
+    Ok(())
+}
+
+/// Complete a deferred `run_python` output save: add `dir` to the sandbox, write the stashed
+/// files into it, and return their real paths. Called after the user picks a folder in response
+/// to a `sandbox-save-request`.
+#[tauri::command]
+fn save_pending_outputs(dir: String, state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let files = std::mem::take(&mut *state.pending_output_files.lock().unwrap());
+    if files.is_empty() { return Ok(Vec::new()); }
+    // Add the chosen folder to the sandbox (idempotent) and persist it.
+    {
+        let mut dirs = state.allowed_dirs.lock().unwrap();
+        if !dirs.contains(&dir) { dirs.push(dir.clone()); }
+    }
+    persist_allowed_dirs(&state);
+    let mut saved = Vec::new();
+    for (name, bytes) in files {
+        let dest = std::path::Path::new(&dir).join(&name);
+        std::fs::write(&dest, &bytes).map_err(|e| format!("{name}: {e}"))?;
+        saved.push(dest.display().to_string());
+    }
+    Ok(saved)
+}
+
+#[derive(Deserialize)]
+struct CallToolFromCodeArgs {
+    name: String,
+    #[serde(default)]
+    args: serde_json::Value,
+}
+
+/// (name, description, parameters-schema) of every enabled external tool (OpenAPI + SPARQL),
+/// parsed from their schemas. The parameter schema lets code-mode construct correct arguments
+/// without trial-and-error. MCP tools are added separately (async lock) by the caller.
+fn external_tool_catalog(
+    specs: &[RegisteredSpec],
+    sparql: &[RegisteredSparqlEndpoint],
+) -> Vec<(String, String, serde_json::Value)> {
+    let mut out = Vec::new();
+    let parse = |schema: &serde_json::Value| serde_json::from_value::<ollama::ToolSchema>(schema.clone()).ok();
+    for s in specs { for t in &s.tools {
+        if let Some(ts) = parse(&t.schema) { out.push((ts.function.name, ts.function.description, ts.function.parameters)); }
+    }}
+    for e in sparql { for t in &e.tools {
+        if let Some(ts) = parse(&t.schema) { out.push((ts.function.name, ts.function.description, ts.function.parameters)); }
+    }}
+    out
+}
+
+/// Code-mode bridge: `run_python`'s `call_tool(name, args)` / `list_tools()` route here. Gated by
+/// the profile's "allow code to call tools" flag and an allowlist of the run's enabled tools —
+/// code can only invoke tools the profile already exposes. Returns the tool's full result as JSON
+/// (parsed when possible, else a string). `name == "__list__"` returns the catalog for discovery.
+#[tauri::command]
+async fn call_tool_from_code(
+    call: CallToolFromCodeArgs,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    // Channel self-test (dev): echo args straight back, bypassing gates — isolates the
+    // worker↔runner↔Rust round-trip from model/tool/permission concerns.
+    if call.name == "__echo__" {
+        return Ok(serde_json::json!({ "echo": call.args }));
+    }
+    // Gate 1: the profile must allow code to call tools.
+    if !*state.code_tools_allowed.lock().unwrap() {
+        return Err("This profile does not allow code to call tools. Enable \"Allow code to call \
+                    tools\" in the profile to use call_tool().".into());
+    }
+
+    let specs = state.openapi_specs.lock().unwrap().clone();
+    let sparql = state.sparql_endpoints.lock().unwrap().clone();
+    let allowed_dirs = state.allowed_dirs.lock().unwrap().clone();
+    let builtins = state.run_callable_builtins.lock().unwrap().clone();
+    let mut ext = external_tool_catalog(&specs, &sparql);
+    // MCP tools (name + description + input schema) from the active connections.
+    let mcp: Vec<(String, String, serde_json::Value)> = state.mcp_connections.lock().await.values()
+        .flat_map(|c| c.tools.iter().map(|t| (t.name.clone(), t.description.clone(), t.input_schema.clone())))
+        .collect();
+    ext.extend(mcp);
+
+    // Discovery: list all callable tools, with parameter schemas so code can build correct args.
+    if call.name == "__list__" {
+        let mut out: Vec<serde_json::Value> = builtins.iter()
+            .map(|n| serde_json::json!({ "name": n, "description": "built-in tool" }))
+            .collect();
+        for (n, d, p) in &ext { out.push(serde_json::json!({ "name": n, "description": d, "parameters": p })); }
+        return Ok(serde_json::Value::Array(out));
+    }
+
+    // Gate 2: allowlist — only tools enabled for this run may be called.
+    let enabled = builtins.contains(&call.name) || ext.iter().any(|(n, _, _)| n == &call.name);
+    if !enabled {
+        return Err(format!("Tool '{}' is not available. Call list_tools() to see callable tools.", call.name));
+    }
+
+    let result = ollama::call_one_tool(
+        &call.name, &call.args, &specs, &sparql, &state.mcp_connections,
+        &allowed_dirs, &[], 10, &app,
+    ).await;
+
+    // Hard size cap to protect worker memory.
+    const MAX: usize = 10 * 1024 * 1024;
+    if result.len() > MAX {
+        return Err(format!("Tool result too large ({} bytes). Narrow the query or paginate.", result.len()));
+    }
+    // OpenAPI tool results are prefixed "HTTP <status>\n<body>". Strip that so code-mode's
+    // json.loads() gets the clean body directly (the model was burning retries stripping it).
+    let cleaned = result.strip_prefix("HTTP ")
+        .and_then(|_| result.split_once('\n').map(|(_, b)| b.to_string()))
+        .unwrap_or_else(|| result.clone());
+    // Return parsed JSON when possible so Python gets a dict/list; else the raw (uncleaned) string.
+    Ok(serde_json::from_str::<serde_json::Value>(&cleaned).unwrap_or(serde_json::Value::String(result)))
 }
 
 #[tauri::command]
@@ -552,6 +792,47 @@ fn write_file_text(path: String, content: String) -> Result<(), String> {
 #[tauri::command]
 fn save_document(path: String, content: String) -> Result<(), String> {
     crate::tools::save_document(&path, &content)
+}
+
+#[derive(Deserialize)]
+struct RenderReportArgs {
+    markdown: String,
+    #[serde(default)] title: Option<String>,
+    #[serde(default)] subtitle: Option<String>,
+    /// `data:` image URLs (charts/maps from the chat) to append as a Figures section.
+    #[serde(default)] figures: Vec<String>,
+}
+
+/// Render a markdown report into the self-contained, styled HTML "artifact" (for inline preview
+/// before the user saves it). Saving writes the previewed HTML directly.
+#[tauri::command]
+fn render_report_html(args: RenderReportArgs) -> String {
+    crate::report::render_report_html(&args.markdown, args.title.as_deref(), args.subtitle.as_deref(), &args.figures)
+}
+
+/// Write a report's themed HTML to a temp file and open it in the system's default browser, so the
+/// user can Print → Save as PDF for a pixel-faithful copy (CSS theme + embedded charts). This is
+/// the only offline way to a styled PDF without bundling a rendering engine.
+#[tauri::command]
+fn open_html_in_browser(html: String, app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let path = std::env::temp_dir().join(format!("lexichat-report-{}.html", uuid_v4()));
+    std::fs::write(&path, html).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_url(format!("file://{}", path.to_string_lossy()), None::<String>)
+        .map_err(|e| format!("Could not open the report: {e}"))
+}
+
+#[derive(Deserialize)]
+struct SaveDataUrlArgs { path: String, data_url: String }
+
+/// Save a base64 `data:` URL (e.g. an inline chart the user wants to keep) to `path`.
+#[tauri::command]
+fn save_data_url(args: SaveDataUrlArgs) -> Result<(), String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let payload = args.data_url.split(',').nth(1).ok_or("not a base64 data URL")?;
+    let bytes = B64.decode(payload).map_err(|e| format!("decode failed: {e}"))?;
+    std::fs::write(&args.path, bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1469,6 +1750,142 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// ── Dev control server (debug builds only) ────────────────────────────────────
+// A localhost HTTP surface so an external driver (e.g. an agent in the terminal) can run chat
+// turns end-to-end and read back a structured trace — WITHOUT clicking the GUI. Routes through
+// the frontend's real send() path so webview flows (Pyodide run_python, MCP apps, call_tool)
+// actually execute. Gated hard: debug build + LEXICHAT_DEV_CONTROL=1, bound to 127.0.0.1. Never
+// compiled into release builds.
+
+/// Frontend's report of a completed `/dev/run`: resolves the parked HTTP request with the trace.
+/// (Registered in all builds — harmless in release where the server never runs — so the command
+/// list doesn't diverge by build type.)
+#[derive(Deserialize)]
+struct DevControlReportArgs { id: u64, trace: serde_json::Value }
+
+#[tauri::command]
+fn dev_control_report(args: DevControlReportArgs, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(tx) = state.pending_dev_run.lock().unwrap().remove(&args.id) {
+        let _ = tx.send(args.trace);
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn start_dev_control_server(app: AppHandle) {
+    if std::env::var("LEXICHAT_DEV_CONTROL").ok().as_deref() != Some("1") { return; }
+    let port: u16 = std::env::var("LEXICHAT_DEV_CONTROL_PORT").ok()
+        .and_then(|s| s.parse().ok()).unwrap_or(8787);
+    tauri::async_runtime::spawn(async move {
+        use tokio::net::TcpListener;
+        let listener = match TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(l) => l,
+            Err(e) => { eprintln!("[dev-control] bind 127.0.0.1:{port} failed: {e}"); return; }
+        };
+        eprintln!("[dev-control] listening on http://127.0.0.1:{port}  — POST /dev/run, GET /dev/ping");
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => { let app = app.clone(); tauri::async_runtime::spawn(dev_control_conn(stream, app)); }
+                Err(e) => eprintln!("[dev-control] accept: {e}"),
+            }
+        }
+    });
+}
+
+#[cfg(debug_assertions)]
+fn find_subsequence(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+#[cfg(debug_assertions)]
+async fn dev_control_conn(mut stream: tokio::net::TcpStream, app: AppHandle) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 8192];
+    // Read headers, then the body per Content-Length.
+    let (headers_end, content_length) = loop {
+        if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+            let header_str = String::from_utf8_lossy(&buf[..pos]);
+            let cl = header_str.lines()
+                .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:")
+                    .map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+                .unwrap_or(0);
+            break (pos + 4, cl);
+        }
+        match stream.read(&mut tmp).await {
+            Ok(0) => break (buf.len(), 0),
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(_) => return,
+        }
+        if buf.len() > 4_000_000 { break (buf.len(), 0); }
+    };
+    while buf.len() < headers_end + content_length {
+        match stream.read(&mut tmp).await {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            Err(_) => return,
+        }
+    }
+    let request_line = String::from_utf8_lossy(&buf).lines().next().unwrap_or("").to_string();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let path = parts.next().unwrap_or("").to_string();
+    let body: Vec<u8> = buf.get(headers_end..(headers_end + content_length).min(buf.len()))
+        .map(|s| s.to_vec()).unwrap_or_default();
+
+    let (status, json) = route_dev_control(&method, &path, &body, &app).await;
+    let payload = serde_json::to_string(&json).unwrap_or_else(|_| "{}".into());
+    let resp = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+        payload.len(), payload);
+    let _ = stream.write_all(resp.as_bytes()).await;
+    let _ = stream.flush().await;
+}
+
+/// Park a oneshot, emit `event` to the frontend with the params, and await the frontend's report
+/// (via `dev_control_report`). Shared by /dev/run, /dev/state, /dev/config.
+#[cfg(debug_assertions)]
+async fn dev_await(app: &AppHandle, event: &str, params: serde_json::Value) -> Result<serde_json::Value, ()> {
+    use tauri::Emitter as _;
+    let state = app.state::<AppState>();
+    let id = state.dev_run_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    state.pending_dev_run.lock().unwrap().insert(id, tx);
+    let _ = app.emit(event, serde_json::json!({ "id": id, "params": params }));
+    match tokio::time::timeout(std::time::Duration::from_secs(900), rx).await {
+        Ok(Ok(v)) => Ok(v),
+        _ => { state.pending_dev_run.lock().unwrap().remove(&id); Err(()) }
+    }
+}
+
+#[cfg(debug_assertions)]
+async fn route_dev_control(method: &str, path: &str, body: &[u8], app: &AppHandle) -> (&'static str, serde_json::Value) {
+    let timeout_err = ("504 Gateway Timeout", serde_json::json!({
+        "error": "frontend did not respond (is the app window open and a model selected?)" }));
+    match (method, path) {
+        ("GET", "/dev/ping") => ("200 OK", serde_json::json!({ "ok": true, "app": "lexichat" })),
+        ("GET", "/dev/state") => match dev_await(app, "dev-control-state", serde_json::json!({})).await {
+            Ok(v) => ("200 OK", v), Err(_) => timeout_err,
+        },
+        ("POST", "/dev/config") => {
+            let params: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
+            match dev_await(app, "dev-control-config", params).await {
+                Ok(v) => ("200 OK", v), Err(_) => timeout_err,
+            }
+        }
+        ("POST", "/dev/run") => {
+            let params: serde_json::Value = serde_json::from_slice(body).unwrap_or(serde_json::json!({}));
+            if params.get("message").and_then(|m| m.as_str()).unwrap_or("").trim().is_empty() {
+                return ("400 Bad Request", serde_json::json!({ "error": "missing 'message'" }));
+            }
+            match dev_await(app, "dev-control-run", params).await {
+                Ok(trace) => ("200 OK", serde_json::json!({ "trace": trace })), Err(_) => timeout_err,
+            }
+        }
+        _ => ("404 Not Found", serde_json::json!({ "error": "unknown endpoint" })),
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -1490,6 +1907,8 @@ pub fn run() {
             }
 
             update_tray_tooltip(app.handle());
+            #[cfg(debug_assertions)]
+            start_dev_control_server(app.handle().clone());
             Ok(())
         })
         .manage(AppState::default())
@@ -1524,10 +1943,17 @@ pub fn run() {
             remove_allowed_dir,
             set_allowed_dirs,
             respond_code_permission,
+            respond_python_result,
+            save_pending_outputs,
+            call_tool_from_code,
+            dev_control_report,
+            render_report_html,
+            open_html_in_browser,
             write_file_text,
             read_file_text,
             read_image_data_url,
             save_document,
+            save_data_url,
             get_jobs,
             draft_job_from_goal,
             save_job,

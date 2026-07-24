@@ -46,3 +46,6 @@ temp/
 *.pem
 *.p12
 *.pfx
+
+# Pyodide runtime assets (copied from node_modules by scripts/prepare-pyodide.mjs)
+public/pyodide/

@@ -123,6 +123,26 @@ fn read_file(args: &Value, allowed_dirs: &[String]) -> String {
     }
 }
 
+/// Full extracted text of a PDF or DOCX for staging into the code sandbox (Pyodide has no
+/// PDF/Word parser). Returns None for other file types or on failure — the caller then stages
+/// the raw bytes instead. No truncation.
+pub fn extract_document_text(path: &str) -> Option<String> {
+    let lower = path.to_lowercase();
+    let text = if lower.ends_with(".pdf") {
+        pdf_extract::extract_text(path).ok()?
+    } else if lower.ends_with(".docx") {
+        let t = read_docx(path, 0, None);
+        // read_docx returns an error/notice string on failure — drop those.
+        if t.starts_with("Error") || t.starts_with("Invalid") || t.starts_with("Could not") || t.starts_with('[') {
+            return None;
+        }
+        t
+    } else {
+        return None;
+    };
+    if text.trim().is_empty() { None } else { Some(text) }
+}
+
 fn read_pdf(path: &str, offset: usize, limit: Option<usize>) -> String {
     match pdf_extract::extract_text(path) {
         Ok(text) if !text.trim().is_empty() => slice_lines(&text, offset, limit),
@@ -904,6 +924,12 @@ pub fn save_document(path: &str, content: &str) -> Result<(), String> {
         write_docx(path, content)
     } else if lower.ends_with(".pdf") {
         write_pdf(path, content)
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        // Styled, self-contained HTML report (the "artifact" house style) instead of raw markdown.
+        match fs::write(path, crate::report::render_report_html(content, None, None, &[])) {
+            Ok(_) => "ok".to_string(),
+            Err(e) => format!("Error: {e}"),
+        }
     } else {
         match fs::write(path, content) {
             Ok(_)  => format!("ok"),

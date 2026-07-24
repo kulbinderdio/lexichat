@@ -81,6 +81,16 @@ pub struct ToolResultEvent {
     /// inline. Independent of the MCP-App flow — any tool that returns an image shows it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
+    /// Model-authored HTML artifact (from the `create_artifact` tool), rendered inline in a
+    /// sandboxed iframe with a Save button. Distinct from MCP-App `ui` (no server bridge).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<ArtifactPayload>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtifactPayload {
+    pub title: String,
+    pub html: String,
 }
 
 /// MCP Apps (SEP-1865) UI payload attached to a tool result so the frontend can
@@ -163,6 +173,11 @@ pub struct ChatOptions {
     pub num_predict: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
+    /// Ollama-only reasoning toggle. `Some(false)` makes a thinking model (e.g. Qwen3) skip its
+    /// pre-answer reasoning pass — much faster per turn. Set at the TOP level of the request, not
+    /// inside `options`, so it's serialized separately in `build_chat_request` (hence `skip`).
+    #[serde(skip)]
+    pub think: Option<bool>,
 }
 
 // ── Backend (inference provider) ───────────────────────────────────────────────
@@ -268,6 +283,8 @@ fn build_chat_request(
             if !tools.is_empty() { b["tools"] = json!(tools); }
             if let Some(o) = options { b["options"] = json!(o); }
             if let Some(k) = keep_alive { b["keep_alive"] = json!(k); }
+            // `think` is a top-level Ollama field (skipped in the ChatOptions serialization above).
+            if let Some(t) = options.and_then(|o| o.think) { b["think"] = json!(t); }
             b
         }
         ProviderKind::OpenAI => {
@@ -491,8 +508,16 @@ async fn stream_chat<R: tauri::Runtime>(
         .connect_timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    let body = build_chat_request(backend, model, messages, tools, options, keep_alive, true);
-    let resp = backend.auth(client.post(backend.chat_url()).json(&body)).send().await?;
+    let mut body = build_chat_request(backend, model, messages, tools, options, keep_alive, true);
+    let mut resp = backend.auth(client.post(backend.chat_url()).json(&body)).send().await?;
+
+    // Some Ollama versions / non-thinking models reject the top-level `think` flag with an HTTP
+    // error. "Reasoning off" must never kill a run, so on any error status strip `think` and retry
+    // once — the turn then runs at the model's default reasoning behaviour instead of failing.
+    if !resp.status().is_success() && body.get("think").is_some() {
+        if let Some(obj) = body.as_object_mut() { obj.remove("think"); }
+        resp = backend.auth(client.post(backend.chat_url()).json(&body)).send().await?;
+    }
 
     // Surface HTTP errors immediately. Ollama returns {"error":"..."}; OpenAI {"error":{"message":...}}.
     if !resp.status().is_success() {
@@ -639,10 +664,12 @@ fn offload_tool_result(result: String, tool_name: &str, limit: usize, dir: &std:
     let ext = match body.trim_start().chars().next() { Some('{') | Some('[') => "json", _ => "txt" };
     let safe: String = tool_name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let path = dir.join(format!("{safe}-{}.{ext}", crate::uuid_v4()));
+    let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("result.json").to_string();
     match std::fs::write(&path, body) {
+        // The offloaded file is staged into the run_python sandbox at /work/data (see
+        // stage_python_files), so the model reads it there with normal Python.
         Ok(_) => format!(
-            "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result is saved to this file:\n{}\nTo use ALL of it (count/aggregate/filter/sort), call the run_python tool. Sandbox rules: read_file() is ALREADY a built-in function — call it directly, do NOT define your own read_file and do NOT use open() (open is DISABLED); parse with json.loads() (json.load(fp) is NOT available); there is no `collections`, so use a plain dict. The JSON may be a bare list OR wrap the list in an object (e.g. {{\"records\":[...]}} or {{\"message\":{{\"items\":[...]}}}}), so find the list first. Example:\nimport json\nraw = json.loads(read_file(r\"{}\"))\ndef first_list(x):\n    if isinstance(x, list): return x\n    if isinstance(x, dict):\n        for v in x.values():\n            r = first_list(v)\n            if r is not None: return r\n    return None\ndata = first_list(raw) or []\ncounts = {{}}\nfor r in data: counts[r.get(\"category\")] = counts.get(r.get(\"category\"), 0) + 1\nprint(len(data), counts)]",
-            path.display(), path.display()
+            "{head}\n…[truncated — showing the first {limit} of {total} characters. The FULL result is available to the run_python tool at /work/data/{fname}. To use ALL of it (count/aggregate/filter/sort), call run_python and read it with normal Python:\nimport json\nwith open('/work/data/{fname}') as f:\n    raw = json.load(f)\n# `raw` may be a bare list, or a dict wrapping the list (e.g. {{\"records\": [...]}}); find the list, process it, then print() your result. Pandas also works: pd.read_json('/work/data/{fname}').]"
         ),
         // File write failed → behave exactly like plain truncation.
         Err(_) => format!("{head}\n…[truncated: {total} chars total]"),
@@ -656,6 +683,87 @@ fn offload_tool_result(result: String, tool_name: &str, limit: usize, dir: &std:
 pub const SELECTION_THRESHOLD: usize = 25;
 /// Default upper bound on how many tools reach the model when a caller gives no cap.
 pub const DEFAULT_TOOL_CAP: usize = 40;
+/// Label of the built-in tool group (files/web/code) — always kept directly available in
+/// discovery mode; only the *external* groups are gated behind `find_tools`.
+pub const BUILTIN_GROUP: &str = "Built-in tools";
+
+/// The `find_tools` discovery meta-tool schema. In discovery mode the model calls this to load
+/// specialized (external) tools on demand instead of them all being pushed into every request.
+pub fn find_tools_schema() -> ToolSchema {
+    serde_json::from_value(serde_json::json!({
+        "type": "function",
+        "function": {
+            "name": "find_tools",
+            "description": "Discover and load specialized tools (external APIs, linked-data/SPARQL \
+                endpoints, MCP servers) for this task. Call it with a short description of what you \
+                need — e.g. 'UK street crime statistics', 'draw a diagram', 'company filings'. It \
+                returns the matching tools and makes them callable on your NEXT step. You must call \
+                find_tools before you can call any non-built-in tool.",
+            "parameters": {
+                "type": "object",
+                "properties": { "query": { "type": "string", "description": "What capability or data you need." } },
+                "required": ["query"]
+            }
+        }
+    })).expect("static find_tools schema is valid")
+}
+
+/// Deterministic keyword retrieval over the *external* tool groups (built-ins are always present,
+/// so they're excluded). Scores each tool on term hits in its name (weighted), description, and
+/// group label; returns the top `limit` as (name, one-line description). Empty query → a catalog
+/// sample so the model still sees what's available.
+pub fn search_tools(query: &str, groups: &[ToolGroup], limit: usize) -> Vec<(String, String)> {
+    let terms: Vec<String> = query.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3)
+        .map(String::from)
+        .collect();
+    let external: Vec<&ToolGroup> = groups.iter().filter(|g| g.label != BUILTIN_GROUP).collect();
+    let describe = |t: &ToolSchema| (t.function.name.clone(), first_sentence(&t.function.description, 120));
+    if terms.is_empty() {
+        return external.iter().flat_map(|g| &g.tools).take(limit).map(|t| describe(t)).collect();
+    }
+
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Whole-group match: when a query term hits a group's LABEL (i.e. the user named the server/
+    // API, e.g. "excalidraw"), load that group's ENTIRE toolset so the right variant — including
+    // an inline MCP-App tool that wouldn't keyword-match "histogram" — is available to pick.
+    for g in &external {
+        let label = g.label.to_lowercase();
+        if terms.iter().any(|term| label.contains(term.as_str())) {
+            for t in &g.tools {
+                if seen.insert(t.function.name.clone()) { out.push(describe(t)); }
+            }
+        }
+    }
+
+    // Then fill remaining slots with individually-scored tools from the other groups.
+    let mut scored: Vec<(i32, &ToolSchema)> = Vec::new();
+    for g in &external {
+        for t in &g.tools {
+            if seen.contains(&t.function.name) { continue; }
+            let name = t.function.name.to_lowercase();
+            let desc = t.function.description.to_lowercase();
+            let mut score = 0;
+            for term in &terms {
+                if name.contains(term.as_str()) { score += 3; }   // name hit weighted highest
+                if desc.contains(term.as_str()) { score += 1; }
+            }
+            if score > 0 { scored.push((score, t)); }
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, t) in scored {
+        if out.len() >= limit { break; }
+        if seen.insert(t.function.name.clone()) { out.push(describe(t)); }
+    }
+    // A named group is loaded in full even if it alone exceeds `limit` (bounded to avoid blowing
+    // context); otherwise cap at `limit`.
+    out.truncate(limit.max(out.len()).min(25));
+    out
+}
 
 /// A named collection of tools — one built-in set, or one OpenAPI spec / SPARQL endpoint /
 /// MCP server. Selection is two-level: choose relevant groups first (a tiny prompt), then,
@@ -965,6 +1073,9 @@ pub async fn agent_loop<R: tauri::Runtime>(
     max_steps: usize,
     // Set by the Stop button; checked between steps and while streaming to abort the run.
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    // Discovery mode: when there are many tools, expose only built-ins + `find_tools` and let the
+    // model load specialized tools on demand, instead of the LLM pre-flight. Jobs pass false.
+    discover_tools: bool,
 ) -> anyhow::Result<()> {
     use std::sync::atomic::Ordering;
     let run_start = std::time::Instant::now();
@@ -986,6 +1097,26 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // Tools the model called last step — kept available next step so a multi-step chain
     // isn't broken by them dropping out of the fresh selection.
     let mut last_used: Vec<String> = Vec::new();
+    // Hashes of run_python code already executed this turn. A stubborn local model sometimes
+    // re-issues the identical script (re-rendering the same chart and doubling the wall time)
+    // even after being told the charts are already shown; we short-circuit the repeat.
+    let mut ran_python_code: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // Loop breaker: signature of the previous step's tool-call set + how many times in a row it's
+    // repeated. A model stuck re-issuing the same calls (common with reasoning off) is nudged then
+    // force-answered instead of spinning to max_steps.
+    let mut last_tool_sig: u64 = 0;
+    let mut tool_sig_repeats: usize = 0;
+    // Total times each tool-call signature has occurred this run — catches a model that re-issues
+    // the same call repeatedly but NON-consecutively (interspersed with others), which the
+    // consecutive counter misses (e.g. geocode, details, geocode, details, geocode…).
+    let mut sig_counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    // Times each tool NAME has been dispatched this run. Catches flailing on ONE tool with
+    // different args each time (e.g. 18× SPARQL query variations) — the signature guard misses
+    // that because the args differ. Past the cap, further calls are refused, not executed.
+    let mut tool_name_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    const TOOL_NAME_CALL_CAP: usize = 8;
+    // Discovery mode: names of external tools the model has loaded this run via `find_tools`.
+    let mut loaded_tools: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Whether any assistant text was ever streamed to the chat. If a run ends with this
     // still false, we force a final answer so the user never sees a blank reply.
     let mut streamed_text = false;
@@ -993,6 +1124,19 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // tools (and skips per-step selection) so a non-tool model degrades to plain chat.
     let mut disable_tools = false;
     let discoverable_total: usize = tool_groups.iter().map(|g| g.tools.len()).sum();
+    // Discovery mode is only meaningful once there are more tools than we'd send wholesale.
+    let discover_active = discover_tools && discoverable_total > SELECTION_THRESHOLD;
+    // In discovery mode the model must be told specialized tools are loaded on demand.
+    let sys_prompt_effective = if discover_active {
+        format!("{system_prompt}\n\nTOOL DISCOVERY: You have built-in tools (files, web search, \
+            fetch, date/time, email, code) plus a `find_tools` tool. Specialized tools (external \
+            APIs, SPARQL/linked-data endpoints, MCP servers) are NOT loaded yet. When the task \
+            needs one, FIRST call find_tools with a short description of what you need; the matching \
+            tools become callable on your next step. Never guess a specialized tool's name before \
+            loading it with find_tools.")
+    } else {
+        system_prompt.to_string()
+    };
     for step in 0..max_steps {
         // Stop requested — end the run cleanly before doing any more work.
         if cancel.load(Ordering::SeqCst) {
@@ -1014,7 +1158,22 @@ pub async fn agent_loop<R: tauri::Runtime>(
             let mut v = always_tools.to_vec();
             if discoverable_total <= SELECTION_THRESHOLD {
                 v.extend(tool_groups.iter().flat_map(|g| g.tools.iter().cloned()));
+            } else if discover_active {
+                // Discovery mode: built-ins stay directly available; specialized tools appear only
+                // after the model loads them via find_tools. No LLM pre-flight.
+                for g in tool_groups.iter().filter(|g| g.label == BUILTIN_GROUP) {
+                    v.extend(g.tools.iter().cloned());
+                }
+                v.push(find_tools_schema());
+                let loaded_or_recent = |name: &str| loaded_tools.contains(name) || last_used.iter().any(|n| n == name);
+                for t in tool_groups.iter().filter(|g| g.label != BUILTIN_GROUP).flat_map(|g| &g.tools) {
+                    if loaded_or_recent(&t.function.name) && !v.iter().any(|x| x.function.name == t.function.name) {
+                        v.push(t.clone());
+                    }
+                }
             } else {
+                // Legacy LLM pre-flight (jobs): 1–2 non-streaming calls narrow the tool set.
+                if !silent { let _ = app.emit("agent-status", serde_json::json!({ "phase": "Selecting tools…" })); }
                 let context = { let conv = conversation.lock().unwrap(); build_discovery_context(&conv) };
                 let mut selected = select_tools_for_step(backend, model, &context, tool_groups, cap).await;
                 for name in &last_used {
@@ -1043,7 +1202,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
             let conv = conversation.lock().unwrap();
             let mut w = vec![WireMessage {
                 role: "system".into(),
-                content: Some(system_prompt.into()),
+                content: Some(sys_prompt_effective.clone()),
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -1052,6 +1211,10 @@ pub async fn agent_loop<R: tauri::Runtime>(
             w.extend(conv.clone());
             w
         };
+
+        // The model must eval the whole prompt (history + tool schemas) before the first token
+        // streams — silent time that grows with the conversation. Flag it as "Thinking…".
+        if !silent { let _ = app.emit("agent-status", serde_json::json!({ "phase": "Thinking…" })); }
 
         // Re-sample the step when the model emits a tool call Ollama can't parse; only a
         // persistent failure (or any other error) ends the run.
@@ -1181,11 +1344,118 @@ pub async fn agent_loop<R: tauri::Runtime>(
         consecutive_text_without_tools = 0;
         nudged = false;
 
+        // Loop breaker: has this exact tool-call set been issued before — consecutively OR just
+        // repeatedly this run? Either way the model is stuck. `severity` unifies both: 2 = first
+        // intervention (nudge), >2 = force an answer and end.
+        let sig = tool_call_signature(&tool_calls);
+        if sig == last_tool_sig { tool_sig_repeats += 1; } else { last_tool_sig = sig; tool_sig_repeats = 0; }
+        let total = { let c = sig_counts.entry(sig).or_insert(0); *c += 1; *c };
+        let severity = tool_sig_repeats.max(total.saturating_sub(1));
+        if severity >= 2 {
+            // Drop the un-executed repeat we just appended so history isn't left with a dangling
+            // assistant(tool_calls) that has no matching results.
+            { let mut conv = conversation.lock().unwrap(); conv.pop(); }
+            if severity == 2 {
+                // First intervention: tell it to stop and answer, then give it one more chance.
+                conversation.lock().unwrap().push(WireMessage {
+                    role: "user".into(),
+                    content: Some("You have called the same tool with the same arguments several \
+                        times without making progress. STOP calling tools now and give your best \
+                        final answer using the information you already have.".into()),
+                    tool_calls: None, tool_call_id: None, name: None, images: None,
+                });
+                continue;
+            }
+            // Ignored the nudge and repeated again — force a written answer and end the run.
+            if !silent {
+                if !streamed_text {
+                    ensure_final_answer(backend, model, system_prompt, conversation,
+                        options.as_ref(), keep_alive.as_deref(), app).await;
+                }
+                let _ = app.emit("agent-done", DoneEvent { error: None });
+                let _ = app.emit("debug-run-done", DebugRunDoneEvent {
+                    total_ms: run_start.elapsed().as_millis() as u64, error: None });
+            }
+            return Ok(());
+        }
+
         // Dispatch each tool call
         for call in &tool_calls {
             let name = &call.function.name;
             let args = &call.function.arguments;
             let pretty_args = serde_json::to_string_pretty(args).unwrap_or_default();
+
+            // Discovery meta-tool: load specialized tools matching the query so they become
+            // callable next step. Handled here (not dispatch_tool) because it mutates the per-run
+            // loaded set. No-op if discovery mode isn't active.
+            if name == "find_tools" {
+                let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
+                let found = search_tools(query, tool_groups, 12);
+                for (nm, _) in &found { loaded_tools.insert(nm.clone()); }
+                let result = if found.is_empty() {
+                    format!("No tools matched \"{query}\". Try broader or different keywords, or \
+                        proceed with your built-in tools.")
+                } else {
+                    format!("Loaded {} tool(s) — now available to call directly on your next step:\n{}",
+                        found.len(),
+                        found.iter().map(|(n, d)| format!("- {n}: {d}")).collect::<Vec<_>>().join("\n"))
+                };
+                if !silent {
+                    let _ = app.emit("agent-tool-call", ToolCallEvent { name: name.clone(), args: pretty_args.clone() });
+                    let _ = app.emit("agent-tool-result", ToolResultEvent {
+                        name: name.clone(), result: result.clone(), ui: None, images: Vec::new(), artifact: None });
+                }
+                conversation.lock().unwrap().push(WireMessage {
+                    role: "tool".into(), content: Some(result),
+                    tool_calls: None, tool_call_id: None, name: Some(name.clone()), images: None,
+                });
+                continue;
+            }
+
+            // Idempotency guard: if the model re-issues run_python with code it already ran this
+            // turn, don't execute it again (it would re-render the same chart and waste time).
+            // Feed back an "already ran" note so the model stops and writes its final answer.
+            if name == "run_python" {
+                if let Some(code) = args.get("code").and_then(|c| c.as_str()) {
+                    let key = code.trim();
+                    if !key.is_empty() {
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        std::hash::Hash::hash(key, &mut h);
+                        if !ran_python_code.insert(std::hash::Hasher::finish(&h)) {
+                            let note = "[This exact code was already run earlier in this turn; its \
+                                output and any chart(s) are already displayed to the user above. It \
+                                was NOT run again. Do NOT call run_python with this code again — write \
+                                your final answer now, describing the chart in words.]".to_string();
+                            conversation.lock().unwrap().push(WireMessage {
+                                role: "tool".into(), content: Some(note),
+                                tool_calls: None, tool_call_id: None,
+                                name: Some(name.clone()), images: None,
+                            });
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Per-tool-name cap: a tool hammered too many times this run (with any args) is
+            // flailing (e.g. 18 SPARQL query variations). Refuse further calls and push the model
+            // to answer. run_python is exempt (iterative coding is legitimate; it has its own guard).
+            if name != "run_python" {
+                let n = { let c = tool_name_counts.entry(name.clone()).or_insert(0); *c += 1; *c };
+                if n > TOOL_NAME_CALL_CAP {
+                    let note = format!("[You have called '{name}' {n} times this turn without \
+                        resolving the request. STOP calling it — answer using the results you \
+                        already have, or take a clearly different approach.]");
+                    if !silent {
+                        let _ = app.emit("agent-tool-result", ToolResultEvent {
+                            name: name.clone(), result: note.clone(), ui: None, images: Vec::new(), artifact: None });
+                    }
+                    conversation.lock().unwrap().push(WireMessage {
+                        role: "tool".into(), content: Some(note),
+                        tool_calls: None, tool_call_id: None, name: Some(name.clone()), images: None });
+                    continue;
+                }
+            }
 
             if !silent {
                 let _ = app.emit("agent-tool-call", ToolCallEvent {
@@ -1197,31 +1467,43 @@ pub async fn agent_loop<R: tauri::Runtime>(
             // Route: builtin → openapi → sparql → mcp
             let result = dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &dispatch_paths, web_search_results, silent, app).await;
 
-            // Cap large responses so they don't blow the context (configurable per profile).
-            // In interactive chat, oversized results are also saved to a file run_python can
-            // read, so the model can process the whole thing accurately.
-            let result = if silent {
+            // Stop pressed during the tool call (e.g. a long-running run_python) — bail before
+            // rendering its result, which could otherwise land in a now-different chat. The
+            // step-boundary cancel check below ends the run cleanly.
+            if cancel.load(Ordering::SeqCst) { break; }
+
+            // Cap large responses so they don't blow the context (configurable per profile). In
+            // interactive chat, oversized *structured-data* results are also saved to a file the
+            // model can process with run_python. But document/text reads (read_file, fetch_webpage,
+            // wiki_read) are meant to be read and summarised — plain-truncate them so the model
+            // works from the text it has instead of being nudged toward run_python (which loops
+            // chasing a file it can't process, e.g. a PDF).
+            let read_for_content = matches!(name.as_str(), "read_file" | "fetch_webpage" | "wiki_read");
+            let result = if silent || read_for_content {
                 cap_tool_result(result, &name, tool_result_limit)
             } else {
                 offload_tool_result(result, &name, tool_result_limit, &results_dir)
             };
 
-            // An MCP-App UI payload and/or inline images may have been stashed by dispatch_tool.
-            let (ui, images) = if !silent {
+            // An MCP-App UI payload, inline images, and/or a model-authored artifact may have been
+            // stashed by dispatch_tool.
+            let (ui, images, artifact) = if !silent {
                 app.try_state::<crate::AppState>()
                     .map(|s| (
                         s.pending_tool_ui.lock().unwrap().take(),
                         std::mem::take(&mut *s.pending_tool_images.lock().unwrap()),
+                        s.pending_artifact.lock().unwrap().take(),
                     ))
-                    .unwrap_or((None, Vec::new()))
-            } else { (None, Vec::new()) };
-            let had_media = ui.is_some() || !images.is_empty();
+                    .unwrap_or((None, Vec::new(), None))
+            } else { (None, Vec::new(), None) };
+            let had_media = ui.is_some() || !images.is_empty() || artifact.is_some();
             if !silent {
                 let _ = app.emit("agent-tool-result", ToolResultEvent {
                     name: name.clone(),
                     result: result.clone(),
                     ui,
                     images,
+                    artifact,
                 });
             }
 
@@ -1263,6 +1545,40 @@ pub async fn agent_loop<R: tauri::Runtime>(
     Ok(())
 }
 
+/// Execute a single registered tool by name and return its full (untruncated) result string.
+/// Used by code-mode (`call_tool` from run_python), which routes here through `call_tool_from_code`.
+/// Same routing as the agent loop's dispatch (built-in → OpenAPI → SPARQL → MCP); `silent` so it
+/// emits no chat events of its own (the caller surfaces a code-tool trace).
+#[allow(clippy::too_many_arguments)]
+pub async fn call_one_tool<R: tauri::Runtime>(
+    name: &str,
+    args: &serde_json::Value,
+    openapi_specs: &[RegisteredSpec],
+    sparql_endpoints: &[RegisteredSparqlEndpoint],
+    mcp_connections: &tokio::sync::Mutex<HashMap<String, MCPConnection>>,
+    allowed_dirs: &[String],
+    sandbox_paths: &[String],
+    web_search_results: usize,
+    app: &AppHandle<R>,
+) -> String {
+    dispatch_tool(name, args, openapi_specs, sparql_endpoints, mcp_connections,
+        allowed_dirs, sandbox_paths, web_search_results, /*silent*/ true, app).await
+}
+
+/// Order-independent hash of a step's tool calls (name + arguments), used to detect a model that
+/// keeps re-issuing the identical set of calls step after step (a no-progress loop).
+fn tool_call_signature(calls: &[WireToolCall]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut parts: Vec<String> = calls.iter()
+        .map(|c| format!("{}::{}", c.function.name,
+            serde_json::to_string(&c.function.arguments).unwrap_or_default()))
+        .collect();
+    parts.sort();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in &parts { p.hash(&mut h); }
+    h.finish()
+}
+
 /// Returns true if `s` is NOT already valid base64url — i.e. the model forgot
 /// to call compose_email and passed the raw MIME text directly.
 fn needs_base64url_encoding(s: &str) -> bool {
@@ -1289,6 +1605,25 @@ async fn dispatch_tool<R: tauri::Runtime>(
         return dispatch_run_python(args, allowed_dirs, sandbox_paths, silent, app).await;
     }
 
+    // 0b. Model-authored HTML artifact — stashed for the agent loop to render inline (sandboxed
+    // iframe + Save). No file/tool access; display only. Skipped in silent (job) runs.
+    if name == "create_artifact" {
+        let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("Artifact").to_string();
+        let html = args.get("html").and_then(|h| h.as_str()).unwrap_or("").to_string();
+        if html.trim().is_empty() {
+            return "Error: create_artifact needs a non-empty 'html' argument.".to_string();
+        }
+        if !silent {
+            if let Some(s) = app.try_state::<crate::AppState>() {
+                *s.pending_artifact.lock().unwrap() = Some(ArtifactPayload { title: title.clone(), html });
+            }
+        }
+        return format!("[Artifact \"{title}\" is rendered inline to the user, with a Save button. \
+            It is DONE and displayed — do NOT call create_artifact again for this content or to \
+            'refine' it. Write your final answer now, referring to it as \"shown above\"; do NOT \
+            paste the HTML into your reply.]");
+    }
+
     // 1. Try built-in tools first
     let builtin_names = ["read_file","write_file","list_files","search_files",
         "search_in_files","get_file_info","list_directory_tree","create_directory",
@@ -1297,7 +1632,12 @@ async fn dispatch_tool<R: tauri::Runtime>(
         "wiki_list","wiki_search","wiki_read","wiki_write","wiki_patch","wiki_delete",
         "wiki_append","wiki_lint"];
     if builtin_names.contains(&name) {
-        let result = crate::tools::dispatch_builtin(name, args, allowed_dirs, web_search_results).await;
+        // File tools may also touch the user's attached files (`sandbox_paths`), not just the
+        // configured sandbox dirs — so "read/summarise this attached PDF" works even when the
+        // file lives outside a sandbox folder. `check_path` still rejects anything else.
+        let mut allow = allowed_dirs.to_vec();
+        allow.extend(sandbox_paths.iter().cloned());
+        let result = crate::tools::dispatch_builtin(name, args, &allow, web_search_results).await;
 
         // In silent (job) mode, compose_email returns a large base64 string that
         // overwhelms the context window and causes the model to skip the send step.
@@ -1461,12 +1801,57 @@ async fn dispatch_tool<R: tauri::Runtime>(
     format!("Unknown tool: {name}")
 }
 
-/// Handle a `run_python` call: enforce the per-session execution permission, then
-/// run the code in the Monty sandbox with file access scoped to `allowed_dirs`
-/// plus any attached files (`sandbox_paths`).
+/// Handle a `run_python` call: enforce the per-session execution permission, then run the code in
+/// the Pyodide worker (webview), with the attached files (`sandbox_paths`) staged into the
+/// sandbox workspace (/work/uploads and /work/data).
+/// Result of a Pyodide `run_python` run, handed back from the webview worker via
+/// `respond_python_result`. `output` is stdout (+ any error/traceback appended); `images`
+/// are base64 PNGs of matplotlib figures to render inline.
+#[derive(Debug, Clone)]
+pub struct PyResult {
+    pub output: String,
+    pub images: Vec<String>,
+}
+
+/// Stage the run's attached files into the Pyodide workspace payload: each attachment becomes
+/// `uploads/<filename>`, base64-encoded. Directories (e.g. the offloaded-results dir) are skipped
+/// in this pass — offloaded-result staging into `/work/data` is a follow-up.
+fn stage_python_files(sandbox_paths: &[String]) -> Vec<serde_json::Value> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+    let mut files = Vec::new();
+    for p in sandbox_paths {
+        let path = std::path::Path::new(p);
+        if path.is_file() {
+            // Attached files → /work/uploads. Documents (PDF/Word) are staged as their EXTRACTED
+            // TEXT so open() returns readable content (Pyodide can't parse PDF/Word); data files
+            // (CSV/Excel/JSON, images) are staged as raw bytes for pandas/etc.
+            let name = match path.file_name().and_then(|n| n.to_str()) { Some(n) => n, None => continue };
+            if let Some(text) = crate::tools::extract_document_text(p) {
+                files.push(serde_json::json!({ "path": format!("uploads/{name}"), "b64": B64.encode(text.as_bytes()) }));
+            } else if let Ok(bytes) = std::fs::read(path) {
+                files.push(serde_json::json!({ "path": format!("uploads/{name}"), "b64": B64.encode(&bytes) }));
+            }
+        } else if path.is_dir() {
+            // The offloaded-results dir → /work/data, so run_python can read a large tool result
+            // that was too big to fit in context (see offload_tool_result's nudge).
+            if let Ok(entries) = std::fs::read_dir(path) {
+                for e in entries.flatten() {
+                    let ep = e.path();
+                    if !ep.is_file() { continue; }
+                    let name = match ep.file_name().and_then(|n| n.to_str()) { Some(n) => n, None => continue };
+                    if let Ok(bytes) = std::fs::read(&ep) {
+                        files.push(serde_json::json!({ "path": format!("data/{name}"), "b64": B64.encode(&bytes) }));
+                    }
+                }
+            }
+        }
+    }
+    files
+}
+
 async fn dispatch_run_python<R: tauri::Runtime>(
     args: &serde_json::Value,
-    allowed_dirs: &[String],
+    _allowed_dirs: &[String],
     sandbox_paths: &[String],
     silent: bool,
     app: &AppHandle<R>,
@@ -1503,10 +1888,65 @@ async fn dispatch_run_python<R: tauri::Runtime>(
         }
     }
 
-    // Sandbox may touch the run's allowed dirs plus any attached files.
-    let mut allow = allowed_dirs.to_vec();
-    allow.extend(sandbox_paths.iter().cloned());
-    crate::sandbox::run_python(code, allow).await
+    // Single runtime: hand the code + staged files to the Pyodide worker in the webview and await
+    // its result (stdout + chart images + files written to /work/out). Both interactive chat and
+    // background jobs run here — the window is only hidden (never destroyed, see lib.rs), so the
+    // webview hosting the worker is alive whenever the in-process scheduler runs a job.
+    let Some(state) = app.try_state::<crate::AppState>() else {
+        return "Error: run_python is unavailable (no app state).".into();
+    };
+    let files = stage_python_files(sandbox_paths);
+    let request_id = state.python_request_seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<PyResult>();
+    state.pending_python_result.lock().unwrap().insert(request_id, tx);
+    let _ = app.emit("run-python-request",
+        serde_json::json!({ "request_id": request_id, "code": code, "files": files }));
+
+    // Interactive runs abort promptly on Stop (so a slow run can't resume into a new chat).
+    // Background jobs manage their own lifecycle and must NOT obey the interactive stop flag
+    // (which may be stale from a previous chat) — they just wait with a hard timeout.
+    let mut rx = rx;
+    let py: Option<PyResult> = if silent {
+        tokio::time::timeout(std::time::Duration::from_secs(300), &mut rx).await.ok().and_then(|r| r.ok())
+    } else {
+        let cancel = state.cancel.clone();
+        let deadline = tokio::time::sleep(std::time::Duration::from_secs(300));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                r = &mut rx => break r.ok(),
+                _ = &mut deadline => break None,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                    if cancel.load(std::sync::atomic::Ordering::SeqCst) { break None; }
+                }
+            }
+        }
+    };
+    state.pending_python_result.lock().unwrap().remove(&request_id);
+
+    match py {
+        Some(py) => {
+            // Chart/image outputs (already full `data:` URLs) ride the existing inline-image
+            // path — the agent loop takes them for the agent-tool-result event.
+            let n_images = py.images.len();
+            if n_images > 0 {
+                state.pending_tool_images.lock().unwrap().extend(py.images);
+            }
+            // A run that only plots has empty stdout — confirm success (with the inline-render
+            // note) so the model doesn't mistake it for a failure and re-run it.
+            let mut out = py.output;
+            if n_images > 0 {
+                if !out.trim().is_empty() { out.push('\n'); }
+                out.push_str(&format!("[Success: {n_images} image(s)/chart(s) rendered inline to the user. \
+                    Do not re-run; in your reply refer to the chart in words — do NOT embed a markdown image, link, or file path.]"));
+            } else if out.trim().is_empty() {
+                out = "[Ran successfully with no text output.]".into();
+            }
+            out
+        }
+        None => "Error: run_python was cancelled or did not respond (the runtime may still be loading — try again).".into(),
+    }
 }
 
 #[cfg(test)]
@@ -1637,6 +2077,7 @@ mod tests {
             false, // interactive chat, as in the failing session
             20,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false, // discover_tools: exercise the legacy pre-flight path
         )
         .await;
 
@@ -1666,6 +2107,36 @@ mod tests {
             description: format!("{label} tools"),
             tools: names.iter().map(|n| tool(n)).collect(),
         }
+    }
+
+    #[test]
+    fn search_tools_finds_by_name_and_excludes_builtins() {
+        let groups = vec![
+            group(BUILTIN_GROUP, &["read_file", "web_search"]),
+            group("Police API", &["police_street_crimes", "police_forces"]),
+            group("Maps", &["static_map_image"]),
+        ];
+        let hits = search_tools("street crimes", &groups, 5);
+        assert!(hits.iter().any(|(n, _)| n == "police_street_crimes"), "{hits:?}");
+        // Built-ins are always available, so discovery search never returns them.
+        assert!(!hits.iter().any(|(n, _)| n == "read_file"));
+        // Empty query → a catalog sample of external tools only (no built-ins).
+        let sample = search_tools("", &groups, 2);
+        assert_eq!(sample.len(), 2);
+        assert!(sample.iter().all(|(n, _)| n != "read_file" && n != "web_search"));
+    }
+
+    #[test]
+    fn search_tools_loads_whole_group_when_label_matches() {
+        // Naming a server ("excalidraw") loads its ENTIRE toolset — so a variant that wouldn't
+        // keyword-match the rest of the query (e.g. the inline-app renderer) is still available.
+        let groups = vec![
+            group("Excalidraw (MCP)", &["excalidraw_render_app", "excalidraw_create_link"]),
+            group("Police API", &["police_street_crimes"]),
+        ];
+        let hits = search_tools("draw a histogram with excalidraw", &groups, 12);
+        assert!(hits.iter().any(|(n, _)| n == "excalidraw_render_app"), "{hits:?}");
+        assert!(hits.iter().any(|(n, _)| n == "excalidraw_create_link"), "{hits:?}");
     }
 
     /// When the candidate set fits under the cap, selection returns everything and makes no
@@ -1747,6 +2218,7 @@ mod tests {
             &Backend::ollama(server.uri()), "m", "sys", &[], &groups, 5, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), true, 5,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false, // discover_tools: exercise the legacy pre-flight path
         ).await;
         assert!(result.is_ok(), "run should complete: {result:?}");
     }
@@ -1828,13 +2300,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Under the limit: untouched, no file written.
         assert_eq!(offload_tool_result("small".into(), "police_streetcrime", 100, &dir), "small");
-        // Over the limit: preview + file path + a run_python hint; the file holds the raw JSON
-        // BODY (the "HTTP 200" wrapper openapi::execute adds is stripped so json.loads works).
+        // Over the limit: preview + a run_python hint pointing at /work/data; the file holds the
+        // raw JSON BODY (the "HTTP 200" wrapper openapi::execute adds is stripped so json.load works).
         let body = format!("[{}]", "\"a\",".repeat(2000).trim_end_matches(','));
         let wrapped = format!("HTTP 200\n{body}");
         let out = offload_tool_result(wrapped, "police_streetcrime", 100, &dir);
         assert!(out.contains("run_python"), "must nudge toward run_python");
-        assert!(out.contains("saved to this file"));
+        assert!(out.contains("/work/data/"), "must point at the /work/data sandbox path");
         let saved = std::fs::read_dir(&dir).unwrap().flatten()
             .map(|e| e.path()).find(|p| p.extension().map(|x| x == "json").unwrap_or(false)).unwrap();
         let content = std::fs::read_to_string(&saved).unwrap();
@@ -1903,6 +2375,7 @@ mod tests {
             &Backend::ollama(server.uri()), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), false, 20,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false, // discover_tools: exercise the legacy pre-flight path
         )
         .await;
 
@@ -2004,6 +2477,7 @@ mod tests {
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0,
             app.handle(), false, 20,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false, // discover_tools: exercise the legacy pre-flight path
         ).await;
 
         assert!(result.is_ok(), "OpenAI run should complete: {result:?}");
@@ -2074,6 +2548,7 @@ mod tests {
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0,
             app.handle(), false, 20,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false, // discover_tools: exercise the legacy pre-flight path
         ).await;
 
         assert!(result.is_ok(), "run should survive an unsupported-tools endpoint: {result:?}");

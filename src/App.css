@@ -404,6 +404,48 @@ html, body, #root { height: 100%; overflow: hidden; }
 .assistant-text th { background: var(--surface2); font-weight: 600; }
 
 /* Thinking dots */
+/* Export-as-report button on assistant answers */
+.export-report-btn {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+  font-size: 12px; font-weight: 500; color: var(--text-secondary);
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 11px; cursor: pointer; transition: background .15s, color .15s;
+}
+.export-report-btn:hover { background: var(--surface); color: var(--text); border-color: var(--text-tertiary); }
+
+/* Model-authored HTML artifact (create_artifact) */
+.artifact-block { padding: 0; overflow: hidden; }
+.artifact-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface2);
+}
+.artifact-title { font-size: 12.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact-save {
+  font-size: 11.5px; font-weight: 500; color: var(--text-secondary);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  padding: 4px 10px; cursor: pointer; flex-shrink: 0;
+}
+.artifact-save:hover { color: var(--text); border-color: var(--text-tertiary); }
+.artifact-frame {
+  width: 100%; height: 520px; border: 0; background: #fff; display: block;
+  resize: vertical; overflow: auto;
+}
+
+/* Report preview modal */
+.report-preview-modal {
+  display: flex; flex-direction: column; width: min(940px, 94vw); height: min(88vh, 1000px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.4);
+}
+.report-preview-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.report-preview-title { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-preview-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+
+.thinking-row { display: flex; align-items: center; gap: 10px; }
+.thinking-status { font-size: 12px; color: var(--text-secondary); opacity: 0.85; }
 .thinking-dots { display: flex; align-items: center; gap: 5px; padding: 6px 0; }
 .thinking-dot {
   width: 7px; height: 7px;

@@ -4,6 +4,9 @@
   "version": "2.0.12",
   "type": "module",
   "scripts": {
+    "prepare:pyodide": "node scripts/prepare-pyodide.mjs",
+    "predev": "node scripts/prepare-pyodide.mjs",
+    "prebuild": "node scripts/prepare-pyodide.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
@@ -20,6 +23,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2",
     "lucide-react": "^1.8.0",
+    "pyodide": "^314.0.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
