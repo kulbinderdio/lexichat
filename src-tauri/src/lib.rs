@@ -212,6 +212,79 @@ async fn get_models(args: BackendArgs) -> Result<Vec<String>, String> {
     ollama::list_models(&backend).await.map_err(|e| e.to_string())
 }
 
+// ── Model management ──────────────────────────────────────────────────────────
+
+/// One model for the manager UI. `size`/`loaded` are meaningful only for Ollama; `manageable` tells
+/// the UI whether to offer install/delete (true only for a local Ollama runtime).
+#[derive(Serialize)]
+struct ManagedModel { name: String, size: u64, loaded: bool, manageable: bool }
+
+/// List a server's models for the manager: Ollama returns sizes + loaded status and is manageable;
+/// hosted providers return their catalog (names only), read-only.
+#[tauri::command]
+async fn list_managed_models(args: BackendArgs) -> Result<Vec<ManagedModel>, String> {
+    let is_ollama = !matches!(args.provider.as_deref(), Some("openai") | Some("anthropic"));
+    if is_ollama {
+        let detailed = ollama::list_ollama_detailed(&args.base_url).await.map_err(|e| e.to_string())?;
+        // Loaded status is best-effort — an older Ollama without /api/ps just yields none.
+        let loaded = ollama::ollama_loaded(&args.base_url).await.unwrap_or_default();
+        Ok(detailed.into_iter().map(|m| ManagedModel {
+            loaded: loaded.contains(&m.name), name: m.name, size: m.size, manageable: true,
+        }).collect())
+    } else {
+        let backend = backend_from(args.provider, args.base_url, args.api_key);
+        let names = ollama::list_models(&backend).await.map_err(|e| e.to_string())?;
+        Ok(names.into_iter().map(|name| ManagedModel { name, size: 0, loaded: false, manageable: false }).collect())
+    }
+}
+
+#[derive(Deserialize)]
+struct OllamaModelArgs { base_url: String, name: String }
+
+/// Pull an Ollama model, streaming progress on `model-pull` so the UI can show a bar. Reuses the
+/// image-download cancel flag (only one heavy download runs at a time in practice).
+#[tauri::command]
+async fn pull_ollama_model(args: OllamaModelArgs, app: AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    use tauri::Emitter as _;
+    let cancel = {
+        let state = app.state::<AppState>();
+        state.image_model_download_cancel.store(false, Ordering::SeqCst);
+        state.image_model_download_cancel.clone()
+    };
+    let app2 = app.clone();
+    let name = args.name.clone();
+    let mut last: u64 = 0;
+    let result = ollama::pull_ollama(&args.base_url, &args.name, &cancel, |status, completed, total| {
+        // Throttle: emit on phase change (status), every ~16 MB, and at completion of a phase.
+        if completed == 0 || completed.saturating_sub(last) >= 16_000_000 || (total > 0 && completed >= total) {
+            last = completed;
+            let _ = app2.emit("model-pull", serde_json::json!({
+                "name": name, "status": status, "completed": completed, "total": total, "done": false,
+            }));
+        }
+    }).await;
+    match result {
+        Ok(()) => { let _ = app.emit("model-pull", serde_json::json!({ "name": args.name, "done": true })); Ok(()) }
+        Err(e) => {
+            let msg = e.to_string();
+            let _ = app.emit("model-pull", serde_json::json!({ "name": args.name, "done": true, "error": msg }));
+            Err(msg)
+        }
+    }
+}
+
+#[tauri::command]
+async fn delete_ollama_model(args: OllamaModelArgs) -> Result<(), String> {
+    ollama::delete_ollama(&args.base_url, &args.name).await.map_err(|e| e.to_string())
+}
+
+/// Cancel an in-flight model pull (shares the image-download cancel flag).
+#[tauri::command]
+fn cancel_ollama_pull(state: State<'_, AppState>) {
+    state.image_model_download_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Set the active *default* backend — used by the job designer and background jobs that carry no
 /// explicit server. Interactive chat routes per-message via `send_message` instead.
 #[tauri::command]
@@ -2647,6 +2720,10 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_models,
+            list_managed_models,
+            pull_ollama_model,
+            delete_ollama_model,
+            cancel_ollama_pull,
             set_backend,
             reset_conversation,
             stop_generation,

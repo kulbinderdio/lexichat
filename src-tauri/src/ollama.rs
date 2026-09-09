@@ -326,6 +326,82 @@ pub async fn list_models(backend: &Backend) -> anyhow::Result<Vec<String>> {
     Ok(names)
 }
 
+// ── Model management (Ollama runtime) ─────────────────────────────────────────
+// Ollama exposes install/remove; hosted providers (OpenAI/Anthropic) do not — their models are a
+// catalog, so the manager only ever *lists* those. These helpers are Ollama-specific and take a
+// base_url directly (the provider is always Ollama here).
+
+/// One installed model, with its on-disk size (from `/api/tags`).
+#[derive(Debug, Clone, Serialize)]
+pub struct OllamaModel {
+    pub name: String,
+    pub size: u64,
+}
+
+/// Installed models with sizes.
+pub async fn list_ollama_detailed(base_url: &str) -> anyhow::Result<Vec<OllamaModel>> {
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    let v: serde_json::Value = reqwest::Client::new().get(url).send().await?
+        .error_for_status()?.json().await?;
+    Ok(v["models"].as_array().map(|a| a.iter().map(|m| OllamaModel {
+        name: m["name"].as_str().unwrap_or("").to_string(),
+        size: m["size"].as_u64().unwrap_or(0),
+    }).filter(|m| !m.name.is_empty()).collect()).unwrap_or_default())
+}
+
+/// Names of models currently loaded in memory (`/api/ps`), so the UI can mark them "running".
+pub async fn ollama_loaded(base_url: &str) -> anyhow::Result<Vec<String>> {
+    let url = format!("{}/api/ps", base_url.trim_end_matches('/'));
+    let v: serde_json::Value = reqwest::Client::new().get(url).send().await?
+        .error_for_status()?.json().await?;
+    Ok(v["models"].as_array().map(|a| a.iter()
+        .filter_map(|m| m["name"].as_str().map(String::from)).collect()).unwrap_or_default())
+}
+
+/// Delete an installed model (`DELETE /api/delete`).
+pub async fn delete_ollama(base_url: &str, name: &str) -> anyhow::Result<()> {
+    let url = format!("{}/api/delete", base_url.trim_end_matches('/'));
+    reqwest::Client::new().delete(url)
+        .json(&serde_json::json!({ "name": name }))
+        .send().await?.error_for_status()?;
+    Ok(())
+}
+
+/// Pull a model (`POST /api/pull`, streaming). Ollama returns NDJSON status lines with
+/// `status`, and for the download phases `completed`/`total` byte counts; `progress` is called for
+/// each. A final `{"status":"success"}` ends it. `cancel` is checked per line so a UI Cancel stops
+/// the (potentially multi-GB) download promptly.
+pub async fn pull_ollama<F: FnMut(&str, u64, u64)>(
+    base_url: &str,
+    name: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+    mut progress: F,
+) -> anyhow::Result<()> {
+    let url = format!("{}/api/pull", base_url.trim_end_matches('/'));
+    let resp = reqwest::Client::new().post(url)
+        .json(&serde_json::json!({ "name": name, "stream": true }))
+        .send().await?.error_for_status()?;
+    let mut stream = resp.bytes_stream();
+    let mut buf = String::new();
+    while let Some(chunk) = stream.next().await {
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("cancelled");
+        }
+        buf.push_str(&String::from_utf8_lossy(&chunk?));
+        // NDJSON: one JSON object per line; the last fragment may be incomplete, so keep it.
+        while let Some(nl) = buf.find('\n') {
+            let line = buf[..nl].trim().to_string();
+            buf.drain(..=nl);
+            if line.is_empty() { continue; }
+            let v: serde_json::Value = match serde_json::from_str(&line) { Ok(v) => v, Err(_) => continue };
+            if let Some(err) = v["error"].as_str() { anyhow::bail!("{err}"); }
+            let status = v["status"].as_str().unwrap_or("");
+            progress(status, v["completed"].as_u64().unwrap_or(0), v["total"].as_u64().unwrap_or(0));
+        }
+    }
+    Ok(())
+}
+
 // ── Streaming chat ─────────────────────────────────────────────────────────────
 
 /// Build the (non-streaming flag toggled by caller) chat request body for either dialect.

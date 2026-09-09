@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -1468,14 +1468,86 @@ function ToolsTab({ settings, onChange }: { settings: AppSettings; onChange: (s:
 
 // ── Models tab ────────────────────────────────────────────────────────────────
 
+// One installed Ollama model's runtime facts (size on disk, whether it's currently loaded).
+interface ManagedInfo { size: number; loaded: boolean }
+// Live progress of a model pull.
+interface PullState { name: string; status: string; completed: number; total: number }
+
+function fmtSize(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return bytes > 0 ? `${Math.round(bytes / 1e3)} KB` : "";
+}
+
 function ModelsTab({ settings, onChange }: { settings: AppSettings; onChange: (s: AppSettings) => void }) {
   const [newModel, setNewModel] = useState<Record<string, string>>({});
   const [search, setSearch] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState("");
+  // Ollama runtime facts per server: modelName -> {size, loaded}. Only local servers have these.
+  const [managed, setManaged] = useState<Record<string, Record<string, ManagedInfo>>>({});
+  // In-flight pull per server (null = none). Progress arrives on the "model-pull" event.
+  const [pull, setPull] = useState<Record<string, PullState | null>>({});
   const servers = settings.servers ?? [];
 
   const patch = (id: string, p: Partial<ServerConfig>) =>
     onChange({ ...settings, servers: servers.map(s => s.id === id ? { ...s, ...p } : s) });
+
+  // Load Ollama sizes + loaded status for every local server on open.
+  const loadManaged = async (s: ServerConfig) => {
+    if (s.provider !== "ollama") return;
+    try {
+      const rows = await invoke<{ name: string; size: number; loaded: boolean }[]>(
+        "list_managed_models", { args: { base_url: s.baseUrl, provider: s.provider, api_key: null } });
+      setManaged(prev => ({ ...prev, [s.id]: Object.fromEntries(rows.map(r => [r.name, { size: r.size, loaded: r.loaded }])) }));
+    } catch { /* server unreachable */ }
+  };
+  useEffect(() => { servers.forEach(loadManaged); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Only one pull runs at a time (shared cancel flag), so a ref to the pulling server is enough to
+  // route the anonymous "model-pull" events without stale-closure gymnastics.
+  const pullingServer = useRef<string | null>(null);
+  const serversRef = useRef(servers); serversRef.current = servers;
+  useEffect(() => {
+    const un = listen<{ name: string; status?: string; completed?: number; total?: number; done?: boolean; error?: string }>(
+      "model-pull", e => {
+        const sid = pullingServer.current;
+        if (!sid) return;
+        const p = e.payload;
+        if (p.done) {
+          pullingServer.current = null;
+          setPull(prev => ({ ...prev, [sid]: null }));
+          if (p.error) alert(`Pull failed: ${p.error}`);
+          const srv = serversRef.current.find(s => s.id === sid);
+          if (srv) { loadManaged(srv); refresh(srv); }
+        } else {
+          setPull(prev => ({ ...prev, [sid]: { name: p.name, status: p.status ?? "", completed: p.completed ?? 0, total: p.total ?? 0 } }));
+        }
+      });
+    return () => { un.then(f => f()); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const doPull = async (s: ServerConfig, name: string) => {
+    name = name.trim();
+    if (!name || pullingServer.current) return;
+    pullingServer.current = s.id;
+    setPull(prev => ({ ...prev, [s.id]: { name, status: "starting", completed: 0, total: 0 } }));
+    setNewModel(n => ({ ...n, [s.id]: "" }));
+    try { await invoke("pull_ollama_model", { args: { base_url: s.baseUrl, name } }); }
+    catch { pullingServer.current = null; setPull(prev => ({ ...prev, [s.id]: null })); }
+  };
+  const cancelPull = () => invoke("cancel_ollama_pull").catch(() => {});
+  const doDelete = async (s: ServerConfig, name: string) => {
+    if (!confirm(`Delete the model "${name}" from disk? This frees its space and cannot be undone.`)) return;
+    try {
+      await invoke("delete_ollama_model", { args: { base_url: s.baseUrl, name } });
+      // Drop it from the curated/manual sets too, so it doesn't linger in the picker.
+      patch(s.id, {
+        models: (s.models ?? []).filter(m => m !== name),
+        manualModels: (s.manualModels ?? []).filter(m => m !== name),
+      });
+      loadManaged(s); refresh(s);
+    } catch (e) { alert(`Could not delete: ${e}`); }
+  };
 
   const toggle = (s: ServerConfig, m: string, on: boolean) => {
     const enabled = new Set(s.models ?? []);
@@ -1543,24 +1615,67 @@ function ModelsTab({ settings, onChange }: { settings: AppSettings; onChange: (s
                 ? <div className="admin-empty" style={{ padding: 10 }}>{pool.length === 0 ? "No models yet — Refresh or add one below." : "No matches."}</div>
                 : shown.map(m => {
                     const embed = isEmbeddingModel(m);
+                    const info = managed[s.id]?.[m];
+                    const isOllama = s.provider === "ollama";
                     return (
                       <label key={m} className="admin-row" style={{ cursor: "pointer", opacity: embed && !enabled.has(m) ? 0.55 : 1 }}>
                         <input type="checkbox" checked={enabled.has(m)} onChange={e => toggle(s, m, e.target.checked)} />
                         <span style={{ flex: 1, fontFamily: "monospace", fontSize: 12 }}>{m}</span>
+                        {info?.loaded && <span style={{ fontSize: 10, color: "#3f9d58", border: "1px solid currentColor", borderRadius: 4, padding: "0 4px" }}>loaded</span>}
                         {embed && <span style={{ fontSize: 10, opacity: 0.6, border: "1px solid currentColor", borderRadius: 4, padding: "0 4px" }}>embedding</span>}
+                        {isOllama && info && info.size > 0 && (
+                          <span style={{ fontSize: 11, opacity: 0.6, fontVariantNumeric: "tabular-nums", minWidth: 54, textAlign: "right" }}>{fmtSize(info.size)}</span>
+                        )}
+                        {isOllama && info && (
+                          <button className="icon-btn danger" title="Delete this model from disk"
+                            onClick={e => { e.preventDefault(); e.stopPropagation(); doDelete(s, m); }}>✕</button>
+                        )}
                       </label>
                     );
                   })
               }
             </div>
 
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input className="admin-input" style={{ flex: 1 }} value={newModel[s.id] ?? ""}
-                onChange={e => setNewModel(n => ({ ...n, [s.id]: e.target.value }))}
-                placeholder="Add a model by name (e.g. claude-opus-4-8)…"
-                onKeyDown={e => e.key === "Enter" && addManual(s)} />
-              <button className="btn" onClick={() => addManual(s)} disabled={!(newModel[s.id] ?? "").trim()}>Add</button>
-            </div>
+            {s.provider === "ollama" ? (
+              // Local runtime: pull installs the model (streamed), so this is a download, not just
+              // a label. A pull in flight shows a progress bar with cancel.
+              pull[s.id] ? (
+                <div style={{ marginTop: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 4 }}>
+                    <span style={{ fontFamily: "monospace" }}>{pull[s.id]!.name}</span>
+                    <span style={{ opacity: 0.6 }}>{pull[s.id]!.status}</span>
+                    {pull[s.id]!.total > 0 && (
+                      <span style={{ opacity: 0.6, fontVariantNumeric: "tabular-nums" }}>
+                        {fmtSize(pull[s.id]!.completed)} / {fmtSize(pull[s.id]!.total)}
+                      </span>
+                    )}
+                    <div style={{ flex: 1 }} />
+                    <button className="btn" onClick={cancelPull}>Cancel</button>
+                  </div>
+                  <div style={{ height: 6, background: "var(--surface2,#333)", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", background: "var(--accent,#6366f1)", borderRadius: 3,
+                      width: pull[s.id]!.total > 0 ? `${Math.min(100, (pull[s.id]!.completed / pull[s.id]!.total) * 100)}%` : "30%",
+                      transition: "width 0.2s" }} />
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <input className="admin-input" style={{ flex: 1 }} value={newModel[s.id] ?? ""}
+                    onChange={e => setNewModel(n => ({ ...n, [s.id]: e.target.value }))}
+                    placeholder="Pull a model — e.g. llama3.2, qwen2.5:14b, mistral…"
+                    onKeyDown={e => e.key === "Enter" && doPull(s, newModel[s.id] ?? "")} />
+                  <button className="btn" onClick={() => doPull(s, newModel[s.id] ?? "")} disabled={!(newModel[s.id] ?? "").trim()}>↓ Pull</button>
+                </div>
+              )
+            ) : (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <input className="admin-input" style={{ flex: 1 }} value={newModel[s.id] ?? ""}
+                  onChange={e => setNewModel(n => ({ ...n, [s.id]: e.target.value }))}
+                  placeholder="Add a model by name (e.g. claude-opus-4-8)…"
+                  onKeyDown={e => e.key === "Enter" && addManual(s)} />
+                <button className="btn" onClick={() => addManual(s)} disabled={!(newModel[s.id] ?? "").trim()}>Add</button>
+              </div>
+            )}
           </section>
         );
       })}
