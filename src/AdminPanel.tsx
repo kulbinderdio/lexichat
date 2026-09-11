@@ -121,6 +121,10 @@ export interface Profile {
   // Allow code (run_python) to call registered tools via call_tool() / list_tools() (code-mode).
   // Off unless opted in — it lets sandboxed Python invoke any tool this profile enables.
   allowCodeTools?: boolean;
+  // "Verify before done": after a tool-using turn reaches its answer, run one grounded pass that
+  // re-reads the state it claims to have changed and confirms or corrects the claim. Off by default;
+  // guards against declaring success while having failed (or having done only part of a list).
+  verifyBeforeDone?: boolean;
 }
 
 export type ProviderKind = "ollama" | "openai" | "anthropic";
@@ -1160,6 +1164,22 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
                 <code> call_tool()</code> / <code>list_tools()</code> — the model can fetch, chain and
                 aggregate across APIs/MCP in one code block. Off by default: it lets code invoke any
                 tool this profile enables. Requires the run_python master switch.
+              </div>
+            </div>
+
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label className="admin-checkbox-label" style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" className="admin-checkbox"
+                  checked={d.verifyBeforeDone === true}
+                  onChange={e => setDraft({ ...d, verifyBeforeDone: e.target.checked })} />
+                <span>✅ Verify before reporting done</span>
+              </label>
+              <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>
+                After a turn that used tools reaches its answer, run one extra grounded pass that
+                re-reads the state it claims to have changed and confirms — or corrects — the result.
+                Guards against declaring success while having failed, or summarising a partial list as
+                complete. Adds a short "Verifying…" step; off by default. Best for tasks that write
+                data or must cover a whole list.
               </div>
             </div>
 

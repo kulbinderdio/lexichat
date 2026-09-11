@@ -2875,6 +2875,7 @@ export default function App() {
           web_tool_cap: activeProfile?.webToolCap ?? null,
           allow_code_tools: forceAllowCodeToolsRef.current || (activeProfile?.allowCodeTools ?? false),
           debug_full_context: settings.debugFullContext === true,
+          verify_before_done: activeProfile?.verifyBeforeDone === true,
         }
       });
     } catch (err) {

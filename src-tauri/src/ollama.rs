@@ -959,6 +959,13 @@ pub const BUILTIN_GROUP: &str = "Built-in tools";
 
 /// The `find_tools` discovery meta-tool schema. In discovery mode the model calls this to load
 /// specialized (external) tools on demand instead of them all being pushed into every request.
+/// Whether to run the one grounded verification pass before finishing. Only for interactive runs
+/// (`!silent`) that opted in, haven't verified yet, and actually used a tool — a plain chat answer
+/// has no state to re-read. Isolated so the trigger rule is unit-testable.
+pub fn should_verify(silent: bool, verify_before_done: bool, already_verified: bool, any_tool_ran: bool) -> bool {
+    !silent && verify_before_done && !already_verified && any_tool_ran
+}
+
 pub fn find_tools_schema() -> ToolSchema {
     serde_json::from_value(serde_json::json!({
         "type": "function",
@@ -1537,6 +1544,10 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // A scheduled job that has opted into running code. False for interactive runs, which use
     // the normal per-session approval prompt instead.
     allow_code_exec: bool,
+    // Per-profile "verify before done": when the model reaches a final answer after actually using
+    // tools, run ONE more bounded turn (with tools) that re-reads state and confirms or corrects
+    // the claim — a guard against the "false completion" failure mode. Off by default.
+    verify_before_done: bool,
     max_steps: usize,
     // Per-turn cap on web_search + fetch_webpage calls (0 → default). A runaway guard; raise it for
     // research/scraping profiles that legitimately fetch many pages.
@@ -1583,6 +1594,17 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // final so a stubborn narrator can't loop forever.
     let mut narrate_nudges = 0usize;
     const MAX_NARRATE_NUDGES: usize = 2;
+    // Verify-before-done: set true once the one grounded verification pass has been started, so it
+    // runs exactly once. While true it also grants a small extra budget (below) so a run that spent
+    // its allowance can still afford to re-read and confirm.
+    let mut verified = false;
+    const VERIFY_PROMPT: &str =
+        "Before this is final, verify your answer against what the tools actually returned. Check: \
+         (a) did every tool call you relied on SUCCEED — no errors? (b) if you processed a list or \
+         several items, did you handle ALL of them, or only some? (c) is every figure, name, and \
+         status backed by a real tool result, not inferred or assumed? If you need to, re-read the \
+         state now with a tool. If the answer holds, restate it unchanged. If it does not, correct \
+         it. Never claim something you did not verify.";
     let cap = if tool_cap == 0 { DEFAULT_TOOL_CAP } else { tool_cap };
     // Whether `run_python` is actually reachable this run. Three things key off it: whether an
     // oversized result is offloaded to a file at all, whether the offload directory is staged into
@@ -1762,8 +1784,12 @@ pub async fn agent_loop<R: tauri::Runtime>(
         // spent its global tool-call budget, exceeded the wall-clock budget, or kept tooling after a
         // deliverable artifact was already produced. Force a written final answer and end, so a stuck
         // local model can't burn 10-60 minutes. Mirrors the severity-based force-answer path below.
-        let over_budget = total_tool_calls >= GLOBAL_TOOL_CALL_CAP
-            || run_start.elapsed().as_secs() >= TURN_WALL_BUDGET_SECS
+        // The verification pass (once started) gets a small reserved allowance on top of the normal
+        // caps, so a run that already spent its budget can still afford to re-read and confirm.
+        let tool_cap = if verified { GLOBAL_TOOL_CALL_CAP + 3 } else { GLOBAL_TOOL_CALL_CAP };
+        let time_cap = if verified { TURN_WALL_BUDGET_SECS + 90 } else { TURN_WALL_BUDGET_SECS };
+        let over_budget = total_tool_calls >= tool_cap
+            || run_start.elapsed().as_secs() >= time_cap
             || (artifact_emitted && post_artifact_tool_calls > POST_ARTIFACT_TOOL_BUDGET);
         if over_budget {
             if !silent {
@@ -2051,6 +2077,22 @@ pub async fn agent_loop<R: tauri::Runtime>(
                     content: Some("You described a next step but didn't take it. If you still need \
                         more data, call the tool now. If you already have everything, write your \
                         complete final answer — don't just describe what you would do.".into()),
+                    tool_calls: None, tool_call_id: None, name: None, images: None,
+                });
+                continue;
+            }
+
+            // Verify-before-done: one grounded pass before we call it finished. Only for interactive
+            // runs that opted in AND actually used a tool (a plain chat answer has nothing to
+            // re-read). The `verified` guard makes it run exactly once; tools stay available so the
+            // model can re-read the state it claims to have changed. This must sit ABOVE the
+            // ensure_final_answer salvage below, which runs without tools.
+            if should_verify(silent, verify_before_done, verified, any_tool_ran) {
+                verified = true;
+                let _ = app.emit("agent-status", serde_json::json!({ "phase": "Verifying…" }));
+                conversation.lock().unwrap().push(WireMessage {
+                    role: "user".into(),
+                    content: Some(VERIFY_PROMPT.into()),
                     tool_calls: None, tool_call_id: None, name: None, images: None,
                 });
                 continue;
@@ -3280,6 +3322,7 @@ mod tests {
             app.handle(),
             false, // interactive chat, as in the failing session
             false, // allow_code_exec: not a job
+            false, // verify_before_done: not exercised here
             20,
             0, // web_tool_cap: default
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -3423,7 +3466,7 @@ mod tests {
 
         let result = agent_loop(
             &Backend::ollama(server.uri()), "m", "sys", &[], &groups, 5, None, None,
-            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), true, false, 5,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), true, false, false, 5,
             0, // web_tool_cap: default
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             false, // discover_tools: exercise the legacy pre-flight path
@@ -3626,7 +3669,7 @@ mod tests {
 
         let result = agent_loop(
             &Backend::ollama(server.uri()), "qwen3.6:latest", "You are a helpful assistant.", &[], &[], 0, None, None,
-            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), false, false, 20,
+            &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0, app.handle(), false, false, false, 20,
             0, // web_tool_cap: default
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             false, // discover_tools: exercise the legacy pre-flight path
@@ -3730,7 +3773,7 @@ mod tests {
             &[tool("get_current_datetime")], // always-on tool, no selection LLM call
             &[], 0, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0,
-            app.handle(), false, false, 20,
+            app.handle(), false, false, false, 20,
             0, // web_tool_cap: default
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             false, // discover_tools: exercise the legacy pre-flight path
@@ -3896,6 +3939,21 @@ mod tests {
     }
 
     #[test]
+    fn verify_before_done_triggers_once_only_when_warranted() {
+        use super::should_verify;
+        // Fires only for an interactive, opted-in run that used a tool and hasn't verified yet.
+        assert!(should_verify(false, true, false, true));
+        // Never twice (the guard flips after the first pass).
+        assert!(!should_verify(false, true, true, true));
+        // Never when the profile didn't opt in.
+        assert!(!should_verify(false, false, false, true));
+        // Never on a plain chat answer that used no tools — nothing to re-read.
+        assert!(!should_verify(false, true, false, false));
+        // Never for background jobs (silent): they have no user awaiting a corrected answer.
+        assert!(!should_verify(true, true, false, true));
+    }
+
+    #[test]
     fn detects_tools_unsupported_errors() {
         assert!(is_tools_unsupported_error("No endpoints found that support tool use."));
         assert!(is_tools_unsupported_error("This model does not support tools"));
@@ -3948,7 +4006,7 @@ mod tests {
             &[tool("list_files")], // always-on tool → first request carries tools
             &[], 0, None, None,
             &conversation, vec![], vec![], &mcp, vec![], vec![], 10, 0,
-            app.handle(), false, false, 20,
+            app.handle(), false, false, false, 20,
             0, // web_tool_cap: default
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             false, // discover_tools: exercise the legacy pre-flight path
