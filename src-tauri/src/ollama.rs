@@ -1699,7 +1699,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // (web_search→fetch→query→run_python…), keeping each under its cap while the turn total and
     // wall-clock climb unbounded (observed: 30 calls / 13 min, and a 65-min map spiral). These
     // bound the WHOLE turn regardless of which tools are used.
-    const GLOBAL_TOOL_CALL_CAP: usize = 15; // total tool dispatches across ALL tools this turn
+    const GLOBAL_TOOL_CALL_CAP: usize = 30; // total tool dispatches across ALL tools this turn (raised from 15 for OSINT deep-dives, which fan out across many sources)
     // ~30 min. The global tool cap (15) is the primary runaway guard; this wall is a backstop. It's
     // generous because a legit image deck can spend minutes generating several photoreal images
     // (each ~90s) before building the slides — a tighter wall would cut that off mid-workflow.
