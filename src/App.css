@@ -1626,3 +1626,12 @@ html, body, #root { height: 100%; overflow: hidden; }
   max-width: 500px;
   box-shadow: 0 16px 48px rgba(0,0,0,0.4);
 }
+
+/* Mermaid diagrams rendered from a ```mermaid code block (sandboxed iframe). */
+.mermaid-frame {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  margin: 8px 0;
+}

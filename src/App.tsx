@@ -623,7 +623,70 @@ function UserMessage({ text, imageDataUrls, canEdit, onEdit }: {
 // Shared react-markdown renderers for assistant messages: links open externally, and only
 // data:/blob: images render. A model that emits `![](/work/out/chart.png)` or a remote URL would
 // otherwise show a broken-image icon — real chart output arrives via the inline tool-image path.
+// Render a ```mermaid code block as a diagram. Mermaid is BUNDLED (offline — no CDN): it runs in
+// the app to produce a sanitized SVG (securityLevel:'strict'), and the SVG is shown inside a
+// sandboxed iframe so it stays isolated from app state / IPC, preserving the "no raw HTML in the
+// main document" rule (see CLAUDE.md). The frame reports its height so the bubble sizes to it.
+function mermaidHostDoc(inner: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>`
+    + `html,body{margin:0;padding:0;background:transparent}`
+    + `#w{display:flex;justify-content:center;padding:8px}`
+    + `svg{max-width:100%;height:auto}</style></head><body>`
+    + `<div id="w">${inner}</div>`
+    + `<script>try{parent.postMessage({type:'mermaid-height',height:document.documentElement.scrollHeight},'*')}catch(e){}</script>`
+    + `</body></html>`;
+}
+
+function MermaidFrame({ code }: { code: string }) {
+  const [doc, setDoc] = useState<string | null>(null);
+  const [height, setHeight] = useState(120);
+  const ref = useRef<HTMLIFrameElement>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const mermaid = (await import("mermaid")).default;
+        const dark = document.documentElement.getAttribute("data-theme") === "dark"
+          || document.body.classList.contains("dark")
+          || matchMedia("(prefers-color-scheme: dark)").matches;
+        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default" });
+        const { svg } = await mermaid.render("m" + Math.random().toString(36).slice(2), code);
+        if (!cancelled) setDoc(mermaidHostDoc(svg));
+      } catch (err) {
+        const msg = String((err as Error)?.message || err).replace(/[<>&]/g, "");
+        if (!cancelled) setDoc(mermaidHostDoc(`<div style="color:#a3341f;font:13px sans-serif;white-space:pre-wrap">Mermaid error: ${msg}</div>`));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [code]);
+  useEffect(() => {
+    function onMsg(e: MessageEvent) {
+      const data = e.data as { type?: string; height?: number } | null;
+      if (e.source === ref.current?.contentWindow && data?.type === "mermaid-height" && typeof data.height === "number") {
+        setHeight(Math.max(40, Math.min(data.height + 2, 2400)));
+      }
+    }
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, []);
+  if (doc === null) return <div className="mermaid-frame" style={{ padding: 8, color: "var(--text-secondary)", fontSize: 13 }}>rendering diagram…</div>;
+  return (
+    <iframe ref={ref} className="mermaid-frame" sandbox="allow-scripts"
+      srcDoc={doc} title="mermaid-diagram"
+      style={{ width: "100%", height, border: "none", background: "transparent" }} />
+  );
+}
+
 const mdComponents: Components = {
+  // A ```mermaid fenced block renders as a diagram (sandboxed iframe); other code blocks stay <pre>.
+  pre: ({ children }) => {
+    const child = (Array.isArray(children) ? children[0] : children) as { props?: { className?: string; children?: unknown } } | undefined;
+    const cls = child?.props?.className || "";
+    if (/language-mermaid/.test(cls)) {
+      return <MermaidFrame code={String(child?.props?.children ?? "").replace(/\n$/, "")} />;
+    }
+    return <pre>{children}</pre>;
+  },
   a: ({ href, children }) => (
     <a href={href} onClick={e => { e.preventDefault(); if (href) openUrl(href); }}>{children}</a>
   ),
@@ -1450,6 +1513,30 @@ export function probeArtifactScripts(): Promise<boolean> {
   return artifactScriptProbe;
 }
 
+// Bundled Leaflet (offline). Model map artifacts reference Leaflet from a CDN; we swap those
+// <script>/<link> tags for the bundled library inline, so the JS/CSS need no network (map TILES
+// still come from OSM/Mapbox — those are inherently remote). Loaded lazily and cached; the replace
+// callbacks return literal strings so `$` sequences in the library source are not interpreted.
+let leafletBundle: Promise<{ js: string; css: string }> | null = null;
+function loadLeaflet(): Promise<{ js: string; css: string }> {
+  if (!leafletBundle) {
+    leafletBundle = Promise.all([
+      import("leaflet/dist/leaflet.js?raw"),
+      import("leaflet/dist/leaflet.css?raw"),
+    ]).then(([js, css]) => ({ js: (js as { default: string }).default, css: (css as { default: string }).default }));
+  }
+  return leafletBundle;
+}
+const LEAFLET_JS_RE = /<script\b[^>]*\bsrc=["'](?:https?:)?\/\/(?:unpkg\.com|cdn\.jsdelivr\.net)\/[^"']*leaflet[^"']*\.js[^"']*["'][^>]*>\s*<\/script>/gi;
+const LEAFLET_CSS_RE = /<link\b[^>]*\bhref=["'](?:https?:)?\/\/(?:unpkg\.com|cdn\.jsdelivr\.net)\/[^"']*leaflet[^"']*\.css[^"']*["'][^>]*>/gi;
+export async function inlineLeaflet(html: string): Promise<string> {
+  if (!/leaflet[^"']*\.(?:js|css)/i.test(html)) return html;
+  const { js, css } = await loadLeaflet();
+  return html
+    .replace(LEAFLET_CSS_RE, () => `<style>${css}</style>`)
+    .replace(LEAFLET_JS_RE, () => `<script>${js}</script>`);
+}
+
 // Model-authored HTML artifact (create_artifact) — rendered inline in a sandboxed frame with a
 // Save button. Static-or-scripted HTML; sandbox allows scripts but not same-origin/network.
 function ArtifactFrame({ title, html }: { title: string; html: string }) {
@@ -1459,7 +1546,13 @@ function ArtifactFrame({ title, html }: { title: string; html: string }) {
   // One token per mounted frame, so reports are attributed by value rather than by comparing
   // window identities (see artifactShim).
   const token = useMemo(() => "lexi-art-" + Math.random().toString(36).slice(2), []);
-  const shimmed = useMemo(() => withErrorShim(html, token), [html, token]);
+  // Inline bundled Leaflet in place of any CDN <script>/<link> (offline), then apply the error shim.
+  const [shimmed, setShimmed] = useState<string>("");
+  useEffect(() => {
+    let cancelled = false;
+    inlineLeaflet(html).then(inlined => { if (!cancelled) setShimmed(withErrorShim(inlined, token)); });
+    return () => { cancelled = true; };
+  }, [html, token]);
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
       const d = e.data as { __lexiArtifact?: string; kind?: string; message?: string; detail?: string };

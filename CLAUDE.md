@@ -112,17 +112,26 @@ and the Tauri `asset:`/`ipc:` origins — so tool results, charts, and model-aut
 (`create_artifact`, rendered in an `sandbox="allow-scripts"` `srcDoc` iframe — see `ArtifactFrame`)
 can't phone home or pull remote code.
 
-**Deliberate exception — map tiles + Leaflet** (added for interactive street maps with plotted data):
-the CSP allows a *scoped* set of hosts — `img-src`/`connect-src` for `*.tile.openstreetmap.org`,
-`*.basemaps.cartocdn.com`, `api.mapbox.com`, `*.tiles.mapbox.com`; `script-src`/`style-src` for
-`unpkg.com` and `cdn.jsdelivr.net` (the Leaflet CDN). Those two CDNs are in `img-src` too, because
-Leaflet's default `L.marker` icon is a PNG it pulls from its own dist directory — without that a
-plain `L.marker()` map shows no pins at all on Windows/Linux (the macOS quirk below hides the bug).
-This is what lets an artifact render a real
-OSM/Mapbox basemap with markers. **Trade-off:** it loosens the artifact sandbox — an artifact can now
-fetch tiles from those hosts and load Leaflet from those CDNs. Scoped to those reputable hosts, and the
-iframe stays same-origin-isolated (no access to app state), so the blast radius is small, but it IS an
-intentional relaxation. Keep the allow-list minimal; do not broaden it casually.
+**Deliberate exception — map tiles** (for interactive street maps): the CSP allows a *scoped* set of
+tile hosts — `img-src`/`connect-src` for `*.tile.openstreetmap.org`, `*.basemaps.cartocdn.com`,
+`api.mapbox.com`, `*.tiles.mapbox.com`. Map tiles are inherently remote, so this stays. Keep the
+allow-list minimal; do not broaden it casually.
+
+**Libraries are BUNDLED, not from a CDN (offline).** The app ships fully offline: no `unpkg.com` /
+`cdn.jsdelivr.net` in the CSP any more.
+- **Leaflet**: a model map artifact still *writes* a `<script src="…unpkg/jsdelivr…leaflet.js">` (the
+  create_artifact guidance tells it to), but `ArtifactFrame` swaps those `<script>`/`<link>` tags for
+  the **bundled** `leaflet` (`?raw`-imported, inlined) via `inlineLeaflet()` before the frame renders —
+  so no network is needed for the library. Maps use `L.circleMarker` (see the create_artifact prompt),
+  so the default `L.marker` PNG — which the CDN img-src used to serve — isn't needed.
+- **Mermaid**: a ```` ```mermaid ```` code block renders via `MermaidFrame` — the **bundled** `mermaid`
+  runs in the app (`securityLevel:'strict'`) to produce a sanitized SVG, which is shown inside a
+  `sandbox="allow-scripts"` iframe. The main document never gets raw HTML (invariant below preserved).
+
+**CSP inheritance — measured, not assumed.** A `srcDoc` iframe (and a `blob:` one) **does** inherit the
+creator's CSP, on macOS/WKWebView included. An earlier note here claimed macOS did not; that was wrong
+and cost a long debugging session. A document loaded from a real URL is the only kind that gets its own
+policy instead of inheriting.
 
 **CSP inheritance — measured, not assumed.** A `srcDoc` iframe (and a `blob:` one) **does** inherit the
 creator's CSP, on macOS/WKWebView included. An earlier note here claimed macOS did not; that was wrong
