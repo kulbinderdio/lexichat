@@ -3334,11 +3334,8 @@ export default function App() {
         <button className="btn icon-only" onClick={() => setShowAbout(true)} title="About LexiChat">
           <Info size={13} />
         </button>
-        <span className="toolbar-title">
-          {activeProfile ? activeProfile.name : (selectedModel || "LexiChat")}
-        </span>
-        {/* Profile selector */}
-        {settings.profiles.length > 0 && (
+        {/* Profile selector — moved to the left; it replaces the redundant name label */}
+        {settings.profiles.length > 0 ? (
           <select
             className="profile-select"
             value={settings.activeProfileId ?? ""}
@@ -3350,7 +3347,10 @@ export default function App() {
               <option key={p.id} value={p.id}>{p.name}</option>
             ))}
           </select>
+        ) : (
+          <span className="toolbar-title" style={{ flex: "0 0 auto" }}>{selectedModel || "LexiChat"}</span>
         )}
+        <div style={{ flex: 1 }} />
         <button className="btn" onClick={handleReset} disabled={isRunning}>
           <RotateCcw size={12} /> New chat
         </button>
