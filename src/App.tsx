@@ -3327,6 +3327,13 @@ export default function App() {
       {/* Toolbar */}
       <div className="toolbar">
         <img src={lexiLogo} style={{ width: 22, height: 22, borderRadius: 6 }} alt="LexiChat" />
+        <button className="btn icon-only" onClick={() => setShowHistory(v => !v)} title="Chat history"
+          style={{ opacity: showHistory ? 1 : 0.55 }}>
+          <PanelLeft size={13} />
+        </button>
+        <button className="btn icon-only" onClick={() => setShowAbout(true)} title="About LexiChat">
+          <Info size={13} />
+        </button>
         <span className="toolbar-title">
           {activeProfile ? activeProfile.name : (selectedModel || "LexiChat")}
         </span>
@@ -3344,10 +3351,6 @@ export default function App() {
             ))}
           </select>
         )}
-        <button className="btn icon-only" onClick={() => setShowHistory(v => !v)} title="Chat history"
-          style={{ opacity: showHistory ? 1 : 0.55 }}>
-          <PanelLeft size={13} />
-        </button>
         <button className="btn" onClick={handleReset} disabled={isRunning}>
           <RotateCcw size={12} /> New chat
         </button>
@@ -3364,9 +3367,6 @@ export default function App() {
             <Brain size={13} />
           </button>
         )}
-        <button className="btn icon-only" onClick={() => setShowAbout(true)} title="About LexiChat">
-          <Info size={13} />
-        </button>
         <button className="btn icon-only" onClick={() => setShowAdmin(true)} title="Admin">
           <Settings size={13} />
         </button>
