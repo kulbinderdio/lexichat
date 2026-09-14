@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, KeyboardEvent, ChangeEvent, Component, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { createPortal } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -2098,6 +2099,20 @@ export default function App() {
 
   // --- Prompt library (per-profile reusable prompts, shown in the composer's Prompts menu) ---
   const [promptMenuOpen, setPromptMenuOpen] = useState(false);
+  const promptBtnRef = useRef<HTMLButtonElement>(null);
+  // Fixed-position anchor for the popover: it must render in a portal because the composer
+  // card has overflow:hidden, which would otherwise clip the upward-growing menu.
+  const [menuPos, setMenuPos] = useState<{ left: number; bottom: number }>({ left: 0, bottom: 0 });
+  const togglePromptMenu = () => {
+    setPromptMenuOpen(o => {
+      const next = !o;
+      if (next && promptBtnRef.current) {
+        const r = promptBtnRef.current.getBoundingClientRect();
+        setMenuPos({ left: r.left, bottom: window.innerHeight - r.top + 8 });
+      }
+      return next;
+    });
+  };
   // Inline "save current input" name entry (Tauri's WKWebView has no working window.prompt).
   const [savingPrompt, setSavingPrompt] = useState(false);
   const [newPromptName, setNewPromptName] = useState("");
@@ -3521,17 +3536,19 @@ export default function App() {
             </button>
             <div className="prompt-menu-wrap">
               <button
+                ref={promptBtnRef}
                 className="attach-btn"
-                onClick={() => setPromptMenuOpen(o => !o)}
+                onClick={togglePromptMenu}
                 title="Prompts"
                 aria-label="Prompts"
               >
                 <Library size={14} />
               </button>
-              {promptMenuOpen && (
+              {promptMenuOpen && createPortal(
                 <>
                   <div className="prompt-menu-backdrop" onClick={() => setPromptMenuOpen(false)} />
-                  <div className="prompt-menu" role="menu">
+                  <div className="prompt-menu" role="menu"
+                    style={{ position: "fixed", left: menuPos.left, bottom: menuPos.bottom }}>
                     <div className="prompt-menu-head">
                       <span>Prompts</span>
                       <span className="prompt-menu-profile">{activeProfile?.name ?? "No profile"}</span>
@@ -3584,7 +3601,8 @@ export default function App() {
                       </div>
                     )}
                   </div>
-                </>
+                </>,
+                document.body
               )}
             </div>
             <ChatParamsButton params={chatParams} onChange={setChatParams} disabled={isRunning} />

@@ -1638,12 +1638,10 @@ html, body, #root { height: 100%; overflow: hidden; }
 
 /* --- Prompt library popover (composer) --- */
 .prompt-menu-wrap { position: relative; display: flex; }
-.prompt-menu-backdrop { position: fixed; inset: 0; z-index: 40; }
+.prompt-menu-backdrop { position: fixed; inset: 0; z-index: 2147482999; }
 .prompt-menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  z-index: 41;
+  position: fixed;
+  z-index: 2147483000;
   width: 300px;
   max-width: 78vw;
   background: var(--surface);
