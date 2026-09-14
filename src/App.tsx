@@ -1701,7 +1701,17 @@ function ArtifactFrame({ title, html }: { title: string; html: string }) {
       const path = await save({ title: "Save artifact", defaultPath: `${safe}.html`,
         filters: [{ name: "HTML", extensions: ["html"] }] });
       if (!path) return;
-      await invoke("write_file_text", { path, content: html });
+      // Save a STYLED, self-contained page: inline Leaflet (offline) and inject the report
+      // house-style + bundled fonts (both are otherwise added only at render time), then wrap a
+      // bare fragment in a document so it opens correctly on its own in a browser.
+      let content = injectReportStyle(await inlineLeaflet(html));
+      if (!/<html[\s>]/i.test(content)) {
+        content = `<!doctype html><html><head><meta charset="utf-8">`
+          + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+          + `<style>body{margin:0;background:#f4f3ee}@media(prefers-color-scheme:dark){body{background:#0c0b08}}</style>`
+          + `</head><body>${content}</body></html>`;
+      }
+      await invoke("write_file_text", { path, content });
     } catch { /* cancelled */ }
   };
   return (
