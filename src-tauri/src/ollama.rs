@@ -2250,7 +2250,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
             // is rarely byte-identical (the model tweaks a heading or a field as it "improves" it),
             // so a content hash would miss it, while a genuinely different deliverable in the same
             // turn gets a different title and still goes through.
-            if name == "create_artifact" {
+            if name == "create_artifact" || name == "create_report" {
                 let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("").trim().to_lowercase();
                 if !title.is_empty() && emitted_artifact_titles.iter().any(|t| *t == title) {
                     // The wording has to stop the model DESCRIBING a second artifact as well as
@@ -2514,6 +2514,112 @@ fn needs_base64url_encoding(s: &str) -> bool {
 }
 
 /// Route a tool call to the right executor.
+
+// ── create_report: build the .lexi-report semantic HTML from the model's compact JSON. The frontend
+// injects the house-style CSS + bundled fonts (see injectReportStyle), so this emits STRUCTURE only —
+// the model never writes HTML/CSS/SVG, which is why it doesn't stall on big artifacts.
+fn report_esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+// A table cell prefixed "[gov]" or "[off]" renders its text inside a coloured tag.
+fn report_cell_html(cell: &str) -> String {
+    if let Some(rest) = cell.strip_prefix("[gov]") {
+        format!("<td><span class=\"tag gov\">{}</span></td>", report_esc(rest.trim()))
+    } else if let Some(rest) = cell.strip_prefix("[off]") {
+        format!("<td><span class=\"tag off\">{}</span></td>", report_esc(rest.trim()))
+    } else {
+        format!("<td>{}</td>", report_esc(cell))
+    }
+}
+fn build_provenance_svg(sources: &[String], targets: &[String]) -> String {
+    let n = sources.len().max(1) as i32;
+    let h = 40 + n * 66;
+    let mut s = format!("<svg viewBox=\"0 0 900 {h}\" role=\"img\" aria-label=\"Data sources feeding the subject(s)\">");
+    for (i, src) in sources.iter().enumerate() {
+        let y = 20 + i as i32 * 66;
+        s.push_str(&format!("<rect x=\"20\" y=\"{y}\" width=\"330\" height=\"48\" rx=\"9\" fill=\"none\" stroke=\"currentColor\" opacity=\"0.45\"/><text x=\"38\" y=\"{ty}\" font-family=\"monospace\" font-size=\"13\">{name}</text>", ty=y+30, name=report_esc(src)));
+    }
+    let tcy = h / 2;
+    let ty0 = tcy - (targets.len() as i32 * 33);
+    for (j, tgt) in targets.iter().enumerate() {
+        let y = ty0 + j as i32 * 66;
+        s.push_str(&format!("<rect x=\"600\" y=\"{y}\" width=\"282\" height=\"48\" rx=\"11\" fill=\"none\" stroke=\"currentColor\"/><text x=\"741\" y=\"{ty}\" text-anchor=\"middle\" font-size=\"14\" font-weight=\"700\">{name}</text>", ty=y+30, name=report_esc(tgt)));
+    }
+    for i in 0..sources.len() {
+        let sy = 44 + i as i32 * 66;
+        s.push_str(&format!("<line x1=\"350\" y1=\"{sy}\" x2=\"598\" y2=\"{tcy}\" stroke=\"currentColor\" opacity=\"0.55\"/>"));
+    }
+    s.push_str("</svg>");
+    s
+}
+fn build_report_html(args: &serde_json::Value) -> String {
+    let mut h = String::from("<article class=\"lexi-report\">");
+    if let Some(e) = args.get("eyebrow").and_then(|v| v.as_str()) {
+        h.push_str(&format!("<div class=\"eyebrow\">{}</div>", report_esc(e)));
+    }
+    h.push_str(&format!("<h1>{}</h1>", report_esc(args.get("title").and_then(|v| v.as_str()).unwrap_or("Report"))));
+    if let Some(l) = args.get("lede").and_then(|v| v.as_str()) {
+        h.push_str(&format!("<p class=\"lede\">{}</p>", report_esc(l)));
+    }
+    if let Some(sections) = args.get("sections").and_then(|v| v.as_array()) {
+        for sec in sections {
+            if let Some(head) = sec.get("heading").and_then(|v| v.as_str()) {
+                h.push_str(&format!("<h2>{}</h2>", report_esc(head)));
+            }
+            if let Some(t) = sec.get("text").and_then(|v| v.as_str()) {
+                h.push_str(&format!("<p>{}</p>", report_esc(t)));
+            }
+            if let Some(stats) = sec.get("stats").and_then(|v| v.as_array()) {
+                h.push_str("<div class=\"grid\"><div class=\"card\">");
+                for st in stats {
+                    if let Some(p) = st.as_array() {
+                        let label = p.get(0).and_then(|v| v.as_str()).unwrap_or("");
+                        let val = p.get(1).and_then(|v| v.as_str()).unwrap_or("");
+                        h.push_str(&format!("<div class=\"stat\"><span>{}</span><span class=\"v\">{}</span></div>", report_esc(label), report_esc(val)));
+                    }
+                }
+                h.push_str("</div></div>");
+            }
+            if let Some(nt) = sec.get("note").and_then(|v| v.as_str()) {
+                h.push_str(&format!("<div class=\"note\">{}</div>", report_esc(nt)));
+            }
+            if let Some(tbl) = sec.get("table") {
+                if let Some(cols) = tbl.get("columns").and_then(|v| v.as_array()) {
+                    h.push_str("<div class=\"tblwrap\"><table><thead><tr>");
+                    for c in cols { h.push_str(&format!("<th>{}</th>", report_esc(c.as_str().unwrap_or("")))); }
+                    h.push_str("</tr></thead><tbody>");
+                    if let Some(rows) = tbl.get("rows").and_then(|v| v.as_array()) {
+                        for row in rows {
+                            h.push_str("<tr>");
+                            if let Some(cells) = row.as_array() {
+                                for cell in cells { h.push_str(&report_cell_html(cell.as_str().unwrap_or(""))); }
+                            }
+                            h.push_str("</tr>");
+                        }
+                    }
+                    h.push_str("</tbody></table></div>");
+                }
+            }
+            if let Some(prov) = sec.get("provenance") {
+                let sources: Vec<String> = prov.get("sources").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                let targets: Vec<String> = prov.get("targets").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .or_else(|| prov.get("target").and_then(|v| v.as_str()).map(|s| vec![s.to_string()]))
+                    .unwrap_or_default();
+                if !sources.is_empty() && !targets.is_empty() {
+                    h.push_str(&format!("<div class=\"provenance\">{}</div>", build_provenance_svg(&sources, &targets)));
+                }
+            }
+        }
+    }
+    if let Some(ft) = args.get("footer").and_then(|v| v.as_str()) {
+        h.push_str(&format!("<div class=\"foot\">{}</div>", report_esc(ft)));
+    }
+    h.push_str("</article>");
+    h
+}
+
 async fn dispatch_tool<R: tauri::Runtime>(
     name: &str,
     args: &serde_json::Value,
@@ -2552,6 +2658,22 @@ async fn dispatch_tool<R: tauri::Runtime>(
             It is DONE and displayed — do NOT call create_artifact again for this content or to \
             'refine' it. Write your final answer now, referring to it as \"shown above\"; do NOT \
             paste the HTML into your reply.]");
+    }
+
+    // 0b2. Structured report — the model supplies compact JSON (title + sections); LexiChat builds
+    // the .lexi-report HTML deterministically (frontend injects the house-style + fonts). Tiny model
+    // output, so it never stalls generating a big page. Flows through as a normal artifact.
+    if name == "create_report" {
+        let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("Report").to_string();
+        let html = build_report_html(args);
+        if !silent {
+            if let Some(s) = app.try_state::<crate::AppState>() {
+                *s.pending_artifact.lock().unwrap() = Some(ArtifactPayload { title: title.clone(), html });
+            }
+        }
+        return format!("[Report \"{title}\" is rendered inline to the user, with a Save button. It \
+            is DONE and displayed \u{2014} do NOT call create_report or create_artifact again for this \
+            content. Write your final answer now, referring to it as \"shown above\".]");
     }
 
     // 0c. Local image generation — shell out to stable-diffusion.cpp (offline, no cloud). The PNG
