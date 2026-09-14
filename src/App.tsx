@@ -2098,6 +2098,10 @@ export default function App() {
 
   // --- Prompt library (per-profile reusable prompts, shown in the composer's Prompts menu) ---
   const [promptMenuOpen, setPromptMenuOpen] = useState(false);
+  // Inline "save current input" name entry (Tauri's WKWebView has no working window.prompt).
+  const [savingPrompt, setSavingPrompt] = useState(false);
+  const [newPromptName, setNewPromptName] = useState("");
+  const promptNameRef = useRef<HTMLInputElement>(null);
   const profilePrompts = activeProfile?.prompts ?? [];
 
   const updateActiveProfilePrompts = (fn: (prompts: PromptPreset[]) => PromptPreset[]) => {
@@ -2127,46 +2131,23 @@ export default function App() {
     });
   };
 
-  const saveCurrentAsPrompt = () => {
-    const body = input.trim();
-    if (!body) return;
-    const suggested = body.split("\n")[0].slice(0, 40);
-    const name = window.prompt("Save this prompt as:", suggested);
-    if (!name || !name.trim()) return;
-    updateActiveProfilePrompts(ps => [...ps, { id: uid(), name: name.trim(), body: input }]);
+  const beginSavePrompt = () => {
+    if (!input.trim()) return;
+    setNewPromptName(input.trim().split("\n")[0].slice(0, 40));
+    setSavingPrompt(true);
+    requestAnimationFrame(() => promptNameRef.current?.select());
+  };
+
+  const confirmSavePrompt = () => {
+    const name = newPromptName.trim();
+    if (!name || !input.trim()) return;
+    updateActiveProfilePrompts(ps => [...ps, { id: uid(), name, body: input }]);
+    setSavingPrompt(false);
+    setNewPromptName("");
     setPromptMenuOpen(false);
   };
 
   const deletePrompt = (id: string) => updateActiveProfilePrompts(ps => ps.filter(p => p.id !== id));
-
-  const exportPrompts = async () => {
-    if (profilePrompts.length === 0) return;
-    const safe = (activeProfile?.name ?? "profile").replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "profile";
-    try {
-      const path = await save({ title: "Export prompts", defaultPath: `${safe}-prompts.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }] });
-      if (!path) return;
-      await invoke("write_file_text", { path, content: JSON.stringify(profilePrompts, null, 2) });
-    } catch { /* cancelled */ }
-    setPromptMenuOpen(false);
-  };
-
-  const importPrompts = async () => {
-    try {
-      const path = await open({ multiple: false, title: "Import prompts",
-        filters: [{ name: "JSON", extensions: ["json"] }] });
-      if (!path || typeof path !== "string") return;
-      const text = await invoke<string>("read_file_text", { path });
-      const parsed = JSON.parse(text);
-      const arr: any[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.prompts) ? parsed.prompts : []);
-      const incoming: PromptPreset[] = arr
-        .filter(x => x && typeof x.name === "string" && typeof x.body === "string")
-        .map(x => ({ id: uid(), name: String(x.name), body: String(x.body) }));
-      if (incoming.length === 0) { window.alert("No prompts found in that file."); return; }
-      updateActiveProfilePrompts(ps => [...ps, ...incoming]);
-      setPromptMenuOpen(false);
-    } catch (e) { window.alert("Could not import prompts: " + e); }
-  };
 
   // Flat list of every (server, model) the dropdown can offer, in server order.
   const modelOptions = (settings.servers ?? []).flatMap(s =>
@@ -3579,11 +3560,29 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-                    <div className="prompt-menu-actions">
-                      <button onClick={saveCurrentAsPrompt} disabled={!input.trim()}>Save current input</button>
-                      <button onClick={importPrompts}>Import…</button>
-                      <button onClick={exportPrompts} disabled={profilePrompts.length === 0}>Export…</button>
-                    </div>
+                    {savingPrompt ? (
+                      <div className="prompt-menu-save">
+                        <input
+                          ref={promptNameRef}
+                          className="prompt-menu-name-input"
+                          value={newPromptName}
+                          placeholder="Prompt name"
+                          onChange={e => setNewPromptName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === "Enter") { e.preventDefault(); confirmSavePrompt(); }
+                            if (e.key === "Escape") { setSavingPrompt(false); }
+                          }}
+                        />
+                        <button className="prompt-menu-save-ok" onClick={confirmSavePrompt} disabled={!newPromptName.trim()}>Save</button>
+                        <button onClick={() => setSavingPrompt(false)}>Cancel</button>
+                      </div>
+                    ) : (
+                      <div className="prompt-menu-actions">
+                        <button onClick={beginSavePrompt} disabled={!input.trim()}>
+                          Save current input as a prompt
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </>
               )}

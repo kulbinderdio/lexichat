@@ -1695,3 +1695,19 @@ html, body, #root { height: 100%; overflow: hidden; }
 }
 .prompt-menu-actions button:hover:not(:disabled) { color: var(--text); background: var(--surface3); }
 .prompt-menu-actions button:disabled { opacity: 0.35; cursor: default; }
+.prompt-menu-save { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border-light); }
+.prompt-menu-name-input {
+  flex: 1; min-width: 0;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text); border-radius: 7px; padding: 6px 8px; font-size: 12px;
+}
+.prompt-menu-name-input:focus { outline: none; border-color: var(--accent); }
+.prompt-menu-save button {
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text-secondary); cursor: pointer;
+  padding: 6px 10px; border-radius: 7px; font-size: 11px;
+  transition: color 0.15s, background 0.15s;
+}
+.prompt-menu-save button:hover:not(:disabled) { color: var(--text); background: var(--surface3); }
+.prompt-menu-save button:disabled { opacity: 0.35; cursor: default; }
+.prompt-menu-save-ok { color: var(--text) !important; border-color: var(--accent) !important; }
