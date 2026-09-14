@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ARTIFACT_REPORT_CSS } from "./artifactAssets";
 import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft, BarChart3, Brain, Pencil, RefreshCw } from "lucide-react";
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
@@ -1537,6 +1538,17 @@ export async function inlineLeaflet(html: string): Promise<string> {
     .replace(LEAFLET_JS_RE, () => `<script>${js}</script>`);
 }
 
+
+// Opt-in report styling: a create_artifact whose HTML uses class="lexi-report" gets the bundled
+// IBM Plex faces + the house-style design system injected, so the model only writes semantic HTML
+// (tables, cards, tags) and LexiChat supplies the polish — offline, no Google Fonts, no CDN.
+export function injectReportStyle(html: string): string {
+  if (!/lexi-report/.test(html)) return html;
+  const style = `<style>${ARTIFACT_REPORT_CSS}</style>`;
+  const head = html.match(/<head[^>]*>/i);
+  return head ? html.replace(head[0], head[0] + style) : style + html;
+}
+
 // Model-authored HTML artifact (create_artifact) — rendered inline in a sandboxed frame with a
 // Save button. Static-or-scripted HTML; sandbox allows scripts but not same-origin/network.
 function ArtifactFrame({ title, html }: { title: string; html: string }) {
@@ -1550,7 +1562,7 @@ function ArtifactFrame({ title, html }: { title: string; html: string }) {
   const [shimmed, setShimmed] = useState<string>("");
   useEffect(() => {
     let cancelled = false;
-    inlineLeaflet(html).then(inlined => { if (!cancelled) setShimmed(withErrorShim(inlined, token)); });
+    inlineLeaflet(html).then(inlined => { if (!cancelled) setShimmed(withErrorShim(injectReportStyle(inlined), token)); });
     return () => { cancelled = true; };
   }, [html, token]);
   useEffect(() => {
