@@ -120,7 +120,7 @@ const ALL_BUILTIN_TOOLS: ToolSchema[] = [
   { type: "function", function: { name: "get_current_datetime", description: "Get the current local date and time. Returns human-readable, ISO 8601, filename-safe, and Unix timestamp formats. Use whenever you need today's date or a timestamp for a filename.", parameters: { type: "object", properties: {}, required: [] } } },
   { type: "function", function: { name: "run_python", description: "Execute real Python (CPython) in a secure, offline sandbox: compute, analyse data, and create charts. Available: the standard library plus numpy, pandas, matplotlib, scipy, sympy, openpyxl, beautifulsoup4, geopandas/shapely/pyproj, python-pptx, python-docx, Pillow. These are the ONLY third-party packages and there is NO network, so importing anything else (requests, plotly, scikit-learn…) fails. print() for text output. FILES: /work/uploads/ holds the user's attachments — PDFs and Word docs are ALREADY extracted to text, so just open() them; images are real files, editable with Pillow. Save anything the user should keep to /work/out/ — the tool result reports the real disk path it was copied to, so quote THAT to the user, never /work/out (they cannot open it). Bulk data for a create_artifact page goes to /work/artifacts/<name>.json and is referenced in the HTML as {{data:<name>.json}} — never retype values into the HTML. /work/artifacts persists across messages; the rest of /work persists across calls within a turn and resets on the next message. CHARTS: build a matplotlib figure and it renders inline automatically — do not savefig unless the user wants a file, and never hand-draw ASCII or SVG. For a plain read of a document with no computation, prefer read_file. Do not read or write outside /work.", parameters: { type: "object", properties: { code: { type: "string", description: "The Python source code to execute." } }, required: ["code"] } } },
   { type: "function", function: { name: "create_artifact", description: "Render a self-contained HTML page inline in the chat, with a Save button. Use it for polished deliverables — reports, dashboards, styled tables, simple interactive views — when markdown is not enough. Inline ALL CSS and JS; external URLs are blocked, EXCEPT Leaflet from unpkg/jsdelivr and OpenStreetMap/Mapbox tiles, so real street maps with plotted points do work. To include an image you generated this turn use <img src=\"{{figure:1}}\"> (1 = order created); for one the user attached, {{upload:1}}. For bulk data produced in run_python, write it to /work/artifacts/<name>.json and reference it as {{data:<name>.json}} — do not paste the values in. Any other image must be a data: URI. Put a short summary in chat and the rich content here — not your whole answer. To show ANY HTML you MUST call this tool; pasting raw HTML, <script> or <iframe> into a chat reply renders as source text, not a page.", parameters: { type: "object", properties: { title: { type: "string", description: "Short title for the artifact (used as the saved filename and header)." }, html: { type: "string", description: "A complete, self-contained HTML document (or fragment) with all CSS/JS inlined and no external resources." } }, required: ["title", "html"] } } },
-  { type: "function", function: { name: "create_report", description: "Build a polished, STYLED report or dossier inline in the chat from structured data. LexiChat supplies all design, fonts, tables and the data-source diagram — you provide ONLY the content as JSON, never HTML/CSS/SVG. PREFER this over create_artifact for any report, dossier, profile or briefing. Fields: title; optional eyebrow (short kicker) and lede (one-line summary); footer; and sections (an array). Each section object may contain any of: heading (string); text (a paragraph); note (a highlighted caveat/finding); stats (array of [label, value] pairs, rendered as a stat card); table ({columns:[...], rows:[[cell,...],...]}; prefix a cell string with [gov] or [off] to render it as a red/gold flag tag); provenance ({sources:[list of source/tool names], targets:[subject name(s)]}) — LexiChat draws the \"where the data came from\" diagram from it. End a report with a heading + provenance section, then a footer. Every value MUST come from a tool result — never invent data.", parameters: { type: "object", properties: { title: { type: "string", description: "Report title." }, eyebrow: { type: "string", description: "Short kicker above the title (optional)." }, lede: { type: "string", description: "One-sentence summary (optional)." }, footer: { type: "string", description: "Sources / date / disclaimer line (optional)." }, sections: { type: "array", description: "Ordered content sections.", items: { type: "object" } } }, required: ["title", "sections"] } } },
+  { type: "function", function: { name: "create_report", description: "Build a polished, STYLED report or dossier inline in the chat from structured data. LexiChat supplies all design, fonts, tables and the data-source diagram — you provide ONLY the content as JSON, never HTML/CSS/SVG. PREFER this over create_artifact for any report, dossier, profile or briefing. Fields: title; optional eyebrow (short kicker) and lede (one-line summary); footer; and sections (an array). Each section object may contain any of: heading (string); text (a paragraph); note (a highlighted caveat/finding); stats (array of [label, value] pairs, rendered as a stat card); table ({columns:[...], rows:[[cell,...],...]}; prefix a cell string with [gov] or [off] to render it as a red/gold flag tag); provenance ({sources:[list of source/tool names], targets:[subject name(s)]}) — LexiChat draws the \"where the data came from\" diagram from it. End a report with a heading + provenance section, then a footer. For a LARGE report do NOT inline a big sections array — instead build the whole spec (title, eyebrow, lede, sections, footer) as a dict in run_python, json.dump it to /work/artifacts/report.json, and call create_report with just { data_file: \"report.json\" }; this is the RELIABLE path. Every value MUST come from a tool result — never invent data.", parameters: { type: "object", properties: { title: { type: "string", description: "Report title." }, eyebrow: { type: "string", description: "Short kicker above the title (optional)." }, lede: { type: "string", description: "One-sentence summary (optional)." }, footer: { type: "string", description: "Sources / date / disclaimer line (optional)." }, sections: { type: "array", description: "Ordered content sections (inline). Omit if using data_file.", items: { type: "object" } }, data_file: { type: "string", description: "Name of a JSON file you wrote to /work/artifacts/ in run_python holding the full report spec (title, sections, ...). Preferred for anything beyond a couple of tiny sections." } }, required: ["title", "sections"] } } },
   { type: "function", function: { name: "generate_image", description: "Generate an image from a text description, or edit one the user attached, using the local offline image model. Use it whenever the user asks to create, draw, illustrate or paint something — and also to edit, restyle or repaint an attached photo, by passing source_image. The result displays inline automatically; refer to it as \"shown above\" and do not output a URL or markdown image. To put it in a deck or document, embed <img src=\"{{figure:N}}\"> in a create_artifact page, or read /work/data/generated_image_N.png in run_python. Do not re-generate an image to reuse it. source_image edits the WHOLE image toward the prompt — good for restyling while keeping composition, but not pixel-exact; for precise edits (exact colour swap, crop, overlay text) use run_python with Pillow instead.", parameters: { type: "object", properties: { prompt: { type: "string", description: "A detailed description of the image to create — or, when editing, of the desired end result (describe the whole scene as it should look after the edit, e.g. 'a street with the foreground building painted pink')." }, negative_prompt: { type: "string", description: "Things to avoid in the image (optional)." }, source_image: { type: "string", description: "To EDIT an attached image instead of creating a new one: the /work/uploads/<filename> path of an image the user attached ANYWHERE in this conversation — the current message or an earlier one. Earlier attachments stay editable; do not claim a photo is no longer attached. Omit to generate from scratch." }, strength: { type: "number", description: "Edit strength for source_image, 0.0–1.0 (optional, default 0.6, or 0.85 with mask_regions). Lower stays closer to the original; higher diverges more. Ignored without source_image." }, mask_regions: { type: "string", description: "To change ONLY part of source_image and keep the rest pixel-identical (e.g. 'the building', 'the sky'): region(s) as normalized (0..1) shapes separated by ';' — 'rect x y w h' or 'ellipse cx cy rx ry'. Estimate the region from the image you can see, e.g. 'rect 0 0.35 0.45 0.65'. If the user painted a region on the image it is used automatically (omit this). Omit to edit the whole image." }, size: { type: "integer", description: "New images: square size in px (512/768/1024). When editing: caps the longer edge; original aspect ratio is kept (optional)." }, steps: { type: "integer", description: "Sampling steps; Turbo models want ~4 (optional)." }, seed: { type: "integer", description: "Seed for reproducibility (optional)." } }, required: ["prompt"] } } },
 ];
 
@@ -793,6 +793,103 @@ function substituteData(html: string, files: Map<string, PyDataFile>): string {
     if (f.error) return JSON.stringify({ error: f.error });
     return escapeForScript(f.text);
   });
+}
+
+
+// ── create_report rendering (frontend). The Rust dispatch passes the report spec as JSON behind a
+// "LEXI_REPORT_JSON:" sentinel; here we build the .lexi-report HTML (the house-style is injected
+// later by injectReportStyle). sections may be inline, a JSON string, or in a /work/artifacts file
+// the model wrote in run_python (data_file) — the reliable path, since the model never has to
+// serialise a big JSON in the tool call itself.
+type ReportSpec = { title?: string; eyebrow?: string; lede?: string; footer?: string; data_file?: string; sections?: unknown };
+function reportEsc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function reportCell(cell: string): string {
+  if (cell.startsWith("[gov]")) return `<td><span class="tag gov">${reportEsc(cell.slice(5).trim())}</span></td>`;
+  if (cell.startsWith("[off]")) return `<td><span class="tag off">${reportEsc(cell.slice(5).trim())}</span></td>`;
+  return `<td>${reportEsc(cell)}</td>`;
+}
+function buildProvenanceSvg(sources: string[], targets: string[]): string {
+  const n = Math.max(sources.length, 1);
+  const h = 40 + n * 66;
+  let s = `<svg viewBox="0 0 900 ${h}" role="img" aria-label="Data sources feeding the subject(s)">`;
+  sources.forEach((src, i) => {
+    const y = 20 + i * 66;
+    s += `<rect x="20" y="${y}" width="330" height="48" rx="9" fill="none" stroke="currentColor" opacity="0.45"/><text x="38" y="${y + 30}" font-family="monospace" font-size="13">${reportEsc(src)}</text>`;
+  });
+  const tcy = Math.round(h / 2);
+  const ty0 = tcy - targets.length * 33;
+  targets.forEach((tgt, j) => {
+    const y = ty0 + j * 66;
+    s += `<rect x="600" y="${y}" width="282" height="48" rx="11" fill="none" stroke="currentColor"/><text x="741" y="${y + 30}" text-anchor="middle" font-size="14" font-weight="700">${reportEsc(tgt)}</text>`;
+  });
+  for (let i = 0; i < sources.length; i++) {
+    const sy = 44 + i * 66;
+    s += `<line x1="350" y1="${sy}" x2="598" y2="${tcy}" stroke="currentColor" opacity="0.55"/>`;
+  }
+  return s + "</svg>";
+}
+function renderReport(spec: ReportSpec, sections: unknown[]): string {
+  let h = '<article class="lexi-report">';
+  if (spec.eyebrow) h += `<div class="eyebrow">${reportEsc(String(spec.eyebrow))}</div>`;
+  h += `<h1>${reportEsc(String(spec.title ?? "Report"))}</h1>`;
+  if (spec.lede) h += `<p class="lede">${reportEsc(String(spec.lede))}</p>`;
+  for (const secRaw of sections) {
+    const sec = (secRaw ?? {}) as Record<string, unknown>;
+    if (typeof sec.heading === "string") h += `<h2>${reportEsc(sec.heading)}</h2>`;
+    if (typeof sec.text === "string") h += `<p>${reportEsc(sec.text)}</p>`;
+    if (Array.isArray(sec.stats)) {
+      h += '<div class="grid"><div class="card">';
+      for (const st of sec.stats as unknown[]) {
+        if (Array.isArray(st)) h += `<div class="stat"><span>${reportEsc(String(st[0] ?? ""))}</span><span class="v">${reportEsc(String(st[1] ?? ""))}</span></div>`;
+      }
+      h += "</div></div>";
+    }
+    if (typeof sec.note === "string") h += `<div class="note">${reportEsc(sec.note)}</div>`;
+    const tbl = sec.table as Record<string, unknown> | undefined;
+    if (tbl && Array.isArray(tbl.columns)) {
+      h += '<div class="tblwrap"><table><thead><tr>';
+      for (const c of tbl.columns as unknown[]) h += `<th>${reportEsc(String(c ?? ""))}</th>`;
+      h += "</tr></thead><tbody>";
+      const rows = Array.isArray(tbl.rows) ? (tbl.rows as unknown[]) : [];
+      for (const row of rows) {
+        h += "<tr>";
+        if (Array.isArray(row)) for (const cell of row as unknown[]) h += reportCell(String(cell ?? ""));
+        h += "</tr>";
+      }
+      h += "</tbody></table></div>";
+    }
+    const prov = sec.provenance as Record<string, unknown> | undefined;
+    if (prov) {
+      const sources = Array.isArray(prov.sources) ? (prov.sources as unknown[]).map(String) : [];
+      const targets = Array.isArray(prov.targets) ? (prov.targets as unknown[]).map(String)
+        : (typeof prov.target === "string" ? [prov.target] : []);
+      if (sources.length && targets.length) h += `<div class="provenance">${buildProvenanceSvg(sources, targets)}</div>`;
+    }
+  }
+  if (spec.footer) h += `<div class="foot">${reportEsc(String(spec.footer))}</div>`;
+  return h + "</article>";
+}
+// Turn the Rust sentinel payload into lexi-report HTML, resolving a data_file from /work/artifacts.
+function buildReportFromSpec(specJson: string, files: Map<string, PyDataFile>): string {
+  let spec: ReportSpec;
+  try { spec = JSON.parse(specJson) as ReportSpec; }
+  catch { return '<article class="lexi-report"><div class="note">Report data could not be parsed.</div></article>'; }
+  let sections: unknown = spec.sections;
+  if (typeof spec.data_file === "string") {
+    const name = spec.data_file.trim().replace(/^\/?(work\/)?artifacts\//, "");
+    const fdata = files.get(name);
+    if (fdata && !fdata.error) {
+      try {
+        const parsed = JSON.parse(fdata.text) as unknown;
+        if (Array.isArray(parsed)) sections = parsed;
+        else if (parsed && typeof parsed === "object") { spec = { ...spec, ...(parsed as ReportSpec) }; sections = (parsed as ReportSpec).sections; }
+      } catch { /* leave sections as-is */ }
+    }
+  }
+  if (typeof sections === "string") { try { sections = JSON.parse(sections); } catch { /* leave */ } }
+  return renderReport(spec, Array.isArray(sections) ? sections : []);
 }
 
 function fmtDuration(ms: number): string {
@@ -2371,6 +2468,10 @@ export default function App() {
         // Resolve {{figure:N}} tokens (charts/images generated this turn) and {{upload:N}} tokens
         // (images the user ATTACHED this turn — e.g. a logo) in a model artifact.
         let artifact = e.payload.artifact;
+        // create_report: the Rust dispatch passed the spec behind a sentinel — build the styled HTML.
+        if (artifact?.html && artifact.html.startsWith("LEXI_REPORT_JSON:")) {
+          artifact = { ...artifact, html: buildReportFromSpec(artifact.html.slice(17), turnDataFilesRef.current) };
+        }
         if (artifact?.html && artifact.html.includes("{{figure:")) {
           const figs = collectTurnFigures(prev);
           artifact = { ...artifact, html: substituteFigures(artifact.html, figs, false).out };
