@@ -4,11 +4,11 @@ import { listen } from "@tauri-apps/api/event";
 import ReactMarkdown, { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ARTIFACT_REPORT_CSS } from "./artifactAssets";
-import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft, BarChart3, Brain, Pencil, RefreshCw } from "lucide-react";
+import { Settings, RotateCcw, Bug, Paperclip, Info, Clock, PanelLeft, BarChart3, Brain, Pencil, RefreshCw, Library, X } from "lucide-react";
 import { JobsPanel } from "./JobsPanel";
 import type { JobRun } from "./jobTypes";
 import lexiLogo from "./assets/lexi.png";
-import { AdminPanel, AppSettings, Profile, ServerConfig, StoredOpenAPISpec, StoredSparqlEndpoint, reconcileCatalog } from "./AdminPanel";
+import { AdminPanel, AppSettings, Profile, PromptPreset, ServerConfig, StoredOpenAPISpec, StoredSparqlEndpoint, reconcileCatalog } from "./AdminPanel";
 import { runPython, warmPyodide, drainCodeToolCalls, abortPyodideRun, PyFile, PyDataFile } from "./pyodide/runner";
 import { dedupeRegistry } from "./profileIO";
 import { ChatParamsButton, ChatParams, DEFAULT_CHAT_PARAMS, resolveParams } from "./ChatParamsPanel";
@@ -2096,6 +2096,78 @@ export default function App() {
   const activeProfile: Profile | null =
     settings.profiles.find(p => p.id === settings.activeProfileId) ?? null;
 
+  // --- Prompt library (per-profile reusable prompts, shown in the composer's Prompts menu) ---
+  const [promptMenuOpen, setPromptMenuOpen] = useState(false);
+  const profilePrompts = activeProfile?.prompts ?? [];
+
+  const updateActiveProfilePrompts = (fn: (prompts: PromptPreset[]) => PromptPreset[]) => {
+    setSettings(prev => {
+      const apid = prev.activeProfileId;
+      const updated = {
+        ...prev,
+        profiles: prev.profiles.map(p =>
+          p.id === apid ? { ...p, prompts: fn(p.prompts ?? []) } : p),
+      };
+      saveSettings(updated);
+      return updated;
+    });
+  };
+
+  // Insert a preset into the composer and select its first {{variable}} so the user can type over it.
+  const insertPrompt = (body: string) => {
+    setInput(body);
+    setPromptMenuOpen(false);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      const m = body.match(/\{\{[^}]*\}\}/);
+      if (m && m.index != null) ta.setSelectionRange(m.index, m.index + m[0].length);
+      else ta.setSelectionRange(body.length, body.length);
+    });
+  };
+
+  const saveCurrentAsPrompt = () => {
+    const body = input.trim();
+    if (!body) return;
+    const suggested = body.split("\n")[0].slice(0, 40);
+    const name = window.prompt("Save this prompt as:", suggested);
+    if (!name || !name.trim()) return;
+    updateActiveProfilePrompts(ps => [...ps, { id: uid(), name: name.trim(), body: input }]);
+    setPromptMenuOpen(false);
+  };
+
+  const deletePrompt = (id: string) => updateActiveProfilePrompts(ps => ps.filter(p => p.id !== id));
+
+  const exportPrompts = async () => {
+    if (profilePrompts.length === 0) return;
+    const safe = (activeProfile?.name ?? "profile").replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "profile";
+    try {
+      const path = await save({ title: "Export prompts", defaultPath: `${safe}-prompts.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!path) return;
+      await invoke("write_file_text", { path, content: JSON.stringify(profilePrompts, null, 2) });
+    } catch { /* cancelled */ }
+    setPromptMenuOpen(false);
+  };
+
+  const importPrompts = async () => {
+    try {
+      const path = await open({ multiple: false, title: "Import prompts",
+        filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!path || typeof path !== "string") return;
+      const text = await invoke<string>("read_file_text", { path });
+      const parsed = JSON.parse(text);
+      const arr: any[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.prompts) ? parsed.prompts : []);
+      const incoming: PromptPreset[] = arr
+        .filter(x => x && typeof x.name === "string" && typeof x.body === "string")
+        .map(x => ({ id: uid(), name: String(x.name), body: String(x.body) }));
+      if (incoming.length === 0) { window.alert("No prompts found in that file."); return; }
+      updateActiveProfilePrompts(ps => [...ps, ...incoming]);
+      setPromptMenuOpen(false);
+    } catch (e) { window.alert("Could not import prompts: " + e); }
+  };
+
   // Flat list of every (server, model) the dropdown can offer, in server order.
   const modelOptions = (settings.servers ?? []).flatMap(s =>
     (s.models ?? []).map(m => ({ serverId: s.id, serverName: s.name, model: m })));
@@ -3466,6 +3538,56 @@ export default function App() {
             <button className="attach-btn" onClick={handleAttach} disabled={isRunning} title="Attach file">
               <Paperclip size={14} />
             </button>
+            <div className="prompt-menu-wrap">
+              <button
+                className="attach-btn"
+                onClick={() => setPromptMenuOpen(o => !o)}
+                title="Prompts"
+                aria-label="Prompts"
+              >
+                <Library size={14} />
+              </button>
+              {promptMenuOpen && (
+                <>
+                  <div className="prompt-menu-backdrop" onClick={() => setPromptMenuOpen(false)} />
+                  <div className="prompt-menu" role="menu">
+                    <div className="prompt-menu-head">
+                      <span>Prompts</span>
+                      <span className="prompt-menu-profile">{activeProfile?.name ?? "No profile"}</span>
+                    </div>
+                    <div className="prompt-menu-list">
+                      {profilePrompts.length === 0 ? (
+                        <div className="prompt-menu-empty">
+                          No saved prompts yet. Type a message, then “Save current input”.
+                        </div>
+                      ) : profilePrompts.map(pr => (
+                        <div key={pr.id} className="prompt-menu-item">
+                          <button
+                            className="prompt-menu-item-name"
+                            title={pr.body}
+                            onClick={() => insertPrompt(pr.body)}
+                          >
+                            {pr.name}
+                          </button>
+                          <button
+                            className="prompt-menu-item-del"
+                            title="Delete prompt"
+                            onClick={() => deletePrompt(pr.id)}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="prompt-menu-actions">
+                      <button onClick={saveCurrentAsPrompt} disabled={!input.trim()}>Save current input</button>
+                      <button onClick={importPrompts}>Import…</button>
+                      <button onClick={exportPrompts} disabled={profilePrompts.length === 0}>Export…</button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <ChatParamsButton params={chatParams} onChange={setChatParams} disabled={isRunning} />
             <select
               className="model-select"

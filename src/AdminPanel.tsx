@@ -88,6 +88,12 @@ export interface ToolRegistry {
   sparqlEndpoints: StoredSparqlEndpoint[];
 }
 
+export interface PromptPreset {
+  id: string;
+  name: string;
+  body: string; // may contain {{variables}} the composer jumps to on insert
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -125,6 +131,8 @@ export interface Profile {
   // re-reads the state it claims to have changed and confirms or corrects the claim. Off by default;
   // guards against declaring success while having failed (or having done only part of a list).
   verifyBeforeDone?: boolean;
+  // Reusable prompt/template presets for this profile, shown in the composer's Prompts menu.
+  prompts?: PromptPreset[];
 }
 
 export type ProviderKind = "ollama" | "openai" | "anthropic";
@@ -955,6 +963,15 @@ function ProfilesTab({ settings, onChange }: { settings: AppSettings; onChange: 
                 onClick={() => setDraft({ ...d, systemPrompt: DEFAULT_SYSTEM_PROMPT })}>
                 Reset to default
               </button>
+            </div>
+
+            <div className="field" style={{ marginBottom: 12 }}>
+              <label>Saved Prompts</label>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                {(d.prompts?.length ?? 0) === 0
+                  ? "No saved prompts. Add reusable prompts from the Prompts menu (library icon) next to the message box."
+                  : `${d.prompts!.length} saved prompt${d.prompts!.length === 1 ? "" : "s"}. Manage them from the Prompts menu next to the message box; they travel with this profile on export.`}
+              </div>
             </div>
 
             <div className="field" style={{ marginBottom: 12 }}>
