@@ -519,6 +519,7 @@ const BUILTIN_TOOLS = [
   { name: "fetch_webpage",       label: "Fetch Web Page",       icon: "🔗" },
   { name: "compose_email",       label: "Compose Email",        icon: "✉️" },
   { name: "create_artifact",     label: "Rich HTML Page",       icon: "🖼️" },
+  { name: "create_report",       label: "Styled Report",        icon: "📄" },
   { name: "get_current_datetime", label: "Get Date / Time",      icon: "🕐" },
   { name: "run_python",          label: "Run Python (Code Sandbox)", icon: "🐍" },
   { name: "generate_image",      label: "Generate Images (offline)", icon: "🎨" },
