@@ -3186,11 +3186,21 @@ export default function App() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
   };
 
+  // Grow the composer to fit its content, capped at ~45% of the viewport, then scroll.
+  const fitComposer = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = "auto";
+    const cap = Math.max(160, Math.round(window.innerHeight * 0.45));
+    el.style.height = Math.min(el.scrollHeight, cap) + "px";
+  };
+
   const handleChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value);
-    e.target.style.height = "auto";
-    e.target.style.height = Math.min(e.target.scrollHeight, 160) + "px";
   };
+
+  // Refit on ANY input change — typed, cleared after send, or inserted from a
+  // prompt preset (a programmatic setInput fires no onChange, so this covers it).
+  useEffect(() => { fitComposer(textareaRef.current); }, [input]);
 
   const [debugClearKey, setDebugClearKey] = useState(0);
 
