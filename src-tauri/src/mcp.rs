@@ -523,6 +523,23 @@ impl MCPConnection {
     }
 
     /// Text-only tool call — unchanged behaviour for the plain agent path.
+    /// Re-run the initialize handshake after a streamable-HTTP session expired (idle-timeout →
+    /// 404). Clears the dead session id first so the server issues a fresh one. No-op for stdio,
+    /// which has no session concept and dies as a whole process instead.
+    async fn reinitialize(&mut self) -> Result<(), String> {
+        match &mut self.transport {
+            Transport::Http { session_id, .. } => { *session_id = None; }
+            _ => return Ok(()),
+        }
+        self.send_request("initialize", serde_json::json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "lexichat", "version": env!("CARGO_PKG_VERSION") }
+        })).await.map_err(|e| format!("re-initialize failed: {e}"))?;
+        self.send_notification("notifications/initialized", serde_json::json!({})).await?;
+        Ok(())
+    }
+
     pub async fn call_tool(&mut self, tool_name: &str, args: &Value) -> String {
         self.call_tool_rich(tool_name, args).await.text
     }
@@ -545,10 +562,20 @@ impl MCPConnection {
             args.clone()
         };
 
-        let result = self.send_request("tools/call", serde_json::json!({
-            "name": raw,
-            "arguments": coerced
-        })).await;
+        let params = serde_json::json!({ "name": raw, "arguments": coerced });
+        let mut result = self.send_request("tools/call", params.clone()).await;
+
+        // Streamable-HTTP sessions idle-time-out mid-run: FastMCP terminates an idle session and
+        // the next POST reuses a now-dead Mcp-Session-Id, which the server answers with HTTP 404.
+        // On a long run that leaves this server idle between calls that shows up as a spurious tool
+        // failure. Re-run the initialize handshake for a fresh session and retry the call once.
+        if matches!(&result, Err(e) if is_session_expired(e))
+            && matches!(self.transport, Transport::Http { .. })
+        {
+            if self.reinitialize().await.is_ok() {
+                result = self.send_request("tools/call", params).await;
+            }
+        }
 
         let resp = match result {
             Ok(r) => r,
@@ -642,6 +669,14 @@ fn extract_ui(resp: &Value, tool_ui_uri: &Option<String>) -> (Option<String>, Op
 // ── HTTP JSON-RPC helper ──────────────────────────────────────────────────────
 
 /// Returns the response value, any refreshed OAuth token, and any session id the server issued.
+/// A streamable-HTTP server answers a POST carrying an `Mcp-Session-Id` it no longer knows with
+/// HTTP 404 — the session was idle-timed-out and terminated. Distinct from a 404 on the URL
+/// itself, which fails the initial connect rather than a mid-run tool call, so keying on the
+/// error string here is safe: this path is only reached after a successful connect.
+fn is_session_expired(err: &str) -> bool {
+    err.contains("HTTP 404")
+}
+
 async fn http_rpc(
     client: &reqwest::Client,
     url: &str,
@@ -1294,6 +1329,61 @@ mod tests {
         assert_eq!(seen.first().cloned().flatten(), None, "initialize carries no session yet");
         assert!(seen.iter().skip(1).all(|s| s.as_deref() == Some("sess-abc")),
                 "every request after initialize must carry the session: {seen:?}");
+    }
+
+    /// A streamable-HTTP session can idle-time-out mid-run; the server then answers the next tool
+    /// call carrying the dead session id with HTTP 404. call_tool must re-run the initialize
+    /// handshake (fresh session) and retry the call once, transparently.
+    #[tokio::test]
+    async fn http_tool_call_reinitializes_after_session_expiry_404() {
+        use std::sync::{Arc, Mutex};
+        let inits = Arc::new(Mutex::new(0u32));
+        let inits2 = inits.clone();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(move |req: &wiremock::Request| {
+                let sid = req.headers.get("mcp-session-id")
+                    .and_then(|v| v.to_str().ok()).map(str::to_string);
+                let body: serde_json::Value =
+                    serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+                let method = body.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                match method {
+                    "initialize" => {
+                        let mut n = inits2.lock().unwrap();
+                        *n += 1;
+                        let sess = if *n == 1 { "sess-1" } else { "sess-2" };
+                        wiremock::ResponseTemplate::new(200)
+                            .insert_header("mcp-session-id", sess)
+                            .set_body_json(serde_json::json!({"jsonrpc":"2.0","id":1,"result":{
+                                "protocolVersion":"2024-11-05","capabilities":{},
+                                "serverInfo":{"name":"s","version":"1"}}}))
+                    }
+                    "tools/list" => wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "jsonrpc":"2.0","id":2,"result":{"tools":[
+                            {"name":"do_thing","description":"d","inputSchema":{"type":"object"}}]}})),
+                    "tools/call" => {
+                        // The first (stale) session is dead → 404, exactly like an idle-timeout.
+                        if sid.as_deref() == Some("sess-1") {
+                            wiremock::ResponseTemplate::new(404).set_body_string("Not Found")
+                        } else {
+                            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                                "jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ok"}]}}))
+                        }
+                    }
+                    _ => wiremock::ResponseTemplate::new(202), // notifications/initialized
+                }
+            })
+            .mount(&server).await;
+
+        let config = MCPServerConfig {
+            id: "s".into(), name: "S".into(), command: format!("{}/mcp", server.uri()),
+            args: vec![], env: HashMap::new(), enabled: true,
+            auth: AuthConfig::None, enable_apps: false,
+        };
+        let mut conn = MCPConnection::connect(config).await.expect("connect");
+        let out = conn.call_tool("do_thing", &serde_json::json!({})).await;
+        assert_eq!(out, "ok", "tool call should succeed after a transparent session re-init; got: {out}");
+        assert_eq!(*inits.lock().unwrap(), 2, "should have re-initialized exactly once after the 404");
     }
 
     /// Connects to a real Streamable HTTP server on localhost. Ignored by default (CI has no such
