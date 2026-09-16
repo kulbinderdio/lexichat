@@ -889,8 +889,40 @@ function buildReportFromSpec(specJson: string, files: Map<string, PyDataFile>): 
       } catch { /* leave sections as-is */ }
     }
   }
-  if (typeof sections === "string") { try { sections = JSON.parse(sections); } catch { /* leave */ } }
-  return renderReport(spec, Array.isArray(sections) ? sections : []);
+  return renderReport(spec, coerceSectionArray(sections));
+}
+
+// Turn a `sections` value into an array of section objects, tolerating the ways local models mangle
+// it: passed as a real array (ideal), as a stringified JSON array, or as a stringified array with a
+// syntax error somewhere inside (common — an unescaped quote or a stray brace in one section). In
+// the last case we salvage: scan for balanced top-level {...} objects and parse each on its own, so
+// one malformed section costs only itself instead of blanking the whole report body.
+function coerceSectionArray(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw !== "string") return [];
+  const str = raw.trim();
+  try { const p = JSON.parse(str); if (Array.isArray(p)) return p; if (p && typeof p === "object") return [p]; } catch { /* salvage below */ }
+  const out: unknown[] = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") { if (depth === 0) start = i; depth++; }
+    else if (c === "}") {
+      if (depth > 0) depth--;
+      if (depth === 0 && start >= 0) {
+        try { out.push(JSON.parse(str.slice(start, i + 1))); } catch { /* skip this one malformed section */ }
+        start = -1;
+      }
+    }
+  }
+  return out;
 }
 
 function fmtDuration(ms: number): string {
