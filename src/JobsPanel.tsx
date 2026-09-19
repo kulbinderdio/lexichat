@@ -133,7 +133,7 @@ function resolveProfileContext(
     allowed_dirs,
     openapi_specs: registrySpecs
       .filter(s => s.enabled !== false && selectedSpecIds.includes(s.id))
-      .map(s => ({ id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth })),
+      .map(s => ({ id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth, response_exclude: s.response_exclude })),
     mcp_servers: registryMcp
       .filter(s => selectedMcpIds.includes(s.id))
       .map(s => ({ id: s.id, name: s.name, command: s.command, args: s.args ?? [], env: s.env ?? {}, auth: s.auth })),
@@ -900,7 +900,7 @@ function JobForm({ job: initial, models, profiles, globalOpenapiSpecs, globalMcp
         ollama_host: globalAllowedDirs.length > 0 ? "" : "",  // uses AppState host at run time
         allowed_dirs: globalAllowedDirs,
         openapi_specs: effectiveOpenAPI.filter(s => selSpecIds.includes(s.id)).map(s => ({
-          id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth,
+          id: s.id, title: s.title, base_url: s.base_url, spec_json: s.spec_json, auth: s.auth, response_exclude: s.response_exclude,
         })),
         mcp_servers: effectiveMcp.filter(s => selMcpIds.includes(s.id)).map(s => ({
           id: s.id, name: s.name, command: s.command, args: s.args ?? [], env: s.env ?? {}, auth: s.auth,

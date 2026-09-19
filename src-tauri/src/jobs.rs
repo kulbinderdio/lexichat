@@ -86,6 +86,8 @@ pub struct JobOpenAPISpec {
     pub spec_json: String,
     #[serde(default)]
     pub auth: crate::mcp::AuthConfig,
+    #[serde(default)]
+    pub response_exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -504,6 +506,7 @@ pub async fn execute_job(
                     base_url: sp.base_url.clone(),
                     auth:     sp.auth.clone(),
                     tools,
+                    response_exclude: sp.response_exclude.clone(),
                 });
             }
         }

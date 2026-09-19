@@ -70,6 +70,8 @@ All tool names must be `[a-z0-9_]`, no leading/trailing underscores, max 64 char
 2. `openapi::parse_spec()` iterates `paths`, generates one tool per HTTP operation with prefixed/sanitized name and JSON schema from parameters + request body. **`base_url` is applied to every operation** (`execute` does `format!("{base}{path}")`); per-operation `servers` in the spec are ignored — so one spec = one host.
 3. `AppState.openapi_specs` holds `RegisteredSpec { id, title, base_url, auth, tools }` — but only the **active profile's enabled subset**, (re)pushed by `syncServers()` → `set_openapi_specs()` on each profile switch.
 4. At execution, `openapi::execute()` substitutes path params, appends query params, applies auth, returns JSON
+5. Before sending, args are coerced then checked against the tool schema (`mcp::validate_args_against_schema`, also used for MCP calls); a violation returns an `Error: invalid arguments …` result and no request is made. Fails open on uncompilable schemas and nulls
+6. A spec's optional `response_exclude` list (Admin → OpenAPI → "Drop response fields") is applied to every JSON response by `openapi::drop_response_fields` before it reaches the model or an offload file: bare key = any depth, dotted path = that path only (arrays stepped through)
 
 ### MCP server connection
 1. User enters name + command (shell path) or HTTP URL + env vars + auth → `invoke("add_mcp_server")`

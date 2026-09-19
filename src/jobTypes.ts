@@ -14,6 +14,7 @@ export interface JobOpenAPISpec {
   base_url: string;
   spec_json: string;
   auth?: import("./AdminPanel").AuthConfig;
+  response_exclude?: string[];
 }
 
 export interface JobMCPServer {

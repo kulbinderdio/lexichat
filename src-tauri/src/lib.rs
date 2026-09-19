@@ -1675,6 +1675,8 @@ pub struct RegisterSpecArgs {
     pub spec_json: String,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub response_exclude: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -1719,6 +1721,7 @@ async fn register_openapi_spec(
         base_url: args.base_url,
         auth: args.auth,
         tools,
+        response_exclude: args.response_exclude,
     };
     state.openapi_specs.lock().unwrap().push(spec);
     Ok(info)
@@ -2140,6 +2143,8 @@ pub struct SyncOpenAPIInput {
     pub spec_json: String,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub response_exclude: Vec<String>,
 }
 
 #[tauri::command]
@@ -2162,7 +2167,7 @@ async fn set_openapi_specs(
                 });
                 registered.push(openapi::RegisteredSpec {
                     id: input.id, title: input.title, base_url: input.base_url,
-                    auth: input.auth, tools,
+                    auth: input.auth, tools, response_exclude: input.response_exclude,
                 });
             }
             Err(_) => {} // skip malformed specs silently

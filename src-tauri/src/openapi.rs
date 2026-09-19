@@ -12,6 +12,9 @@ pub struct RegisteredSpec {
     #[serde(default)]
     pub auth: AuthConfig,
     pub tools: Vec<APITool>,
+    /// Response fields to drop before a result reaches the model (see `drop_response_fields`).
+    #[serde(default)]
+    pub response_exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,7 +363,7 @@ pub async fn execute<R: tauri::Runtime>(
         req = req.header("Content-Type", "application/json");
     }
 
-    let result = send_and_format(req).await;
+    let result = send_and_format(req, &spec.response_exclude).await;
 
     // On 401, try refreshing the OAuth2 token and retry once
     if result.starts_with("HTTP 401") {
@@ -388,20 +391,21 @@ pub async fn execute<R: tauri::Runtime>(
             } else if ["POST", "PUT", "PATCH"].contains(&tool.method.as_str()) {
                 retry_req = retry_req.header("Content-Type", "application/json");
             }
-            return send_and_format(retry_req).await;
+            return send_and_format(retry_req, &spec.response_exclude).await;
         }
     }
 
     result
 }
 
-async fn send_and_format(req: reqwest::RequestBuilder) -> String {
+async fn send_and_format(req: reqwest::RequestBuilder, exclude: &[String]) -> String {
     match req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             match resp.text().await {
                 Ok(body) => {
-                    if let Ok(json) = serde_json::from_str::<Value>(&body) {
+                    if let Ok(mut json) = serde_json::from_str::<Value>(&body) {
+                        drop_response_fields(&mut json, exclude);
                         format!("HTTP {status}\n{}", serde_json::to_string_pretty(&json).unwrap_or(body))
                     } else {
                         format!("HTTP {status}\n{body}")
@@ -418,6 +422,47 @@ async fn send_and_format(req: reqwest::RequestBuilder) -> String {
                 src = cause.source();
             }
             msg
+        }
+    }
+}
+
+/// Remove fields the user marked as noise for this spec from a JSON response, so they don't
+/// spend the model's context (or the tool-result limit) — e.g. HAL `_links`, per-item audit
+/// metadata, embedded thumbnails. Each rule is either:
+///   - a bare key (`_links`) — removed wherever it appears, at any depth;
+///   - a dotted path from the root (`data.meta.raw`) — removed only there. Arrays along the
+///     way are stepped through, so `results.geometry` drops `geometry` from every result.
+/// Rules that match nothing are ignored.
+pub fn drop_response_fields(json: &mut Value, rules: &[String]) {
+    fn drop_everywhere(v: &mut Value, key: &str) {
+        match v {
+            Value::Object(map) => {
+                map.remove(key);
+                for child in map.values_mut() { drop_everywhere(child, key); }
+            }
+            Value::Array(arr) => for el in arr { drop_everywhere(el, key); },
+            _ => {}
+        }
+    }
+    fn drop_at(v: &mut Value, path: &[&str]) {
+        match v {
+            Value::Array(arr) => for el in arr { drop_at(el, path); },
+            Value::Object(map) => match path {
+                [last] => { map.remove(*last); }
+                [head, rest @ ..] => if let Some(child) = map.get_mut(*head) { drop_at(child, rest); },
+                [] => {}
+            },
+            _ => {}
+        }
+    }
+    for rule in rules {
+        let rule = rule.trim();
+        if rule.is_empty() { continue; }
+        if rule.contains('.') {
+            let path: Vec<&str> = rule.split('.').filter(|p| !p.is_empty()).collect();
+            drop_at(json, &path);
+        } else {
+            drop_everywhere(json, rule);
         }
     }
 }
@@ -842,7 +887,7 @@ mod tests {
         }).to_string();
         let tools = parse_spec("Test", base_url, &spec_json).unwrap();
         RegisteredSpec { id: "id".into(), title: "Test".into(), base_url: base_url.into(),
-                         auth: crate::mcp::AuthConfig::None, tools }
+                         auth: crate::mcp::AuthConfig::None, tools, response_exclude: vec![] }
     }
 
     #[tokio::test]
@@ -883,7 +928,7 @@ mod tests {
         }).to_string();
         let tools = parse_spec("T", &server.uri(), &spec_json).unwrap();
         let spec = RegisteredSpec { id: "id".into(), title: "T".into(), base_url: server.uri(),
-                                    auth: crate::mcp::AuthConfig::None, tools };
+                                    auth: crate::mcp::AuthConfig::None, tools, response_exclude: vec![] };
         // Model wrongly stringified the array.
         let out = execute::<tauri::Wry>(&spec, &spec.tools[0],
             &serde_json::json!({ "ids": "[1,2,3]" }), None).await;
@@ -927,7 +972,7 @@ mod tests {
         }).to_string();
         let tools = parse_spec("Shop", &server.uri(), &spec_json).unwrap();
         let spec = RegisteredSpec { id: "id".into(), title: "Shop".into(), base_url: server.uri(),
-                                    auth: crate::mcp::AuthConfig::None, tools };
+                                    auth: crate::mcp::AuthConfig::None, tools, response_exclude: vec![] };
         // Missing required path param + an enum value the API doesn't accept.
         let out = execute::<tauri::Wry>(&spec, &spec.tools[0],
             &serde_json::json!({ "view": "detailed" }), None).await;
@@ -952,8 +997,47 @@ mod tests {
         }).to_string();
         let tools = parse_spec("Shop", &server.uri(), &spec_json).unwrap();
         let spec = RegisteredSpec { id: "id".into(), title: "Shop".into(), base_url: server.uri(),
-                                    auth: crate::mcp::AuthConfig::None, tools };
+                                    auth: crate::mcp::AuthConfig::None, tools, response_exclude: vec![] };
         let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "id": 42 }), None).await;
         assert!(out.contains("HTTP 200"), "a numeric id must still go through: {out}");
+    }
+
+    // ── drop_response_fields ──────────────────────────────────────────────────
+
+    #[test]
+    fn bare_key_rule_drops_field_at_any_depth() {
+        let mut v = serde_json::json!({ "_links": {}, "items": [{ "id": 1, "_links": {} }, { "id": 2, "sub": { "_links": 1 } }] });
+        drop_response_fields(&mut v, &["_links".into()]);
+        assert_eq!(v, serde_json::json!({ "items": [{ "id": 1 }, { "id": 2, "sub": {} }] }));
+    }
+
+    #[test]
+    fn dotted_rule_drops_only_at_that_path_stepping_through_arrays() {
+        let mut v = serde_json::json!({
+            "results": [{ "name": "a", "geometry": [1, 2] }, { "name": "b", "geometry": [3, 4] }],
+            "geometry": "top-level kept"
+        });
+        drop_response_fields(&mut v, &["results.geometry".into()]);
+        assert_eq!(v, serde_json::json!({ "results": [{ "name": "a" }, { "name": "b" }], "geometry": "top-level kept" }));
+        // A root-level array is stepped through too.
+        let mut arr = serde_json::json!([{ "meta": { "raw": 1, "keep": 2 } }]);
+        drop_response_fields(&mut arr, &[" meta.raw ".into(), "".into(), "no.such.path".into()]);
+        assert_eq!(arr, serde_json::json!([{ "meta": { "keep": 2 } }]));
+    }
+
+    #[tokio::test]
+    async fn execute_drops_configured_response_fields() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "hits": [{ "title": "x", "thumbnail": "data:image/png;base64,AAAA", "_links": { "self": "/1" } }]
+            })))
+            .mount(&server).await;
+        let mut spec = get_spec(&server.uri());
+        spec.response_exclude = vec!["_links".into(), "hits.thumbnail".into()];
+        let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "q": "x" }), None).await;
+        assert!(out.contains("HTTP 200") && out.contains("\"title\""), "got: {out}");
+        assert!(!out.contains("thumbnail") && !out.contains("_links"), "fields should be dropped: {out}");
     }
 }

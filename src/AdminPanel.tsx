@@ -48,6 +48,9 @@ export interface StoredOpenAPISpec {
   // User-defined grouping label for the OpenAPI tab (free-text, like skill categories). Blank =
   // Uncategorised. Organizational metadata only — the backend/tool routing ignores it.
   category?: string;
+  // Response fields dropped before a result reaches the model: a bare key (`_links`) at any depth,
+  // or a dotted path (`results.geometry`, arrays stepped through). See openapi::drop_response_fields.
+  response_exclude?: string[];
 }
 
 // IDs of built-in specs that ship with the app (user can disable but not delete)
@@ -1825,6 +1828,7 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
   const [specJson, setSpecJson] = useState("");
   const [auth, setAuth] = useState<AuthConfig>(DEFAULT_AUTH);
   const [category, setCategory] = useState("");
+  const [excludeText, setExcludeText] = useState(""); // comma-separated response_exclude rules
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -1839,7 +1843,7 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
   }, []);
 
   const resetForm = () => {
-    setTitle(""); setBaseUrl(""); setSpecJson(""); setAuth(DEFAULT_AUTH); setCategory(""); setError("");
+    setTitle(""); setBaseUrl(""); setSpecJson(""); setAuth(DEFAULT_AUTH); setCategory(""); setExcludeText(""); setError("");
     setEditingId(null); setShowAdd(false);
   };
 
@@ -1868,9 +1872,12 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
     setSpecJson(storedSpec.spec_json);
     setAuth(storedSpec.auth ?? DEFAULT_AUTH);
     setCategory(storedSpec.category ?? "");
+    setExcludeText((storedSpec.response_exclude ?? []).join(", "));
     setError("");
     setShowAdd(false);
   };
+
+  const excludeRules = () => excludeText.split(",").map(r => r.trim()).filter(Boolean);
 
   const add = async () => {
     if (!title.trim() || !baseUrl.trim() || !specJson.trim()) return;
@@ -1878,9 +1885,9 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
     setError("");
     try {
       const info = await invoke<SpecInfo>("register_openapi_spec", {
-        args: { title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth }
+        args: { title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth, response_exclude: excludeRules() }
       });
-      const entry: StoredOpenAPISpec = { id: info.id, title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth, category: category.trim() || undefined };
+      const entry: StoredOpenAPISpec = { id: info.id, title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth, category: category.trim() || undefined, response_exclude: excludeRules().length ? excludeRules() : undefined };
       setSpecs(prev => [...prev, info]);
       onChange([...stored, entry]);
       resetForm();
@@ -1898,9 +1905,9 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
       // Remove old, register new with same stored JSON but updated metadata
       await invoke("remove_openapi_spec", { id: editingId });
       const info = await invoke<SpecInfo>("register_openapi_spec", {
-        args: { title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth }
+        args: { title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth, response_exclude: excludeRules() }
       });
-      const entry: StoredOpenAPISpec = { id: info.id, title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth, category: category.trim() || undefined };
+      const entry: StoredOpenAPISpec = { id: info.id, title: title.trim(), base_url: baseUrl.trim(), spec_json: specJson.trim(), auth, category: category.trim() || undefined, response_exclude: excludeRules().length ? excludeRules() : undefined };
       setSpecs(prev => prev.filter(s => s.id !== editingId).concat(info));
       onChange(stored.filter(s => s.id !== editingId).concat(entry));
       resetForm();
@@ -2043,6 +2050,10 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
                   <input className="admin-input" list="openapi-category-list" value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Finance, Weather, Internal" />
                   <datalist id="openapi-category-list">{categories.map(c => <option key={c} value={c} />)}</datalist>
                 </div>
+                <div className="field">
+                  <label>Drop response fields <span style={{ fontWeight: 400, color: "var(--text-tertiary)" }}>(optional, comma-separated — removed before the model sees a result; a name like <code>_links</code> matches at any depth, a path like <code>results.geometry</code> only there)</span></label>
+                  <input className="admin-input" value={excludeText} onChange={e => setExcludeText(e.target.value)} placeholder="e.g. _links, results.geometry, meta.raw" />
+                </div>
                 <AuthConfigForm auth={auth} onChange={setAuth} />
                 {error && <div style={{ color: "#f87171", fontSize: 12 }}>{error}</div>}
                 <div style={{ display: "flex", gap: 8 }}>
@@ -2099,6 +2110,10 @@ function OpenAPITab({ stored, onChange }: { stored: StoredOpenAPISpec[]; onChang
                 <label>Category <span style={{ fontWeight: 400, color: "var(--text-tertiary)" }}>(optional — type a new name to create one, or pick an existing)</span></label>
                 <input className="admin-input" list="openapi-category-list" value={category} onChange={e => setCategory(e.target.value)} placeholder="e.g. Finance, Weather, Internal" />
                 <datalist id="openapi-category-list">{categories.map(c => <option key={c} value={c} />)}</datalist>
+              </div>
+              <div className="field">
+                <label>Drop response fields <span style={{ fontWeight: 400, color: "var(--text-tertiary)" }}>(optional, comma-separated — removed before the model sees a result; a name like <code>_links</code> matches at any depth, a path like <code>results.geometry</code> only there)</span></label>
+                <input className="admin-input" value={excludeText} onChange={e => setExcludeText(e.target.value)} placeholder="e.g. _links, results.geometry, meta.raw" />
               </div>
               <AuthConfigForm auth={auth} onChange={setAuth} />
               {error && <div style={{ color: "#f87171", fontSize: 12 }}>{error}</div>}
