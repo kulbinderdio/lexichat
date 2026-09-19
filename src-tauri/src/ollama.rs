@@ -1674,6 +1674,11 @@ pub async fn agent_loop<R: tauri::Runtime>(
     // re-issues the identical script (re-rendering the same chart and doubling the wall time)
     // even after being told the charts are already shown; we short-circuit the repeat.
     let mut ran_python_code: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    // Per-run cache of successful remote reads (OpenAPI GET, SPARQL query), keyed by tool + args.
+    // Local models often re-issue an identical lookup a few steps later; serve it from here instead
+    // of re-hitting the API (latency, rate limits). Cleared by any OpenAPI write, so a read after
+    // a write is always fresh. Scoped to this run only — the next turn fetches again.
+    let mut read_cache: HashMap<String, String> = HashMap::new();
     // Whether run_python has executed yet this turn — drives the one-time /work workspace reset so
     // files persist across calls within a turn (but not across turns).
     let mut python_started = false;
@@ -2340,7 +2345,21 @@ pub async fn agent_loop<R: tauri::Runtime>(
             let python_reset = name == "run_python" && !python_started;
             if name == "run_python" { python_started = true; }
             // Route: builtin → openapi → sparql → mcp
-            let result = dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &dispatch_paths, web_search_results, silent, python_reset, allow_code_exec, app).await;
+            let effect = cache_effect(name, &openapi_specs, &sparql_endpoints);
+            let cache_key = (effect == CacheEffect::Read).then(|| read_cache_key(name, args));
+            let cached = cache_key.as_ref().and_then(|k| read_cache.get(k)).cloned();
+            let cache_hit = cached.is_some();
+            let result = match cached {
+                Some(r) => r,
+                None => dispatch_tool(name, args, &openapi_specs, &sparql_endpoints, mcp_connections, &allowed_dirs, &dispatch_paths, web_search_results, silent, python_reset, allow_code_exec, app).await,
+            };
+            match (&effect, cache_key) {
+                (CacheEffect::Write, _) => read_cache.clear(),
+                (CacheEffect::Read, Some(k)) if !cache_hit && result.starts_with("HTTP 2") => {
+                    read_cache.insert(k, result.clone());
+                }
+                _ => {}
+            }
 
             // Stop pressed during the tool call (e.g. a long-running run_python) — bail before
             // rendering its result, which could otherwise land in a now-different chat. The
@@ -2373,6 +2392,10 @@ pub async fn agent_loop<R: tauri::Runtime>(
             };
             // Only send full_result when it actually adds detail over the (truncated) model result.
             let full_result = if full_result == result { String::new() } else { full_result };
+            // Appended after capping/offload so an offloaded file stays the raw JSON body.
+            let result = if cache_hit {
+                format!("{result}\n[Identical call already made this turn — this is that result, reused, not re-fetched. Use it; don't call again with the same arguments.]")
+            } else { result };
 
             // An MCP-App UI payload, inline images, and/or a model-authored artifact may have been
             // stashed by dispatch_tool.
@@ -2503,6 +2526,44 @@ fn tool_call_signature(calls: &[WireToolCall]) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for p in &parts { p.hash(&mut h); }
     h.finish()
+}
+
+/// How a tool call relates to the per-run read cache (see `agent_loop`).
+#[derive(Debug, PartialEq)]
+enum CacheEffect {
+    /// Side-effect-free remote read (OpenAPI GET, SPARQL query): result may be reused this run.
+    Read,
+    /// Remote write (OpenAPI POST/PUT/PATCH/DELETE): may change what earlier reads returned.
+    Write,
+    /// Anything else (built-ins, MCP, SPARQL schema): never cached, doesn't invalidate.
+    None,
+}
+
+fn cache_effect(name: &str, openapi_specs: &[RegisteredSpec], sparql_endpoints: &[RegisteredSparqlEndpoint]) -> CacheEffect {
+    if let Some(tool) = openapi_specs.iter().flat_map(|s| s.tools.iter()).find(|t| t.name == name) {
+        return if tool.method == "GET" { CacheEffect::Read } else { CacheEffect::Write };
+    }
+    let is_sparql_query = sparql_endpoints.iter()
+        .flat_map(|ep| ep.tools.iter())
+        .any(|t| t.name == name && t.parameters.iter().any(|p| p.name == "query"));
+    if is_sparql_query { CacheEffect::Read } else { CacheEffect::None }
+}
+
+/// Cache key for a read call: tool name + args with object keys sorted, so the same call with
+/// its arguments in a different order still hits (serde_json preserves insertion order here).
+fn read_cache_key(name: &str, args: &serde_json::Value) -> String {
+    fn canonical(v: &serde_json::Value) -> serde_json::Value {
+        match v {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                serde_json::Value::Object(keys.into_iter().map(|k| (k.clone(), canonical(&map[k]))).collect())
+            }
+            serde_json::Value::Array(a) => serde_json::Value::Array(a.iter().map(canonical).collect()),
+            other => other.clone(),
+        }
+    }
+    format!("{name}::{}", canonical(args))
 }
 
 /// Returns true if `s` is NOT already valid base64url — i.e. the model forgot
@@ -3810,6 +3871,112 @@ mod tests {
         let second = &bodies.lock().unwrap()[1];
         assert!(second.contains("\"role\":\"tool\""), "history sent in OpenAI tool shape: {second}");
         assert!(second.contains("call_xyz"), "tool_call_id preserved: {second}");
+    }
+
+    // ── Per-run read cache ────────────────────────────────────────────────────
+
+    #[test]
+    fn read_cache_key_ignores_argument_order() {
+        let a = serde_json::json!({ "id": "1", "opts": { "x": 1, "y": [ { "b": 2, "a": 1 } ] } });
+        let b = serde_json::json!({ "opts": { "y": [ { "a": 1, "b": 2 } ], "x": 1 }, "id": "1" });
+        assert_eq!(read_cache_key("t", &a), read_cache_key("t", &b));
+        assert_ne!(read_cache_key("t", &a), read_cache_key("u", &a));
+        assert_ne!(read_cache_key("t", &a), read_cache_key("t", &serde_json::json!({ "id": "2" })));
+    }
+
+    /// Drive the real agent loop through a scripted sequence of tool calls against a mock "Shop"
+    /// API (GET /items/{id}, PUT /items/{id}) and return the tool results the model saw. The
+    /// mock API verifies on drop that it received exactly `expect_gets` GETs and `expect_puts` PUTs.
+    async fn run_shop_script(calls: Vec<(&'static str, &'static str)>, expect_gets: u64, expect_puts: u64) -> Vec<String> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        struct Script { n: Arc<AtomicUsize>, calls: Vec<(&'static str, &'static str)> }
+        impl Respond for Script {
+            fn respond(&self, _req: &Request) -> ResponseTemplate {
+                let sse = match self.calls.get(self.n.fetch_add(1, Ordering::SeqCst)) {
+                    Some((name, args)) => {
+                        let args = serde_json::to_string(args).unwrap(); // JSON-string-encode
+                        format!("data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"id\":\"c\",\"type\":\"function\",\"function\":{{\"name\":\"{name}\",\"arguments\":{args}}}}}]}}}}]}}\ndata: [DONE]\n")
+                    }
+                    None => "data: {\"choices\":[{\"delta\":{\"content\":\"Done.\"}}]}\ndata: [DONE]\n".into(),
+                };
+                ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+            }
+        }
+
+        let llm = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/chat/completions"))
+            .respond_with(Script { n: Arc::new(AtomicUsize::new(0)), calls })
+            .mount(&llm).await;
+        let api = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/items/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "name": "old" })))
+            .expect(expect_gets).mount(&api).await;
+        Mock::given(method("PUT")).and(path("/items/1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .expect(expect_puts).mount(&api).await;
+
+        let spec_json = serde_json::json!({ "paths": { "/items/{id}": {
+            "get": { "operationId": "get_item", "parameters": [
+                { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+                { "name": "view", "in": "query", "schema": { "type": "string" } } ] },
+            "put": { "operationId": "update_item", "parameters": [
+                { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+                "requestBody": { "content": { "application/json": { "schema": {
+                    "type": "object", "properties": { "name": { "type": "string" } } } } } } }
+        }}}).to_string();
+        let tools = crate::openapi::parse_spec("Shop", &api.uri(), &spec_json).unwrap();
+        let schemas: Vec<ToolSchema> = tools.iter()
+            .map(|t| serde_json::from_value(t.schema.clone()).unwrap()).collect();
+        let spec = RegisteredSpec { id: "s".into(), title: "Shop".into(), base_url: api.uri(),
+            auth: crate::mcp::AuthConfig::None, tools, response_exclude: vec![] };
+
+        let backend = Backend { kind: ProviderKind::OpenAI, base_url: llm.uri(), api_key: None };
+        let app = tauri::test::mock_app();
+        let conversation = Mutex::new(vec![WireMessage {
+            role: "user".into(), content: Some("look at item 1".into()),
+            tool_calls: None, tool_call_id: None, name: None, images: None,
+        }]);
+        let mcp: tokio::sync::Mutex<HashMap<String, MCPConnection>> = tokio::sync::Mutex::new(HashMap::new());
+
+        let result = agent_loop(
+            &backend, "gpt-4o-mini", "You are helpful.", &schemas, &[], 0, None, None,
+            &conversation, vec![spec], vec![], &mcp, vec![], vec![], 10, 0,
+            app.handle(), true, false, false, 20, 0,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            false, vec![],
+        ).await;
+        assert!(result.is_ok(), "run should complete: {result:?}");
+        let convo = conversation.lock().unwrap();
+        convo.iter().filter(|m| m.role == "tool").filter_map(|m| m.content.clone()).collect()
+    }
+
+    /// A repeated identical GET in one run is served from the cache (the API sees one GET), and
+    /// the model is told the result was reused.
+    #[tokio::test]
+    async fn agent_loop_serves_repeat_get_from_cache() {
+        let results = run_shop_script(vec![
+            ("shop_get_item", r#"{"id":"1","view":"full"}"#),
+            ("shop_get_item", r#"{"id":"1","view":"full"}"#),
+        ], 1, 0).await;
+        assert_eq!(results.len(), 2, "{results:?}");
+        assert!(!results[0].contains("reused"), "first GET is a real fetch");
+        assert!(results[1].contains("\"old\"") && results[1].contains("reused"), "repeat served from cache: {}", results[1]);
+    }
+
+    /// A write (PUT) clears the cache, so the same GET afterwards is fetched again.
+    #[tokio::test]
+    async fn agent_loop_write_invalidates_read_cache() {
+        let results = run_shop_script(vec![
+            ("shop_get_item", r#"{"id":"1","view":"full"}"#),
+            ("shop_update_item", r#"{"id":"1","name":"new"}"#),
+            ("shop_get_item", r#"{"id":"1","view":"full"}"#),
+        ], 2, 1).await;
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert!(!results[2].contains("reused"), "GET after a write must be fresh: {}", results[2]);
     }
 
     // ── Duplicate artifacts ───────────────────────────────────────────────────
