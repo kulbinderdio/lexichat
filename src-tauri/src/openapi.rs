@@ -300,10 +300,17 @@ pub async fn execute<R: tauri::Runtime>(
 ) -> String {
     // Repair arguments a model wrongly stringified (an object/array passed as a JSON string,
     // or a number/bool as a string) — same fix as for MCP tools — before building the request.
-    let coerced = tool.schema.get("function").and_then(|f| f.get("parameters"))
-        .filter(|s| s.is_object())
-        .map(|schema| crate::mcp::coerce_args_to_schema(args, schema));
+    let param_schema = tool.schema.get("function").and_then(|f| f.get("parameters"))
+        .filter(|s| s.is_object());
+    let coerced = param_schema.map(|schema| crate::mcp::coerce_args_to_schema(args, schema));
     let args = coerced.as_ref().unwrap_or(args);
+    // Reject bad arguments locally (wrong enum/type, missing required field) with an error the
+    // model can act on, rather than sending a request the API will 400 on.
+    if let Some(schema) = param_schema {
+        if let Err(msg) = crate::mcp::validate_args_against_schema(&tool.name, args, schema) {
+            return msg;
+        }
+    }
 
     let client = reqwest::Client::builder()
         .use_rustls_tls()
@@ -897,5 +904,56 @@ mod tests {
         spec.auth = crate::mcp::AuthConfig::Bearer { bearer_token: "tok-123".into() };
         let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "q": "x" }), None).await;
         assert!(out.contains("HTTP 200"), "auth header not accepted: {out}");
+    }
+
+    #[tokio::test]
+    async fn execute_rejects_invalid_args_without_sending() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        let server = MockServer::start().await;
+        // Any request reaching the server fails the test (expect(0) is checked on drop).
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(400))
+            .expect(0)
+            .mount(&server).await;
+
+        let spec_json = serde_json::json!({
+            "paths": { "/orders/{id}": { "get": {
+                "operationId": "get_order",
+                "parameters": [
+                    { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+                    { "name": "view", "in": "query", "schema": { "type": "string", "enum": ["summary", "full"] } }
+                ]
+            }}}
+        }).to_string();
+        let tools = parse_spec("Shop", &server.uri(), &spec_json).unwrap();
+        let spec = RegisteredSpec { id: "id".into(), title: "Shop".into(), base_url: server.uri(),
+                                    auth: crate::mcp::AuthConfig::None, tools };
+        // Missing required path param + an enum value the API doesn't accept.
+        let out = execute::<tauri::Wry>(&spec, &spec.tools[0],
+            &serde_json::json!({ "view": "detailed" }), None).await;
+        assert!(out.starts_with("Error: invalid arguments"), "got: {out}");
+        assert!(out.contains("\"id\"") && out.contains("`view`"), "got: {out}");
+    }
+
+    #[tokio::test]
+    async fn execute_accepts_numeric_id_for_string_path_param() {
+        use wiremock::{MockServer, Mock, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/orders/42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true })))
+            .mount(&server).await;
+
+        let spec_json = serde_json::json!({
+            "paths": { "/orders/{id}": { "get": {
+                "operationId": "get_order",
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }]
+            }}}
+        }).to_string();
+        let tools = parse_spec("Shop", &server.uri(), &spec_json).unwrap();
+        let spec = RegisteredSpec { id: "id".into(), title: "Shop".into(), base_url: server.uri(),
+                                    auth: crate::mcp::AuthConfig::None, tools };
+        let out = execute::<tauri::Wry>(&spec, &spec.tools[0], &serde_json::json!({ "id": 42 }), None).await;
+        assert!(out.contains("HTTP 200"), "a numeric id must still go through: {out}");
     }
 }

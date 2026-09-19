@@ -561,6 +561,14 @@ impl MCPConnection {
         } else {
             args.clone()
         };
+        if input_schema.is_object() {
+            if let Err(msg) = validate_args_against_schema(tool_name, &coerced, &input_schema) {
+                return ToolCallResult {
+                    text: msg, structured: None, content: Value::Null, meta: Value::Null,
+                    is_error: true, ui_html: None, ui_uri: None,
+                };
+            }
+        }
 
         let params = serde_json::json!({ "name": raw, "arguments": coerced });
         let mut result = self.send_request("tools/call", params.clone()).await;
@@ -849,6 +857,15 @@ pub fn coerce_args_to_schema(args: &Value, schema: &Value) -> Value {
             }
             return v.clone();
         }
+        // The reverse slip: a number/bool where only a string is allowed (e.g. an id passed as
+        // 123). Stringify it — for path/query params it ends up as text in the URL anyway, and
+        // it keeps pre-flight validation from rejecting a call that would have worked.
+        if matches!(v, Value::Number(_) | Value::Bool(_)) {
+            let types = expected_types(prop);
+            if types.len() == 1 && types[0] == "string" {
+                return Value::String(v.to_string());
+            }
+        }
         match v {
             Value::Object(map) => {
                 let props = &prop["properties"];
@@ -865,6 +882,41 @@ pub fn coerce_args_to_schema(args: &Value, schema: &Value) -> Value {
         }
     }
     coerce(args, schema)
+}
+
+/// Check (already-coerced) tool arguments against the tool's JSON Schema *before* the request
+/// is sent. On a violation, returns a message for the model that says the call was NOT made and
+/// lists each problem by argument path — so a local model can fix e.g. a wrong enum value or a
+/// missing required field on its next step, instead of getting an opaque upstream 400 (or a
+/// request with an unfilled `{id}` path segment).
+///
+/// Fails open: a schema the validator can't compile (unresolvable `$ref`, OpenAPI-3.0-only
+/// keywords that aren't valid JSON Schema, …) is skipped, and errors on a `null` value are
+/// ignored (OpenAPI 3.0 expresses nullability as `nullable: true`, which JSON Schema doesn't
+/// understand, and a null optional arg is omitted from the request anyway). `format` is not
+/// enforced — too many APIs use custom or loosely-followed formats.
+pub fn validate_args_against_schema(tool_name: &str, args: &Value, schema: &Value) -> Result<(), String> {
+    const MAX_LISTED: usize = 8;
+    let validator = match jsonschema::options().should_validate_formats(false).build(schema) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let problems: Vec<String> = validator.iter_errors(args)
+        .filter(|e| !e.instance().is_null())
+        .map(|e| {
+            let path = e.instance_path().to_string();
+            let at = if path.is_empty() { "(arguments)".to_string() } else { format!("`{}`", path.trim_start_matches('/').replace('/', ".")) };
+            format!("- {at}: {e}")
+        })
+        .collect();
+    if problems.is_empty() { return Ok(()); }
+    let more = problems.len().saturating_sub(MAX_LISTED);
+    let mut msg = format!(
+        "Error: invalid arguments for `{tool_name}` — the request was NOT sent. Fix these and call it again:\n{}",
+        problems.into_iter().take(MAX_LISTED).collect::<Vec<_>>().join("\n")
+    );
+    if more > 0 { msg.push_str(&format!("\n- …and {more} more")); }
+    Err(msg)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1426,5 +1478,71 @@ mod tests {
         assert!(!is_url("node /path/to/server.js"), "a shell command must select stdio");
         assert!(matches!(config.auth, AuthConfig::Bearer { .. }),
                 "credentials for an HTTP server belong in auth, not env or args");
+    }
+
+    // ── validate_args_against_schema ──────────────────────────────────────────
+
+    fn order_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "status": { "type": "string", "enum": ["open", "closed"] },
+                "limit":  { "type": "integer" },
+                "items":  { "type": "array", "items": { "type": "object",
+                            "properties": { "qty": { "type": "integer" } }, "required": ["qty"] } },
+                "note":   { "type": "string" }
+            },
+            "required": ["status"]
+        })
+    }
+
+    #[test]
+    fn valid_args_pass_validation() {
+        let args = serde_json::json!({ "status": "open", "limit": 5, "items": [{ "qty": 2 }] });
+        assert!(validate_args_against_schema("t", &args, &order_schema()).is_ok());
+    }
+
+    #[test]
+    fn invalid_args_list_each_problem_by_path() {
+        let args = serde_json::json!({ "status": "Open", "limit": 2.5, "items": [{}] });
+        let err = validate_args_against_schema("orders_list", &args, &order_schema()).unwrap_err();
+        assert!(err.starts_with("Error: invalid arguments for `orders_list`"), "{err}");
+        assert!(err.contains("NOT sent"), "{err}");
+        assert!(err.contains("`status`") && err.contains("\"closed\""), "enum error should name the allowed values: {err}");
+        assert!(err.contains("`limit`"), "{err}");
+        assert!(err.contains("`items.0`") && err.contains("qty"), "nested required error should point into the array: {err}");
+    }
+
+    #[test]
+    fn missing_required_arg_is_reported() {
+        let err = validate_args_against_schema("t", &serde_json::json!({}), &order_schema()).unwrap_err();
+        assert!(err.contains("(arguments)") && err.contains("status"), "{err}");
+    }
+
+    #[test]
+    fn null_values_and_uncompilable_schemas_fail_open() {
+        // OpenAPI 3.0 `nullable` isn't JSON Schema — a null must not be rejected.
+        let args = serde_json::json!({ "status": "open", "note": null });
+        assert!(validate_args_against_schema("t", &args, &order_schema()).is_ok());
+        // An unresolvable $ref can't be compiled: skip validation rather than block the call.
+        let bad = serde_json::json!({ "type": "object", "properties": { "x": { "$ref": "#/nope" } } });
+        assert!(validate_args_against_schema("t", &serde_json::json!({ "x": 1 }), &bad).is_ok());
+    }
+
+    #[test]
+    fn format_is_not_enforced() {
+        let schema = serde_json::json!({ "type": "object", "properties": { "d": { "type": "string", "format": "date" } } });
+        assert!(validate_args_against_schema("t", &serde_json::json!({ "d": "last tuesday" }), &schema).is_ok());
+    }
+
+    #[test]
+    fn coerce_stringifies_number_for_string_only_field() {
+        let schema = serde_json::json!({ "type": "object", "properties": {
+            "id": { "type": "string" }, "flag": { "type": "string" }, "n": { "type": "integer" } } });
+        let fixed = coerce_args_to_schema(&serde_json::json!({ "id": 123, "flag": true, "n": 4 }), &schema);
+        assert_eq!(fixed["id"], serde_json::json!("123"));
+        assert_eq!(fixed["flag"], serde_json::json!("true"));
+        assert_eq!(fixed["n"], serde_json::json!(4), "non-string fields are untouched");
+        assert!(validate_args_against_schema("t", &fixed, &schema).is_ok());
     }
 }
