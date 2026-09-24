@@ -1709,3 +1709,11 @@ html, body, #root { height: 100%; overflow: hidden; }
 .prompt-menu-save button:hover:not(:disabled) { color: var(--text); background: var(--surface3); }
 .prompt-menu-save button:disabled { opacity: 0.35; cursor: default; }
 .prompt-menu-save-ok { color: var(--text) !important; border-color: var(--accent) !important; }
+
+/* Live sampling progress on a running image-generation tool row. */
+.tool-badge-progress {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

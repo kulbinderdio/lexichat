@@ -24,7 +24,10 @@ import "./App.css";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface ToolCall { name: string; args: string; startedAt?: number; durationMs?: number; }
+interface ToolCall { name: string; args: string; startedAt?: number; durationMs?: number;
+  // Sampling progress for generate_image — a component model runs for minutes, so the row shows
+  // "step 7/20 · ~3m left" instead of a silent spinner.
+  progress?: { step: number; total: number; etaSecs: number }; }
 
 // MCP Apps (SEP-1865) UI payload attached to a tool result (see Rust ToolUiPayload).
 interface ToolUi {
@@ -976,6 +979,12 @@ function ToolCallBadge({ tc }: { tc: ToolCall }) {
             title={open ? "Hide parameters" : "Show parameters"}>
             params {open ? "▲" : "▼"}
           </button>
+        )}
+        {tc.progress && tc.durationMs == null && (
+          <span className="tool-badge-progress">
+            step {tc.progress.step}/{tc.progress.total}
+            {tc.progress.etaSecs > 0 && ` · ~${fmtDuration(tc.progress.etaSecs * 1000)} left`}
+          </span>
         )}
         <ToolTimer startedAt={tc.startedAt} durationMs={tc.durationMs} />
       </div>
@@ -2527,6 +2536,24 @@ export default function App() {
         }
         return [...prev, { id: uid(), role: "assistant", text: "", streaming: true, status: e.payload.phase }];
       });
+    }).then(u => cleanup.push(u));
+
+    listen<{ step: number; total: number; eta_secs: number }>("image-progress", e => {
+      if (!streamActive()) return;
+      const prog = { step: e.payload.step, total: e.payload.total, etaSecs: e.payload.eta_secs };
+      setMessages(prev => prev.map(m => {
+        if (!m.toolCalls?.length) return m;
+        // Stamp the most recent still-running image call (dispatch is sequential).
+        let idx = -1;
+        for (let i = m.toolCalls.length - 1; i >= 0; i--) {
+          const tc = m.toolCalls[i];
+          if (tc.name === "generate_image" && tc.startedAt != null && tc.durationMs == null) { idx = i; break; }
+        }
+        if (idx < 0) return m;
+        const tcs = [...m.toolCalls];
+        tcs[idx] = { ...tcs[idx], progress: prog };
+        return { ...m, toolCalls: tcs };
+      }));
     }).then(u => cleanup.push(u));
 
     listen<{ name: string; args: string }>("agent-tool-call", e => {

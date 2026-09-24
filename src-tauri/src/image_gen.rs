@@ -410,6 +410,137 @@ fn generate_timeout(cfg: &ImageGenConfig) -> u64 {
     if component { COMPONENT_TIMEOUT_SECS } else { GENERATE_TIMEOUT_SECS }
 }
 
+/// Run the engine, forwarding sampling progress as it arrives, and return
+/// `(exit status, stderr, stdout)`. Progress is redrawn in place on stdout with `\r`, so this
+/// reads raw bytes rather than lines — a line reader sees nothing until the process exits.
+async fn stream_run(
+    mut cmd: tokio::process::Command,
+    limit_secs: u64,
+    bin: &Path,
+    on_progress: &mut impl FnMut(ImageProgress),
+) -> Result<(std::process::ExitStatus, String, String), String> {
+    use tokio::io::AsyncReadExt;
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("Failed to launch image generator ({}): {e}", bin.display()))?;
+    let mut stdout = child.stdout.take().ok_or("Could not read the image generator's output.")?;
+    let mut stderr = child.stderr.take().ok_or("Could not read the image generator's errors.")?;
+    // Drained concurrently: a full stderr pipe would otherwise block the engine mid-run.
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf).await;
+        buf
+    });
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(limit_secs);
+    let timeout_msg = || format!("Image generation timed out after {limit_secs}s — try fewer steps or a \
+        smaller size, or raise the timeout in Settings → Images → Advanced.");
+
+    let mut all = String::new();
+    let mut pending = String::new();
+    let mut last_step = 0u32;
+    let mut buf = [0u8; 4096];
+    loop {
+        match tokio::time::timeout_at(deadline, stdout.read(&mut buf)).await {
+            Err(_) => { let _ = child.kill().await; return Err(timeout_msg()); }
+            Ok(Err(e)) => { let _ = child.kill().await; return Err(format!("Image generator output error: {e}")); }
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => {
+                let text = String::from_utf8_lossy(&buf[..n]).into_owned();
+                all.push_str(&text);
+                pending.push_str(&text);
+                // The engine writes the carriage return BEFORE each bar, so splitting on
+                // separators lags a step behind and loses updates. Scan for complete
+                // `N/M - X.XXs/it` matches instead, and report each new step as it appears.
+                let mut consumed = 0usize;
+                for (idx, tick) in progress_ticks(&pending) {
+                    if tick.step > last_step {
+                        last_step = tick.step;
+                        on_progress(tick);
+                    }
+                    consumed = idx;
+                }
+                if consumed > 0 { pending.drain(..consumed); }
+                // Don't let a stream without progress output grow without bound.
+                if pending.len() > 64 * 1024 { pending.clear(); }
+            }
+        }
+    }
+
+    let status = match tokio::time::timeout_at(deadline, child.wait()).await {
+        Err(_) => { let _ = child.kill().await; return Err(timeout_msg()); }
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(format!("Image generator failed: {e}")),
+    };
+    let stderr_text = String::from_utf8_lossy(&stderr_task.await.unwrap_or_default()).into_owned();
+    Ok((status, stderr_text, all))
+}
+
+/// One sampling-progress tick parsed from the engine's output.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct ImageProgress {
+    pub step: u32,
+    pub total: u32,
+    pub secs_per_step: f32,
+}
+
+impl ImageProgress {
+    /// Rough seconds remaining, for a "~2m left" hint. VAE decode is not included (a few seconds).
+    pub fn eta_secs(&self) -> f32 {
+        self.total.saturating_sub(self.step) as f32 * self.secs_per_step
+    }
+}
+
+/// Find every complete progress update in `text`, as `(end_offset, tick)` pairs. The end offset
+/// lets the caller drop text it has already reported.
+fn progress_ticks(text: &str) -> Vec<(usize, ImageProgress)> {
+    let mut out = Vec::new();
+    // Each update ends with the rate marker; walk those and parse backwards from each.
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("s/it") {
+        let end = from + rel + "s/it".len();
+        // The segment since the previous update is enough context for parse_progress.
+        let start = text[..end].rfind(['\r', '\n']).map(|i| i + 1).unwrap_or(0);
+        if let Some(p) = parse_progress(&text[start..end]) {
+            out.push((end, p));
+        }
+        from = end;
+    }
+    out
+}
+
+/// Parse one progress update, e.g. `  |=====>    | 7/20 - 16.43s/it`.
+///
+/// stable-diffusion.cpp writes these to STDOUT, redrawing in place with `\r` and an ANSI erase
+/// (`ESC[K`) rather than emitting lines — so the caller splits on `\r` and this strips escapes.
+fn parse_progress(chunk: &str) -> Option<ImageProgress> {
+    // Drop ANSI escape sequences (ESC [ ... final-letter) before matching.
+    let mut clean = String::with_capacity(chunk.len());
+    let mut chars = chunk.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c2 in chars.by_ref() { if c2.is_ascii_alphabetic() { break; } }
+            }
+            continue;
+        }
+        clean.push(c);
+    }
+    // Take the part after the last '|' so the bar itself can't be misread as numbers.
+    let tail = clean.rsplit('|').next()?.trim();
+    let (counts, rate) = tail.split_once(" - ")?;
+    let (step, total) = counts.trim().split_once('/')?;
+    let secs = rate.trim().strip_suffix("s/it")?;
+    Some(ImageProgress {
+        step: step.trim().parse().ok()?,
+        total: total.trim().parse().ok()?,
+        secs_per_step: secs.trim().parse().ok()?,
+    })
+}
+
 /// Generate one image. Returns PNG bytes on success, or a human-readable error the model relays.
 /// `size` overrides the config default; 0 falls back to config → 512.
 /// Scale (w,h) so the long edge is at most `max_edge`, preserving aspect ratio, then round each
@@ -493,6 +624,24 @@ pub async fn generate(
     init_image: Option<&str>,
     strength: Option<f32>,
     mask_png: Option<&[u8]>,
+) -> Result<Vec<u8>, String> {
+    generate_with_progress(cfg, prompt, negative, size, steps, seed, init_image, strength, mask_png, |_| {}).await
+}
+
+/// As `generate`, but reports sampling progress as it happens. A component model can take several
+/// minutes, and with no feedback that is indistinguishable from a hang.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_with_progress(
+    cfg: &ImageGenConfig,
+    prompt: &str,
+    negative: Option<&str>,
+    size: u32,
+    steps: u32,
+    seed: Option<i64>,
+    init_image: Option<&str>,
+    strength: Option<f32>,
+    mask_png: Option<&[u8]>,
+    mut on_progress: impl FnMut(ImageProgress),
 ) -> Result<Vec<u8>, String> {
     let bin = resolve_binary(cfg).ok_or_else(|| SETUP_HELP.to_string())?;
     let model = resolve_model(cfg).ok_or_else(|| MODEL_HELP.to_string())?;
@@ -585,18 +734,13 @@ pub async fn generate(
     }
 
     cmd.kill_on_drop(true);
-
-    let run = cmd.output();
     let limit = generate_timeout(cfg);
-    let output = match tokio::time::timeout(std::time::Duration::from_secs(limit), run).await {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return Err(format!("Failed to launch image generator ({}): {e}", bin.display())),
-        Err(_) => return Err(format!("Image generation timed out after {limit}s — try fewer steps or a \
-            smaller size, or raise the timeout in Settings → Images → Advanced.")),
-    };
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let last = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("unknown error");
+    let (status, stderr_text, stdout_text) = stream_run(cmd, limit, &bin, &mut on_progress).await?;
+    if !status.success() {
+        // Engine errors go to stderr; fall back to stdout, which also carries the progress bar.
+        let last = stderr_text.lines().rev().find(|l| !l.trim().is_empty())
+            .or_else(|| stdout_text.lines().rev().find(|l| !l.trim().is_empty()))
+            .unwrap_or("unknown error");
         return Err(format!("Image generation failed: {last}"));
     }
 
@@ -726,6 +870,22 @@ mod tests {
     }
 
     #[test]
+    fn parses_progress_redraws_with_ansi_and_carriage_returns() {
+        // Exactly what the engine emits: CR, bar, counts, rate, ANSI erase.
+        let raw = "\r  |=========================>      | 7/20 - 16.43s/it\u{1b}[K";
+        let p = parse_progress(raw).expect("should parse");
+        assert_eq!((p.step, p.total), (7, 20));
+        assert!((p.secs_per_step - 16.43).abs() < 0.001, "{p:?}");
+        // 13 steps left at 16.43s ≈ 214s.
+        assert!((p.eta_secs() - 213.59).abs() < 0.5, "eta was {}", p.eta_secs());
+
+        // Non-progress output must not produce ticks.
+        assert!(parse_progress("[INFO ] image.cpp:892 - sampling completed, taking 137.04s").is_none());
+        assert!(parse_progress("").is_none());
+        assert!(parse_progress("  |#####  | 65/128 - 833.98MB/s").is_none(), "VAE decode is not sampling");
+    }
+
+    #[test]
     fn timeout_scales_for_component_models_and_honours_override() {
         let single = ImageGenConfig::default();
         assert_eq!(generate_timeout(&single), GENERATE_TIMEOUT_SECS);
@@ -804,15 +964,64 @@ mod tests {
             ..Default::default()
         };
         // Text rendering is this family's party trick, and an obvious way to see it worked.
-        let png = generate(&cfg, "a cafe chalkboard sign reading 'LexiChat', warm lighting, \
+        use std::sync::{Arc, Mutex};
+        let ticks: Arc<Mutex<Vec<ImageProgress>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = ticks.clone();
+        let png = generate_with_progress(&cfg, "a cafe chalkboard sign reading 'LexiChat', warm lighting, \
                             bright and well lit, detailed chalk lettering",
-                           None, 1024, 20, Some(42), None, None, None)
+                           None, 1024, 20, Some(42), None, None, None,
+                           move |p| {
+                               println!("  step {}/{} ({:.1}s/step, ~{:.0}s left)", p.step, p.total, p.secs_per_step, p.eta_secs());
+                               sink.lock().unwrap().push(p);
+                           })
             .await.expect("component model should generate");
+        let got = ticks.lock().unwrap().clone();
+        assert!(got.len() >= 5, "a 20-step run should report many ticks, got {}", got.len());
+        assert!(got.windows(2).all(|w| w[1].step > w[0].step), "steps must increase: {got:?}");
         let img = image::load_from_memory(&png).expect("valid png");
         assert!(img.width() >= 512 && img.height() >= 512, "got {}x{}", img.width(), img.height());
         let out = std::env::temp_dir().join("qwen-2.1-test.png");
         std::fs::write(&out, &png).unwrap();
         println!("wrote {} ({} KB)", out.display(), png.len() / 1024);
+    }
+
+    /// Proves progress actually STREAMS (arrives during the run, not at the end) against the real
+    /// engine. Uses the small single-file model so it is quick. Needs an installed engine+model:
+    ///   cargo test progress_streams_during_generation -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn progress_streams_during_generation() {
+        use std::sync::{Arc, Mutex};
+        let models = models_dir().expect("models dir");
+        let cfg = ImageGenConfig {
+            model_path: models.join("sdxl_turbo.safetensors").to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let started = std::time::Instant::now();
+        // Record (elapsed_ms, tick) so we can prove they were not all delivered at the end.
+        let ticks: Arc<Mutex<Vec<(u128, ImageProgress)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = ticks.clone();
+        let png = generate_with_progress(&cfg, "a red apple on a table", None, 512, 4, Some(7),
+                                         None, None, None,
+                                         move |p| sink.lock().unwrap().push((started.elapsed().as_millis(), p)))
+            .await.expect("generation should succeed");
+        assert!(!png.is_empty());
+
+        // NOTE: how MANY ticks appear is the engine's business — a 4-step turbo run emits just
+        // one bar, while a 20-step component run emits ~20. What matters here is that a tick is
+        // delivered mid-run rather than all at the end, which is what "streaming" means.
+        let got = ticks.lock().unwrap().clone();
+        assert!(!got.is_empty(), "expected at least one progress tick");
+        let total_ms = started.elapsed().as_millis();
+        let first_ms = got.first().unwrap().0;
+        assert!(first_ms + 500 < total_ms,
+                "first tick at {first_ms}ms should arrive well before completion at {total_ms}ms");
+        for (_, p) in &got {
+            assert_eq!(p.total, 4, "total steps should be reported: {p:?}");
+            assert!(p.step >= 1 && p.step <= p.total, "step out of range: {p:?}");
+        }
+        println!("{} ticks; first at {}ms of {}ms total", got.len(), first_ms, total_ms);
+        for (ms, p) in &got { println!("  {ms:>6}ms  step {}/{} ({:.2}s/step, eta {:.0}s)", p.step, p.total, p.secs_per_step, p.eta_secs()); }
     }
 
     // Real end-to-end: fetch + extract the engine from GitHub and confirm the binary runs. Hits the

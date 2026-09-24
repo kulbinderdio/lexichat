@@ -839,7 +839,13 @@ async fn stream_chat<R: tauri::Runtime>(
 }
 
 /// How many times to re-sample a step whose tool call Ollama couldn't parse.
-const MALFORMED_TOOL_CALL_RETRIES: usize = 2;
+///
+/// Measured against a real profile (39 tools: built-ins + 23 OpenAPI operations), `qwen3.6` emits
+/// an unparseable XML-dialect tool call in ~38% of samples — the same request succeeds or fails by
+/// luck, and only with a large tool list; other local models (qwen3.8, glm-4.7-flash, gemma4) never
+/// failed it. At that rate 2 retries still lose ~5% of turns, while 4 leave ~1%. Retries cost
+/// nothing on the models that don't have the fault, because they only run after a parse error.
+const MALFORMED_TOOL_CALL_RETRIES: usize = 4;
 
 /// Default cap on a tool result's size before it's fed back to the model (protects the
 /// context). Overridable per profile — raise it for data-heavy APIs that return large JSON.
@@ -2690,7 +2696,18 @@ async fn dispatch_tool<R: tauri::Runtime>(
         let cfg = app.try_state::<crate::AppState>()
             .map(|s| s.image_gen_config.lock().unwrap().clone())
             .unwrap_or_default();
-        return match crate::image_gen::generate(&cfg, &prompt, negative, size, steps, seed, source_real.as_deref(), strength, mask_png.as_deref()).await {
+        // Stream sampling progress to the UI: a component model can run for minutes, and silence
+        // is indistinguishable from a hang. Jobs (silent) have no UI to report to.
+        let progress_app = app.clone();
+        let emit_progress = move |p: crate::image_gen::ImageProgress| {
+            if !silent {
+                let _ = progress_app.emit("image-progress", serde_json::json!({
+                    "step": p.step, "total": p.total,
+                    "secs_per_step": p.secs_per_step, "eta_secs": p.eta_secs(),
+                }));
+            }
+        };
+        return match crate::image_gen::generate_with_progress(&cfg, &prompt, negative, size, steps, seed, source_real.as_deref(), strength, mask_png.as_deref(), emit_progress).await {
             Ok(png) => {
                 let mut file_note = String::new();
                 if !silent {
