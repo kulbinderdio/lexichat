@@ -26,8 +26,19 @@ pub struct ImageGenConfig {
     #[serde(default)] pub size: u32,
     /// CFG (classifier-free guidance) scale. Turbo models want ~1.0; classic ~7. 0 → 7.
     #[serde(default)] pub cfg_scale: f32,
-    /// Extra raw CLI args for advanced users (space-split), e.g. "--vae path --clip_l path".
+    /// Extra raw CLI args for advanced users (space-split), e.g. "--clip_l path --t5xxl path".
     #[serde(default)] pub extra_args: String,
+    /// Optional separate VAE (`--vae`). Needed by models shipped as components rather than one
+    /// checkpoint (Qwen-Image, FLUX, SD3): their VAE is a distinct file and is NOT interchangeable
+    /// between model families.
+    #[serde(default)] pub vae_path: String,
+    /// Optional separate text encoder (`--llm`) — e.g. Qwen2.5-VL for Qwen-Image.
+    #[serde(default)] pub text_encoder_path: String,
+    /// Optional vision projector (`--llm_vision`, an `mmproj-*` file), required only for
+    /// reference-image editing with a GGUF text encoder.
+    #[serde(default)] pub vision_path: String,
+    /// Hard limit on one generation, in seconds. 0 → automatic (see `generate_timeout`).
+    #[serde(default)] pub timeout_secs: u64,
 }
 
 fn image_gen_dir() -> Option<PathBuf> {
@@ -162,14 +173,48 @@ fn resolve_binary(cfg: &ImageGenConfig) -> Option<PathBuf> {
         return p.is_file().then_some(p);
     }
     if let Some(dir) = image_gen_dir() {
-        for name in ["sd", "sd.exe", "stable-diffusion", "stable-diffusion.exe"] {
+        for name in ["sd", "sd.exe", "sd-cli", "sd-cli.exe", "stable-diffusion", "stable-diffusion.exe"] {
             let p = dir.join(name);
             if p.is_file() {
                 return Some(p);
             }
         }
     }
-    find_on_path("sd").or_else(|| find_on_path("stable-diffusion"))
+    find_on_path("sd")
+        .or_else(|| find_on_path("sd-cli"))
+        .or_else(|| find_on_path("stable-diffusion"))
+}
+
+/// Filename fragments that mark a file as a *component* of a model rather than the diffusion
+/// model itself. Without this, auto-detection happily picks `Qwen_Image-VAE.safetensors` as the
+/// model (it sorts first) and every generation fails with a confusing tensor error.
+const COMPONENT_HINTS: [&str; 8] =
+    ["vae", "text_encoder", "mmproj", "clip_l", "clip_g", "t5xxl", "_vl_", "vl-"];
+
+fn looks_like_component(name: &str) -> bool {
+    let low = name.to_ascii_lowercase();
+    COMPONENT_HINTS.iter().any(|h| low.contains(h))
+}
+
+/// Build the model-selection arguments.
+///
+/// stable-diffusion.cpp distinguishes a *full checkpoint* (`-m`, everything in one file — SD1.5,
+/// SDXL) from a bare *diffusion model* (`--diffusion-model`) whose VAE and text encoder are
+/// supplied separately. Passing a component-style model with `-m` fails, so the presence of any
+/// component path decides which form we use.
+fn model_args(cfg: &ImageGenConfig, model: &Path) -> Vec<String> {
+    let vae = cfg.vae_path.trim();
+    let llm = cfg.text_encoder_path.trim();
+    let vision = cfg.vision_path.trim();
+    let multi = !vae.is_empty() || !llm.is_empty() || !vision.is_empty();
+
+    let mut args: Vec<String> = Vec::new();
+    args.push(if multi { "--diffusion-model".into() } else { "-m".into() });
+    args.push(model.to_string_lossy().into_owned());
+    if !vae.is_empty() { args.push("--vae".into()); args.push(vae.to_string()); }
+    if !llm.is_empty() { args.push("--llm".into()); args.push(llm.to_string()); }
+    if !vision.is_empty() { args.push("--llm_vision".into()); args.push(vision.to_string()); }
+    args
 }
 
 /// Resolve the model: explicit config → first model file in `<data>/…/image-gen/models/`.
@@ -190,13 +235,19 @@ fn resolve_model(cfg: &ImageGenConfig) -> Option<PathBuf> {
                 .map(|x| matches!(x.to_ascii_lowercase().as_str(), "gguf" | "safetensors" | "ckpt"))
                 .unwrap_or(false)
         })
+        // A models dir holding a multi-file set also contains its VAE and text encoder; those are
+        // never the diffusion model.
+        .filter(|p| !p.file_name().and_then(|n| n.to_str()).map(looks_like_component).unwrap_or(false))
         .collect();
     entries.sort();
     entries.into_iter().next()
 }
 
 /// Pinned stable-diffusion.cpp release the engine is fetched from on first use.
-const ENGINE_RELEASE_TAG: &str = "master-820-de298c2";
+// Bumped from master-820 for Qwen-Image / Qwen-Image-2.1 support (added upstream 2026-09-20).
+// Newer builds renamed the CLI `sd` -> `sd-cli`; extract_engine normalizes either to `sd`, so
+// existing installs keep working.
+const ENGINE_RELEASE_TAG: &str = "master-908-88411ef";
 const ENGINE_REPO: &str = "leejet/stable-diffusion.cpp";
 
 /// Whether an sd engine is installed in the app data dir (drives the Images-tab status).
@@ -341,7 +392,23 @@ const MODEL_HELP: &str = "No image model found. Put a diffusion model (.gguf or 
     Image Generation.";
 
 /// How long a single generation may run before it's killed (a stuck/huge job shouldn't hang a turn).
+/// Sized for single-file checkpoints (SD/SDXL-Turbo), which finish in seconds.
 const GENERATE_TIMEOUT_SECS: u64 = 300;
+
+/// Component models are far heavier: measured on an M-series Mac, Qwen-Image-2.1 Q4_K takes ~16.5s
+/// per step at 768px after loading ~9 GB of weights, so the recommended 20 steps at 1024px runs
+/// well past the single-file limit. Killing those at 300s made them look broken.
+const COMPONENT_TIMEOUT_SECS: u64 = 2700;
+
+/// Timeout for one generation: an explicit `timeout_secs` wins; otherwise component models
+/// (separate VAE/text encoder) get the long budget and everything else the short one.
+fn generate_timeout(cfg: &ImageGenConfig) -> u64 {
+    if cfg.timeout_secs > 0 { return cfg.timeout_secs; }
+    let component = !cfg.vae_path.trim().is_empty()
+        || !cfg.text_encoder_path.trim().is_empty()
+        || !cfg.vision_path.trim().is_empty();
+    if component { COMPONENT_TIMEOUT_SECS } else { GENERATE_TIMEOUT_SECS }
+}
 
 /// Generate one image. Returns PNG bytes on success, or a human-readable error the model relays.
 /// `size` overrides the config default; 0 falls back to config → 512.
@@ -468,8 +535,8 @@ pub async fn generate(
     };
 
     let mut cmd = tokio::process::Command::new(&bin);
-    cmd.arg("-m").arg(&model)
-        .arg("-p").arg(prompt)
+    cmd.args(model_args(cfg, &model));
+    cmd.arg("-p").arg(prompt)
         .arg("-o").arg(&out)
         .arg("-W").arg(out_w.to_string())
         .arg("-H").arg(out_h.to_string())
@@ -520,10 +587,12 @@ pub async fn generate(
     cmd.kill_on_drop(true);
 
     let run = cmd.output();
-    let output = match tokio::time::timeout(std::time::Duration::from_secs(GENERATE_TIMEOUT_SECS), run).await {
+    let limit = generate_timeout(cfg);
+    let output = match tokio::time::timeout(std::time::Duration::from_secs(limit), run).await {
         Ok(Ok(o)) => o,
         Ok(Err(e)) => return Err(format!("Failed to launch image generator ({}): {e}", bin.display())),
-        Err(_) => return Err(format!("Image generation timed out after {GENERATE_TIMEOUT_SECS}s — try fewer steps or a smaller size.")),
+        Err(_) => return Err(format!("Image generation timed out after {limit}s — try fewer steps or a \
+            smaller size, or raise the timeout in Settings → Images → Advanced.")),
     };
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -618,6 +687,59 @@ mod tests {
     }
 
     #[test]
+    fn single_file_model_uses_dash_m() {
+        let cfg = ImageGenConfig::default();
+        let args = model_args(&cfg, Path::new("/m/sdxl.safetensors"));
+        assert_eq!(args, vec!["-m".to_string(), "/m/sdxl.safetensors".to_string()]);
+    }
+
+    #[test]
+    fn component_paths_switch_to_diffusion_model_form() {
+        // Any one component is enough to make it a component-style model.
+        let cfg = ImageGenConfig {
+            vae_path: "/m/qwen_vae.safetensors".into(),
+            text_encoder_path: "/m/qwen2.5vl-Q4_K_M.gguf".into(),
+            ..Default::default()
+        };
+        let args = model_args(&cfg, Path::new("/m/qwen-Q4_K_M.gguf"));
+        assert_eq!(args[0], "--diffusion-model", "component sets must not use -m: {args:?}");
+        assert_eq!(args[1], "/m/qwen-Q4_K_M.gguf");
+        assert!(args.windows(2).any(|w| w[0] == "--vae" && w[1] == "/m/qwen_vae.safetensors"), "{args:?}");
+        assert!(args.windows(2).any(|w| w[0] == "--llm" && w[1] == "/m/qwen2.5vl-Q4_K_M.gguf"), "{args:?}");
+        assert!(!args.iter().any(|a| a == "--llm_vision"), "vision is opt-in: {args:?}");
+
+        // Vision projector only appears when set (editing with a GGUF text encoder).
+        let cfg2 = ImageGenConfig { vision_path: "/m/mmproj-F16.gguf".into(), ..Default::default() };
+        let args2 = model_args(&cfg2, Path::new("/m/qwen.gguf"));
+        assert!(args2.windows(2).any(|w| w[0] == "--llm_vision" && w[1] == "/m/mmproj-F16.gguf"), "{args2:?}");
+    }
+
+    #[test]
+    fn component_files_are_not_mistaken_for_the_model() {
+        for name in ["Qwen_Image-VAE.safetensors", "qwen_2.5_vl_7b.safetensors",
+                     "mmproj-Qwen3VL-8B-Instruct-F16.gguf", "clip_l.safetensors", "t5xxl_fp16.safetensors"] {
+            assert!(looks_like_component(name), "{name} should be treated as a component");
+        }
+        for name in ["sdxl_turbo.safetensors", "qwen_image_2.1-Q4_K.gguf", "sd15.safetensors"] {
+            assert!(!looks_like_component(name), "{name} is a diffusion model, not a component");
+        }
+    }
+
+    #[test]
+    fn timeout_scales_for_component_models_and_honours_override() {
+        let single = ImageGenConfig::default();
+        assert_eq!(generate_timeout(&single), GENERATE_TIMEOUT_SECS);
+        // One component path is enough: these models load GBs of weights before sampling.
+        let component = ImageGenConfig { text_encoder_path: "/m/llm.gguf".into(), ..Default::default() };
+        assert_eq!(generate_timeout(&component), COMPONENT_TIMEOUT_SECS);
+        // An explicit setting always wins, in both directions.
+        let pinned = ImageGenConfig { timeout_secs: 60, ..component.clone() };
+        assert_eq!(generate_timeout(&pinned), 60);
+        let raised = ImageGenConfig { timeout_secs: 5000, ..Default::default() };
+        assert_eq!(generate_timeout(&raised), 5000);
+    }
+
+    #[test]
     fn explicit_missing_model_is_none() {
         let cfg = ImageGenConfig { model_path: "/nope/model.gguf".into(), ..Default::default() };
         assert!(resolve_model(&cfg).is_none());
@@ -665,6 +787,32 @@ mod tests {
         ];
         let any = samples.iter().any(|s| engine_asset_priority(s).is_some());
         assert_eq!(any, engine_supported());
+    }
+
+    /// Real end-to-end for a COMPONENT model (diffusion model + separate VAE + text encoder):
+    /// proves the `--diffusion-model`/`--vae`/`--llm` wiring actually drives the engine. Needs the
+    /// Qwen-Image-2.1 set installed, so ignored by default. Run with:
+    ///   cargo test qwen_component_model_generates -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn qwen_component_model_generates() {
+        let models = models_dir().expect("models dir");
+        let cfg = ImageGenConfig {
+            model_path: models.join("qwen_image_2.1-Q4_K.gguf").to_string_lossy().into_owned(),
+            vae_path: models.join("qwen_image_2.1_vae_bf16.safetensors").to_string_lossy().into_owned(),
+            text_encoder_path: models.join("Qwen3VL-8B-Instruct-Q4_K_M.gguf").to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        // Text rendering is this family's party trick, and an obvious way to see it worked.
+        let png = generate(&cfg, "a cafe chalkboard sign reading 'LexiChat', warm lighting, \
+                            bright and well lit, detailed chalk lettering",
+                           None, 1024, 20, Some(42), None, None, None)
+            .await.expect("component model should generate");
+        let img = image::load_from_memory(&png).expect("valid png");
+        assert!(img.width() >= 512 && img.height() >= 512, "got {}x{}", img.width(), img.height());
+        let out = std::env::temp_dir().join("qwen-2.1-test.png");
+        std::fs::write(&out, &png).unwrap();
+        println!("wrote {} ({} KB)", out.display(), png.len() / 1024);
     }
 
     // Real end-to-end: fetch + extract the engine from GitHub and confirm the binary runs. Hits the

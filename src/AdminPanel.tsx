@@ -249,6 +249,12 @@ export interface ImageGenConfig {
   size?: number;
   cfg_scale?: number;
   extra_args?: string;
+  // Component models (Qwen-Image, FLUX, SD3) ship as separate files rather than one checkpoint.
+  // When any of these is set the backend switches from `-m` to `--diffusion-model`.
+  vae_path?: string;
+  text_encoder_path?: string;
+  vision_path?: string;
+  timeout_secs?: number;
 }
 
 // Curated, verified single-file models the user picks from (no URL hunting). Each carries its
@@ -256,6 +262,9 @@ export interface ImageGenConfig {
 interface ModelPreset {
   id: string; name: string; blurb: string; sizeMb: number;
   url: string; filename: string; steps: number; size: number; cfg: number; licence: string;
+  // Component models need a VAE and text encoder alongside the diffusion model. Each extra file
+  // is downloaded in turn and wired to the matching config path.
+  parts?: { role: "vae" | "text_encoder" | "vision"; url: string; filename: string; sizeMb: number }[];
 }
 const MODEL_PRESETS: ModelPreset[] = [
   { id: "sdxl-turbo", name: "SDXL-Turbo", blurb: "Fast (4 steps), good all-round quality at 1024px", sizeMb: 6938,
@@ -270,6 +279,20 @@ const MODEL_PRESETS: ModelPreset[] = [
   { id: "sdxl-base", name: "SDXL 1.0 (base)", blurb: "Best quality · slower (~30 steps)", sizeMb: 6938,
     url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
     filename: "sdxl_base.safetensors", steps: 30, size: 1024, cfg: 7, licence: "OpenRAIL++-M" },
+  // Component model: 20B diffusion model + its own VAE + a 7B text encoder, ~16.8 GB in total and
+  // wants a lot of RAM. Best-in-class text rendering (including non-Latin scripts). Apache-2.0,
+  // so unlike Qwen-Image-2.1 (Qwen Research Licence, non-commercial only) it carries no usage
+  // restriction — 2.1 can still be used by filling the Advanced paths in by hand.
+  { id: "qwen-image", name: "Qwen-Image (renders text well)", sizeMb: 12466,
+    blurb: "Accurate text in images · 3 files, ~16.8 GB total · needs 16 GB+ RAM",
+    url: "https://huggingface.co/QuantStack/Qwen-Image-GGUF/resolve/main/Qwen_Image-Q4_K_M.gguf",
+    filename: "Qwen_Image-Q4_K_M.gguf", steps: 20, size: 1024, cfg: 2.5, licence: "Apache-2.0",
+    parts: [
+      { role: "vae", filename: "Qwen_Image-VAE.safetensors", sizeMb: 246,
+        url: "https://huggingface.co/QuantStack/Qwen-Image-GGUF/resolve/main/VAE/Qwen_Image-VAE.safetensors" },
+      { role: "text_encoder", filename: "Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf", sizeMb: 4465,
+        url: "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct.Q4_K_M.gguf" },
+    ] },
 ];
 
 // Dedicated Images tab: a friendly model picker up front; the technical knobs live under Advanced.
@@ -315,13 +338,31 @@ function ImageGenTab({ settings, onChange }: { settings: AppSettings; onChange: 
   const download = async () => {
     const url = (isCustom ? customUrl : preset?.url ?? "").trim();
     if (!url) return;
-    setDownloading(true); setPct(0); setStatus("Starting…");
+    const parts = (!isCustom && preset?.parts) || [];
+    const total = 1 + parts.length;
+    setDownloading(true); setPct(0); setStatus(total > 1 ? `Starting… (1/${total})` : "Starting…");
     try {
       const path = await invoke<string>("download_image_model",
         { args: { url, filename: isCustom ? undefined : preset?.filename } });
-      // Point the app at exactly this model + apply the preset's recommended params.
-      if (preset && !isCustom) setIg({ model_path: path, steps: preset.steps, size: preset.size, cfg_scale: preset.cfg });
-      else setIg({ model_path: path });
+      // Point the app at exactly this model + apply the preset's recommended params. A component
+      // model's extra files clear any stale paths from a previously selected set.
+      const patch: Partial<ImageGenConfig> = preset && !isCustom
+        ? { model_path: path, steps: preset.steps, size: preset.size, cfg_scale: preset.cfg,
+            vae_path: "", text_encoder_path: "", vision_path: "" }
+        : { model_path: path };
+
+      // Each component is a separate download so progress stays meaningful on a ~17 GB set.
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        setPct(0);
+        setStatus(`Downloading ${part.role.replace("_", " ")}… (${i + 2}/${total})`);
+        const pp = await invoke<string>("download_image_model",
+          { args: { url: part.url, filename: part.filename } });
+        if (part.role === "vae") patch.vae_path = pp;
+        else if (part.role === "text_encoder") patch.text_encoder_path = pp;
+        else patch.vision_path = pp;
+      }
+      setIg(patch);
       setPct(100); setStatus("✓ Ready to use");
     } catch (e) {
       setStatus("✕ " + String(e));
@@ -429,6 +470,33 @@ function ImageGenTab({ settings, onChange }: { settings: AppSettings; onChange: 
                 <label style={lbl}>Model path</label>
                 <input type="text" value={ig.model_path ?? ""} placeholder="auto-detect (image-gen/models folder)"
                   onChange={e => setIg({ model_path: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={lbl}>VAE path <span style={{ fontWeight: 400, opacity: 0.65 }}>
+                  (component models only — Qwen-Image, FLUX, SD3. Setting any of these three
+                  switches the engine to --diffusion-model; VAEs are not interchangeable between
+                  model families)</span></label>
+                <input type="text" value={ig.vae_path ?? ""} placeholder="none — single-file checkpoint"
+                  onChange={e => setIg({ vae_path: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={lbl}>Text encoder path <span style={{ fontWeight: 400, opacity: 0.65 }}>
+                  (e.g. Qwen2.5-VL for Qwen-Image)</span></label>
+                <input type="text" value={ig.text_encoder_path ?? ""} placeholder="none"
+                  onChange={e => setIg({ text_encoder_path: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={lbl}>Vision projector path <span style={{ fontWeight: 400, opacity: 0.65 }}>
+                  (mmproj-* — only for reference-image editing with a GGUF text encoder)</span></label>
+                <input type="text" value={ig.vision_path ?? ""} placeholder="none"
+                  onChange={e => setIg({ vision_path: e.target.value })} style={inputStyle} />
+              </div>
+              <div>
+                <label style={lbl}>Timeout (seconds) <span style={{ fontWeight: 400, opacity: 0.65 }}>
+                  (0 = automatic: 300s for single-file models, 2700s for component models, which
+                  load several GB before sampling)</span></label>
+                <input type="number" min={0} value={ig.timeout_secs ?? 0}
+                  onChange={e => setIg({ timeout_secs: Number(e.target.value) || 0 })} style={inputStyle} />
               </div>
               <div style={{ display: "flex", gap: 8 }}>
                 <div style={{ flex: 1 }}>
