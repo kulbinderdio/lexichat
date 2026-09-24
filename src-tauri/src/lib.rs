@@ -778,8 +778,15 @@ async fn send_message(
     //     substitute for anything file-shaped, and a silently WRONG one, so no file tool can be
     //     gated while run_python is core. That is strictly worse than avoidance: it fabricates a
     //     success the user cannot see is false.
-    // generate_image survives this rule because nothing else can produce an image.
-    const ON_DEMAND: &[&str] = &["generate_image"];
+    //   * generate_image — the last holdout, gated on the theory that "nothing else can produce an
+    //     image". Observed failing exactly like the others: asked for a picture of a brass plaque,
+    //     the model never called find_tools; it called create_artifact four times to fake the image
+    //     in CSS, telling the user "I cannot directly generate a raster image file". Routing around
+    //     a gated tool is the rule here, not the exception, so it is no longer gated. The schema
+    //     costs ~200 tokens, but only for profiles that switched image generation on.
+    // Nothing is discovery-gated today; the list stays so the next candidate has a home (and the
+    // history above to read first).
+    const ON_DEMAND: &[&str] = &[];
     let (media, core): (Vec<_>, Vec<_>) = discoverable
         .into_iter()
         .partition(|t| ON_DEMAND.contains(&t.function.name.as_str()));
