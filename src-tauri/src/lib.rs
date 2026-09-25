@@ -59,6 +59,9 @@ pub struct AppState {
     /// Base64 image `data:` URLs from the last tool result, rendered inline regardless of the
     /// MCP-App/approval flow. Taken by the agent loop when it emits the tool-result event.
     pub pending_tool_images: Mutex<Vec<String>>,
+    /// Caption for the images in `pending_tool_images` — currently the image model that produced
+    /// them, shown under the picture so it is clear which model made it. Consumed with the images.
+    pub pending_image_note: Mutex<Option<String>>,
     /// Model-authored HTML artifact (from `create_artifact`) stashed by dispatch for the agent
     /// loop to attach to the next tool-result event (rendered inline in a sandboxed iframe).
     pub pending_artifact: Mutex<Option<ollama::ArtifactPayload>>,
@@ -143,6 +146,7 @@ impl Default for AppState {
             python_request_seq: std::sync::atomic::AtomicU64::new(0),
             pending_tool_ui: Mutex::new(None),
             pending_tool_images: Mutex::new(Vec::new()),
+            pending_image_note: Mutex::new(None),
             pending_artifact: Mutex::new(None),
             image_gen_config: Mutex::new(image_gen::ImageGenConfig::default()),
             image_model_download_cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1066,6 +1070,12 @@ async fn download_image_engine(app: AppHandle) -> Result<String, String> {
 fn image_engine_status() -> serde_json::Value {
     let installed = image_gen::image_gen_dir_has_engine();
     serde_json::json!({ "supported": image_gen::engine_supported(), "installed": installed })
+}
+
+/// Model files already on disk, so the Images tab can offer "use this" instead of re-downloading.
+#[tauri::command]
+fn list_image_models() -> Vec<image_gen::LocalModel> {
+    image_gen::list_local_models()
 }
 
 #[derive(serde::Deserialize)]
@@ -2777,6 +2787,7 @@ pub fn run() {
             cancel_image_model_download,
             download_image_engine,
             image_engine_status,
+            list_image_models,
             get_usage_stats,
             record_turn_usage,
             system_stats,

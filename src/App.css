@@ -1717,3 +1717,11 @@ html, body, #root { height: 100%; overflow: hidden; }
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+
+/* Which image model produced a generated image, shown under it. */
+.tool-image-note {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

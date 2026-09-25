@@ -478,6 +478,90 @@ async fn stream_run(
     Ok((status, stderr_text, all))
 }
 
+/// A one-line summary of the files a generation ran with, for error messages.
+fn files_used(cfg: &ImageGenConfig, model: &Path) -> String {
+    fn name(p: &str) -> String {
+        Path::new(p).file_name().and_then(|n| n.to_str()).unwrap_or(p).to_string()
+    }
+    let mut parts = vec![format!("model={}", name(&model.to_string_lossy()))];
+    for (label, p) in [("vae", &cfg.vae_path), ("text_encoder", &cfg.text_encoder_path), ("vision", &cfg.vision_path)] {
+        let p = p.trim();
+        if !p.is_empty() { parts.push(format!("{label}={}", name(p))); }
+    }
+    parts.join(", ")
+}
+
+/// Extra guidance for the engine's opaque rejection of a component model selected on its own.
+/// Both messages below mean "this file is not a complete checkpoint"; without the hint the user
+/// only sees `model metadata validation failed`, which says nothing about what to do.
+fn component_hint(cfg: &ImageGenConfig, err: &str) -> String {
+    let unreadable = err.contains("metadata validation failed") || err.contains("get sd version from file failed");
+    let have_parts = !cfg.vae_path.trim().is_empty() || !cfg.text_encoder_path.trim().is_empty();
+    if unreadable && !have_parts {
+        " — this looks like a component model (Qwen-Image, FLUX, SD3), which also needs its VAE and \
+         text encoder. Set them in Settings → Images → Advanced, or pick the model from the preset \
+         list, which sets all three.".to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// One model file already present in the models dir.
+#[derive(serde::Serialize)]
+pub struct LocalModel {
+    pub name: String,
+    pub path: String,
+    pub size_mb: u64,
+    /// True for a VAE / text encoder / projector — a piece of a model, not a model to select.
+    pub component: bool,
+}
+
+/// List the model files already downloaded, newest first. Lets the Images tab offer what is on
+/// disk instead of making a 16 GB re-download the only way to switch model.
+pub fn list_local_models() -> Vec<LocalModel> {
+    let Some(dir) = models_dir() else { return Vec::new() };
+    let mut out: Vec<(std::time::SystemTime, LocalModel)> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    for e in entries.flatten() {
+        let path = e.path();
+        let ext_ok = path.extension().and_then(|x| x.to_str())
+            .map(|x| matches!(x.to_ascii_lowercase().as_str(), "gguf" | "safetensors" | "ckpt"))
+            .unwrap_or(false);
+        if !ext_ok { continue; }                       // skips .part files too
+        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else { continue };
+        let meta = e.metadata().ok();
+        let size_mb = meta.as_ref().map(|m| m.len() / (1024 * 1024)).unwrap_or(0);
+        let modified = meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::UNIX_EPOCH);
+        out.push((modified, LocalModel {
+            component: looks_like_component(&name),
+            name,
+            path: path.to_string_lossy().into_owned(),
+            size_mb,
+        }));
+    }
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.into_iter().map(|(_, m)| m).collect()
+}
+
+/// A short human label for the model that will be used, e.g. "sdxl_turbo" or
+/// "qwen_image_2.1-Q4_K + Qwen3VL-8B-Instruct-Q4_K_M". Resolves the same way generation does, so
+/// the label always names what actually ran — including auto-detected models the user never typed.
+/// `None` when no model can be resolved (generation would fail anyway).
+pub fn model_label(cfg: &ImageGenConfig) -> Option<String> {
+    fn stem(p: &Path) -> String {
+        p.file_stem().and_then(|s| s.to_str()).unwrap_or("model").to_string()
+    }
+    let model = resolve_model(cfg)?;
+    let mut label = stem(&model);
+    // Component models are a set; naming the text encoder too makes the pairing visible.
+    let llm = cfg.text_encoder_path.trim();
+    if !llm.is_empty() {
+        label.push_str(" + ");
+        label.push_str(&stem(Path::new(llm)));
+    }
+    Some(label)
+}
+
 /// One sampling-progress tick parsed from the engine's output.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct ImageProgress {
@@ -741,7 +825,11 @@ pub async fn generate_with_progress(
         let last = stderr_text.lines().rev().find(|l| !l.trim().is_empty())
             .or_else(|| stdout_text.lines().rev().find(|l| !l.trim().is_empty()))
             .unwrap_or("unknown error");
-        return Err(format!("Image generation failed: {last}"));
+        // Name the files that were actually used: with component models the failure is usually a
+        // mismatched set (e.g. a Qwen-Image model paired with the Qwen-Image-2.1 VAE, which are not
+        // interchangeable), and the engine's message never says which files it loaded.
+        return Err(format!("Image generation failed: {last}{}\nFiles used: {}",
+                           component_hint(cfg, last), files_used(cfg, &model)));
     }
 
     let bytes = std::fs::read(&out)
@@ -883,6 +971,43 @@ mod tests {
         assert!(parse_progress("[INFO ] image.cpp:892 - sampling completed, taking 137.04s").is_none());
         assert!(parse_progress("").is_none());
         assert!(parse_progress("  |#####  | 65/128 - 833.98MB/s").is_none(), "VAE decode is not sampling");
+    }
+
+    #[test]
+    fn component_hint_only_fires_for_an_unpaired_component_model() {
+        let bare = ImageGenConfig::default();
+        let msg = component_hint(&bare, "[ERROR] diffusion_engine.cpp:1247 - model metadata validation failed");
+        assert!(msg.contains("VAE"), "should explain the missing parts: {msg}");
+        assert!(component_hint(&bare, "get sd version from file failed: x.gguf").contains("text encoder"));
+        // Already paired → the error is something else, so no misleading advice.
+        let paired = ImageGenConfig { vae_path: "/m/vae.safetensors".into(), ..Default::default() };
+        assert_eq!(component_hint(&paired, "model metadata validation failed"), "");
+        // Unrelated failures are left alone.
+        assert_eq!(component_hint(&bare, "CUDA out of memory"), "");
+    }
+
+    #[test]
+    fn model_label_names_the_model_and_its_text_encoder() {
+        // Explicit single-file model: just its stem, no extension or directory.
+        let dir = std::env::temp_dir().join("lexi-label-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = dir.join("sdxl_turbo.safetensors");
+        std::fs::write(&m, b"x").unwrap();
+        let single = ImageGenConfig { model_path: m.to_string_lossy().into_owned(), ..Default::default() };
+        assert_eq!(model_label(&single).as_deref(), Some("sdxl_turbo"));
+
+        // Component model: the pairing is what actually ran, so name both halves.
+        let llm = dir.join("Qwen3VL-8B-Instruct-Q4_K_M.gguf");
+        std::fs::write(&llm, b"x").unwrap();
+        let component = ImageGenConfig {
+            text_encoder_path: llm.to_string_lossy().into_owned(), ..single.clone()
+        };
+        assert_eq!(model_label(&component).as_deref(), Some("sdxl_turbo + Qwen3VL-8B-Instruct-Q4_K_M"));
+
+        // Nothing resolvable → no label (generation would fail anyway).
+        let missing = ImageGenConfig { model_path: "/nope/none.gguf".into(), ..Default::default() };
+        assert!(model_label(&missing).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

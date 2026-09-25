@@ -75,6 +75,9 @@ pub struct ToolCallEvent {
 pub struct ToolResultEvent {
     pub name: String,
     pub result: String,
+    /// Caption for `images` — the image model that produced them. Absent for other tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_note: Option<String>,
     /// The FULL result (untruncated, capped only at a generous display limit), for the connector
     /// data viewer — so the user can verify the raw data as returned, independent of what the model
     /// saw (`result`, which is truncated to protect context). Empty when it equals `result`.
@@ -2203,7 +2206,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 if !silent {
                     let _ = app.emit("agent-tool-call", ToolCallEvent { name: name.clone(), args: pretty_args.clone() });
                     let _ = app.emit("agent-tool-result", ToolResultEvent {
-                        name: name.clone(), result: result.clone(), full_result: String::new(), full_truncated: false, ui: None, images: Vec::new(), artifact: None });
+                        name: name.clone(), image_note: None, result: result.clone(), full_result: String::new(), full_truncated: false, ui: None, images: Vec::new(), artifact: None });
                 }
                 conversation.lock().unwrap().push(WireMessage {
                     role: "tool".into(), content: Some(result),
@@ -2246,7 +2249,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 if !silent {
                     let _ = app.emit("agent-tool-call", ToolCallEvent { name: name.clone(), args: pretty_args.clone() });
                     let _ = app.emit("agent-tool-result", ToolResultEvent {
-                        name: name.clone(), result: result.clone(), full_result: String::new(), full_truncated: false, ui: None, images: Vec::new(), artifact: None });
+                        name: name.clone(), image_note: None, result: result.clone(), full_result: String::new(), full_truncated: false, ui: None, images: Vec::new(), artifact: None });
                 }
                 conversation.lock().unwrap().push(WireMessage {
                     role: "tool".into(), content: Some(result),
@@ -2278,7 +2281,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
                     if !silent {
                         let _ = app.emit("agent-tool-call", ToolCallEvent { name: name.clone(), args: pretty_args.clone() });
                         let _ = app.emit("agent-tool-result", ToolResultEvent {
-                            name: name.clone(), result: note.clone(), full_result: String::new(),
+                            name: name.clone(), image_note: None, result: note.clone(), full_result: String::new(),
                             full_truncated: false, ui: None, images: Vec::new(), artifact: None });
                     }
                     conversation.lock().unwrap().push(WireMessage {
@@ -2330,7 +2333,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
                         already have, or take a clearly different approach.]");
                     if !silent {
                         let _ = app.emit("agent-tool-result", ToolResultEvent {
-                            name: name.clone(), result: note.clone(), full_result: String::new(), full_truncated: false, ui: None, images: Vec::new(), artifact: None });
+                            name: name.clone(), image_note: None, result: note.clone(), full_result: String::new(), full_truncated: false, ui: None, images: Vec::new(), artifact: None });
                     }
                     conversation.lock().unwrap().push(WireMessage {
                         role: "tool".into(), content: Some(note),
@@ -2405,15 +2408,16 @@ pub async fn agent_loop<R: tauri::Runtime>(
 
             // An MCP-App UI payload, inline images, and/or a model-authored artifact may have been
             // stashed by dispatch_tool.
-            let (ui, images, artifact) = if !silent {
+            let (ui, images, artifact, image_note) = if !silent {
                 app.try_state::<crate::AppState>()
                     .map(|s| (
                         s.pending_tool_ui.lock().unwrap().take(),
                         std::mem::take(&mut *s.pending_tool_images.lock().unwrap()),
                         s.pending_artifact.lock().unwrap().take(),
+                        s.pending_image_note.lock().unwrap().take(),
                     ))
-                    .unwrap_or((None, Vec::new(), None))
-            } else { (None, Vec::new(), None) };
+                    .unwrap_or((None, Vec::new(), None, None))
+            } else { (None, Vec::new(), None, None) };
             let had_media = ui.is_some() || !images.is_empty() || artifact.is_some();
             // A deliverable artifact was produced — arm the post-artifact budget so the model wraps
             // up soon instead of looping on further "refinements" (see POST_ARTIFACT_TOOL_BUDGET).
@@ -2424,6 +2428,7 @@ pub async fn agent_loop<R: tauri::Runtime>(
                 let _ = app.emit("agent-tool-result", ToolResultEvent {
                     name: name.clone(),
                     result: result.clone(),
+                    image_note,
                     full_result,
                     full_truncated,
                     ui,
@@ -2715,6 +2720,9 @@ async fn dispatch_tool<R: tauri::Runtime>(
                         // Show inline.
                         let b64 = B64.encode(&png);
                         s.pending_tool_images.lock().unwrap().push(format!("data:image/png;base64,{b64}"));
+                        if let Some(label) = crate::image_gen::model_label(&cfg) {
+                            *s.pending_image_note.lock().unwrap() = Some(label);
+                        }
                         // Stable per-turn number so the model can reference the SAME image again from a
                         // file (results dir is staged into /work/data) without re-generating it.
                         let n = { let mut c = s.turn_image_count.lock().unwrap(); *c += 1; *c };

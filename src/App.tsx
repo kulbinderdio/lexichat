@@ -52,6 +52,7 @@ interface ChatMessage {
   imageDataUrls?: string[];  // base64 data URIs for attached images
   ui?: ToolUi;               // MCP-App interactive UI to render in a sandboxed iframe
   toolImages?: string[];     // base64 data: image URLs from a tool result (e.g. a Mapbox map)
+  toolImageNote?: string;    // which image model produced toolImages (generate_image only)
   artifact?: { title: string; html: string }; // model-authored HTML artifact (create_artifact)
   savePrompt?: string[];     // run_python output files awaiting a folder — rendered with a Save button
   fullResult?: string;       // FULL untruncated tool result (connector viewer) — NOT persisted
@@ -1969,10 +1970,10 @@ function ConnectorResult({ name, result, fullResult, fullTruncated, args }:
 }
 
 export function ToolResultRow({
-  name, result, args, fullResult, fullTruncated, ui, images, artifact, onSend, onAttach,
+  name, result, args, fullResult, fullTruncated, ui, images, imageNote, artifact, onSend, onAttach,
 }: {
   name: string; result: string; args?: string; fullResult?: string; fullTruncated?: boolean;
-  ui?: ToolUi; images?: string[];
+  ui?: ToolUi; images?: string[]; imageNote?: string;
   artifact?: { title: string; html: string };
   onSend: (text: string) => void;
   onAttach: (path: string, prompt: string) => void;
@@ -1996,6 +1997,7 @@ export function ToolResultRow({
               style={{ position: "absolute", top: 8, right: 8, width: 28, height: 28, borderRadius: 8,
                 border: "none", cursor: "pointer", background: "rgba(15,23,42,0.55)", color: "#fff",
                 fontSize: 15, lineHeight: "28px", textAlign: "center", padding: 0 }}>⤓</button>
+            {imageNote && <div className="tool-image-note">{imageNote}</div>}
           </div>
         ))}
       </div>
@@ -2574,7 +2576,7 @@ export default function App() {
       });
     }).then(u => cleanup.push(u));
 
-    listen<{ name: string; result: string; full_result?: string; full_truncated?: boolean; ui?: ToolUi; images?: string[]; artifact?: { title: string; html: string } }>("agent-tool-result", e => {
+    listen<{ name: string; result: string; full_result?: string; full_truncated?: boolean; ui?: ToolUi; images?: string[]; image_note?: string; artifact?: { title: string; html: string } }>("agent-tool-result", e => {
       if (!streamActive()) return;
       turnTallyRef.current.images += e.payload.images?.length ?? 0;
       setThinkingAt(Date.now()); // tool finished — the model now thinks for the next step
@@ -2629,6 +2631,7 @@ export default function App() {
           toolArgs: matchingCall?.args,
           ui: e.payload.ui,
           toolImages: e.payload.images,
+          toolImageNote: e.payload.image_note,
           artifact,
         }];
       });
@@ -2847,6 +2850,7 @@ export default function App() {
         toolName: m.toolName,
         toolResult: m.role === "tool-result" ? m.text : undefined,
         images: (m.toolImages?.length ?? m.imageDataUrls?.length) || undefined,
+        imageNote: m.toolImageNote,
         ui: m.ui ? { server_id: m.ui.server_id, hasHtml: !!m.ui.html } : undefined,
         artifact: m.artifact ? { title: m.artifact.title, htmlLen: m.artifact.html.length } : undefined,
         status: m.status,
@@ -3531,6 +3535,7 @@ export default function App() {
                   fullTruncated={msg.fullTruncated}
                   ui={msg.ui}
                   images={msg.toolImages}
+                  imageNote={msg.toolImageNote}
                   artifact={msg.artifact}
                   onSend={send}
                   onAttach={(path, prompt) => { setAttachedFiles([path]); setInput(prompt); }}

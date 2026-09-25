@@ -259,6 +259,34 @@ export interface ImageGenConfig {
 
 // Curated, verified single-file models the user picks from (no URL hunting). Each carries its
 // recommended generation params so selecting one "just works". All are ungated direct downloads.
+// Mirrors Rust `image_gen::LocalModel` — a model file already in the models folder.
+export interface LocalModel { name: string; path: string; size_mb: number; component: boolean; }
+
+/// Pick the VAE and text encoder that belong with `modelName` from the files on disk.
+///
+/// Component sets are NOT interchangeable: pairing the Qwen-Image-2.1 model with Qwen-Image v1's
+/// VAE fails every generation with "model metadata validation failed". Matching cannot be done by
+/// name similarity, because each half comes from a different repo with its own naming
+/// (`Qwen3VL-8B-Instruct-Q4_K_M.gguf` shares no words with `qwen_image_2.1-Q4_K.gguf`), so the
+/// pairings are stated explicitly, per the stable-diffusion.cpp docs:
+///   Qwen-Image 2.1 → qwen_image_2.1 VAE + Qwen3-VL text encoder
+///   Qwen-Image v1  → Qwen_Image VAE     + Qwen2.5-VL text encoder
+/// Returns empty strings when a half is missing, so the caller clears stale paths rather than
+/// silently keeping another set's files.
+export function pairComponents(modelName: string, files: LocalModel[]): { vae: string; textEncoder: string } {
+  if (!/qwen[-_ ]?image/i.test(modelName)) return { vae: "", textEncoder: "" };
+  // Only pair versions whose correct partners are known; guessing for an unreleased version would
+  // reproduce the very mismatch this exists to prevent.
+  const version = modelName.match(/(\d+\.\d+)/)?.[1] ?? "";
+  if (version !== "" && version !== "2.1") return { vae: "", textEncoder: "" };
+
+  const find = (test: RegExp) => files.find(f => f.component && test.test(f.name))?.path ?? "";
+  return version === "2.1"
+    ? { vae: find(/2\.1.*vae|vae.*2\.1/i), textEncoder: find(/qwen3-?vl/i) }
+    // v1's own files carry no version token, so exclude anything that does.
+    : { vae: find(/^(?!.*2\.1).*vae/i), textEncoder: find(/qwen2\.5-?vl/i) };
+}
+
 interface ModelPreset {
   id: string; name: string; blurb: string; sizeMb: number;
   url: string; filename: string; steps: number; size: number; cfg: number; licence: string;
@@ -310,6 +338,52 @@ function ImageGenTab({ settings, onChange }: { settings: AppSettings; onChange: 
   const [engineDl, setEngineDl] = useState(false);
   const [enginePct, setEnginePct] = useState<number | null>(null);
   const [engineMsg, setEngineMsg] = useState("");
+  // What's already downloaded — so switching model doesn't require re-downloading it.
+  const [local, setLocal] = useState<LocalModel[]>([]);
+  const refreshLocal = () => { invoke<LocalModel[]>("list_image_models").then(setLocal).catch(() => {}); };
+  useEffect(() => { refreshLocal(); }, []);
+
+  // A preset counts as installed when every file it needs is already on disk.
+  const presetFiles = (p: ModelPreset) => [p.filename, ...(p.parts ?? []).map(x => x.filename)];
+  const presetInstalled = (p: ModelPreset) =>
+    presetFiles(p).every(f => local.some(l => l.name === f));
+
+  // Switch to a model file from the Installed list.
+  //
+  // A bare diffusion model is NOT usable on its own: a component model (Qwen-Image, FLUX, SD3)
+  // needs its VAE and text encoder too, and selecting one without them fails immediately with
+  // "model metadata validation failed". So: if a preset ships this file, apply that preset's whole
+  // wiring; otherwise treat it as a single-file checkpoint and CLEAR any component paths left over
+  // from a previous selection (which would otherwise force the component form onto an SDXL file).
+  const useLocalModel = (m: LocalModel) => {
+    const owning = MODEL_PRESETS.find(p => p.filename === m.name);
+    if (owning && presetInstalled(owning)) { useInstalledPreset(owning); return; }
+    // Not a preset: pair it with the matching VAE/encoder on disk. Always writes all three paths,
+    // so a previous set's files can never be left behind (which is what produced a Qwen-Image-2.1
+    // model running with the Qwen-Image v1 VAE, failing at every generation).
+    const { vae, textEncoder } = pairComponents(m.name, local);
+    setIg({ model_path: m.path, vae_path: vae, text_encoder_path: textEncoder, vision_path: "" });
+    const needsParts = /qwen[-_ ]?image|flux|sd3|chroma/i.test(m.name);
+    if (needsParts && vae && textEncoder) {
+      setStatus(`✓ Now using ${m.name} with ${vae.split("/").pop()} and ${textEncoder.split("/").pop()}`);
+    } else if (needsParts) {
+      setStatus(`Using ${m.name} — its VAE and text encoder are not on disk; set them under Advanced.`);
+    } else {
+      setStatus(`✓ Now using ${m.name}`);
+    }
+  };
+
+  // Point the app at an already-downloaded preset without downloading anything.
+  const useInstalledPreset = (p: ModelPreset) => {
+    const find = (f: string) => local.find(l => l.name === f)?.path ?? "";
+    setIg({
+      model_path: find(p.filename), steps: p.steps, size: p.size, cfg_scale: p.cfg,
+      vae_path: find((p.parts ?? []).find(x => x.role === "vae")?.filename ?? ""),
+      text_encoder_path: find((p.parts ?? []).find(x => x.role === "text_encoder")?.filename ?? ""),
+      vision_path: find((p.parts ?? []).find(x => x.role === "vision")?.filename ?? ""),
+    });
+    setStatus(`✓ Now using ${p.name}`);
+  };
 
   const refreshEngine = () => {
     invoke<{ supported: boolean; installed: boolean }>("image_engine_status").then(setEngine).catch(() => {});
@@ -363,6 +437,7 @@ function ImageGenTab({ settings, onChange }: { settings: AppSettings; onChange: 
         else patch.vision_path = pp;
       }
       setIg(patch);
+      refreshLocal();
       setPct(100); setStatus("✓ Ready to use");
     } catch (e) {
       setStatus("✕ " + String(e));
@@ -440,14 +515,53 @@ function ImageGenTab({ settings, onChange }: { settings: AppSettings; onChange: 
             </div>
           )}
 
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             {downloading
               ? <button onClick={cancel} style={btn}>Cancel</button>
-              : <button onClick={download} style={{ ...btn, fontWeight: 600 }}>Download &amp; use</button>}
+              : preset && !isCustom && presetInstalled(preset)
+                // Already on disk: switching must not mean re-downloading 16 GB.
+                ? <>
+                    <button onClick={() => useInstalledPreset(preset)} style={{ ...btn, fontWeight: 600 }}>
+                      Use this model
+                    </button>
+                    <button onClick={download} style={btn} title="Download the files again">
+                      Re-download
+                    </button>
+                  </>
+                : <button onClick={download} style={{ ...btn, fontWeight: 600 }}>Download &amp; use</button>}
             <span className="admin-row-sub" style={{ fontSize: 11 }}>
               {downloading ? `${pct ?? 0}% — large download, please wait` : `Active model: ${activeModel}`}
             </span>
           </div>
+          {!downloading && preset && !isCustom && !presetInstalled(preset) && (
+            <span className="admin-row-sub" style={{ fontSize: 11 }}>
+              Not downloaded yet — picking it here does not switch model until you download it.
+            </span>
+          )}
+
+          {local.filter(m => !m.component).length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <div className="admin-row-title" style={{ fontSize: 12, marginBottom: 4 }}>Installed models</div>
+              {local.filter(m => !m.component).map(m => {
+                const active = (ig.model_path ?? "") === m.path;
+                return (
+                  <div key={m.path} className="admin-row" style={{ paddingTop: 4, paddingBottom: 4, gap: 8 }}>
+                    <div className="admin-row-text">
+                      <span style={{ fontFamily: "monospace", fontSize: 11, fontWeight: active ? 700 : 400 }}>{m.name}</span>
+                      <span className="admin-row-sub">{(m.size_mb / 1024).toFixed(1)} GB{active ? " · in use" : ""}</span>
+                    </div>
+                    {!active && (
+                      <button style={btn} onClick={() => useLocalModel(m)}>Use</button>
+                    )}
+                  </div>
+                );
+              })}
+              <span className="admin-row-sub" style={{ fontSize: 11 }}>
+                A component model also needs its VAE and text encoder set under Advanced — picking a
+                preset above with “Use this model” sets all three at once.
+              </span>
+            </div>
+          )}
           {downloading && (
             <div style={{ height: 6, background: "rgba(128,128,128,0.25)", borderRadius: 3, overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${pct ?? 10}%`, background: "var(--accent, #5b4bd6)", transition: "width 0.2s" }} />
